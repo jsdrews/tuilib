@@ -1,0 +1,69 @@
+# GitLab CI for tuilib.
+#
+# On push to master (typically a merge-commit from a merged MR), this pipeline:
+#   1. Runs build / vet / test.
+#   2. Tags the commit with the next semver:
+#        - patch bump if the commit message (which includes the source branch
+#          name on a default merge commit) matches /\b(bug|bugfix|fix)\b/i
+#        - minor bump otherwise
+#        - starts at v0.1.0 when no tags exist
+#
+# Requires a project CI/CD variable named CI_PUSH_TOKEN that holds a Project
+# or Personal Access Token with `write_repository` scope. Mark it Masked +
+# Protected and restrict it to protected branches/tags.
+
+stages:
+  - test
+  - release
+
+default:
+  image: golang:1.25
+  tags:
+    - docker
+
+variables:
+  GOFLAGS: "-mod=readonly"
+
+test:
+  stage: test
+  script:
+    - go build ./...
+    - go vet ./...
+    - go test ./...
+
+release:
+  stage: release
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "master" && $CI_PIPELINE_SOURCE == "push"'
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - git config user.email "ci@${CI_SERVER_HOST}"
+    - git config user.name "GitLab CI"
+    - git fetch --tags
+  script:
+    - |
+      set -eu
+      LATEST=$(git tag -l '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+      if [ -z "$LATEST" ]; then
+        NEXT="0.1.0"
+        BUMP="initial"
+      else
+        MAJOR=${LATEST%%.*}
+        REST=${LATEST#*.}
+        MINOR=${REST%%.*}
+        PATCH=${REST#*.}
+        HAYSTACK="${CI_COMMIT_MESSAGE:-}"
+        if echo "$HAYSTACK" | grep -Eiq '\b(bug|bugfix|fix)\b'; then
+          PATCH=$((PATCH + 1))
+          BUMP="patch"
+        else
+          MINOR=$((MINOR + 1))
+          PATCH=0
+          BUMP="minor"
+        fi
+        NEXT="${MAJOR}.${MINOR}.${PATCH}"
+      fi
+      echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
+      git tag -a "$NEXT" -m "Release $NEXT"
+      git push "https://oauth2:${CI_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$NEXT"

@@ -1,0 +1,55 @@
+version: '3'
+
+silent: true
+
+includes:
+  examples:
+    taskfile: ./Taskfile.examples.yml
+    flatten: false
+
+tasks:
+  default:
+    cmds:
+      - task: list
+
+  build:
+    desc: Compile the module
+    cmds:
+      - go build ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test ./...
+
+  check:
+    desc: build + vet + test
+    cmds:
+      - task: build
+      - task: vet
+      - task: test
+
+  tidy:
+    desc: go mod tidy
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - go clean ./...
+
+  list:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  rendercheck:
+    desc: Dump breadcrumb + statusbar style variants to stdout
+    cmds:
+      - go run ./cmd/rendercheck

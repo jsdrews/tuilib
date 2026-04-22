@@ -1,0 +1,47 @@
+version: '3'
+
+silent: true
+
+# Example demos. Invoked as `task examples:<group>:<name>`.
+
+tasks:
+  # ---- Pane -----------------------------------------------------------------
+
+  pane:basic:
+    desc: Pane with a scrollbar wrapping plain text
+    cmds:
+      - go run ./examples/pane/basic
+
+  pane:styles:
+    desc: Border and title-position variants
+    cmds:
+      - go run ./examples/pane/styles
+
+  pane:brackets:
+    desc: Title slot-bracket styles (corners / none / tees)
+    cmds:
+      - go run ./examples/pane/brackets
+
+  # ---- Footer ---------------------------------------------------------------
+
+  footer:overlay:
+    desc: Toggleable bordered help overlay above the status bar
+    cmds:
+      - go run ./examples/footer/overlay
+
+  footer:inline:
+    desc: All help hints inline in the status bar
+    cmds:
+      - go run ./examples/footer/inline
+
+  # ---- Nav ------------------------------------------------------------------
+
+  nav:breadcrumbs:
+    desc: Breadcrumb header + nav.Stack drilldown (plain body)
+    cmds:
+      - go run ./examples/nav/breadcrumbs
+
+  nav:pane:
+    desc: Nav drilldown with the body wrapped in pane.Pane
+    cmds:
+      - go run ./examples/nav/pane
