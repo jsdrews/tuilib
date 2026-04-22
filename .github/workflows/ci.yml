@@ -1,0 +1,72 @@
+# GitHub Actions CI for tuilib.
+#
+# On every push / PR: build, vet, test.
+# On push to master (typically a merged PR): auto-tag the commit with the
+# next semver:
+#   - patch bump if the commit message (which includes the PR title and,
+#     for default merge commits, the source branch name) matches
+#     /\b(bug|bugfix|fix)\b/i
+#   - minor bump otherwise
+#   - starts at 0.1.0 if no tags exist
+# Tags are plain semver (no "v" prefix).
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  release:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag next version
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -eu
+          git config user.email "github-actions@github.com"
+          git config user.name "github-actions"
+          git fetch --tags --force
+          LATEST=$(git tag -l '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          if [ -z "$LATEST" ]; then
+            NEXT="0.1.0"
+            BUMP="initial"
+          else
+            MAJOR=${LATEST%%.*}
+            REST=${LATEST#*.}
+            MINOR=${REST%%.*}
+            PATCH=${REST#*.}
+            if echo "$COMMIT_MSG" | grep -Eiq '\b(bug|bugfix|fix)\b'; then
+              PATCH=$((PATCH + 1))
+              BUMP="patch"
+            else
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              BUMP="minor"
+            fi
+            NEXT="${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
+          git tag -a "$NEXT" -m "Release $NEXT"
+          git push origin "$NEXT"
