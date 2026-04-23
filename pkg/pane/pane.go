@@ -41,7 +41,7 @@ type Options struct {
 	Width, Height int
 	Title         string
 	// TitlePosition picks which border slot the title occupies. Defaults to
-	// TopMiddleBorder.
+	// TopLeftBorder (the zero value).
 	TitlePosition BorderPosition
 	Focused       bool
 	ActiveColor   lipgloss.TerminalColor
@@ -107,8 +107,11 @@ func (p Pane) View() string {
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
 
+	// Auto-fill bottom-right with scroll percent only when content actually
+	// overflows. Panes used as input strips (filter bars, one-liners) would
+	// otherwise show a meaningless "100%".
 	br := p.bottomRight
-	if br == "" {
+	if br == "" && p.viewport.TotalLineCount() > p.viewport.VisibleLineCount() {
 		br = fmt.Sprintf("%d%%", int(p.viewport.ScrollPercent()*100))
 	}
 
@@ -176,6 +179,20 @@ func (p *Pane) GotoTop() { p.viewport.GotoTop() }
 
 // GotoBottom scrolls the viewport to the last line.
 func (p *Pane) GotoBottom() { p.viewport.GotoBottom() }
+
+// EnsureVisible scrolls the viewport the minimum amount needed to put line
+// `n` inside the visible window. Useful for cursor-driven list views, where
+// moving the cursor past the viewport's bottom should pull the view with it.
+func (p *Pane) EnsureVisible(n int) {
+	top := p.viewport.YOffset
+	bottom := top + p.viewport.Height - 1
+	switch {
+	case n < top:
+		p.viewport.SetYOffset(n)
+	case n > bottom:
+		p.viewport.SetYOffset(n - p.viewport.Height + 1)
+	}
+}
 
 func pad(s string) string {
 	if s == "" {

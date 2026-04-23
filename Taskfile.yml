@@ -48,8 +48,3 @@ tasks:
     desc: List available tasks
     cmds:
       - task --list
-
-  rendercheck:
-    desc: Dump breadcrumb + statusbar style variants to stdout
-    cmds:
-      - go run ./cmd/rendercheck

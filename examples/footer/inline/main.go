@@ -1,7 +1,6 @@
-// Demo: all help hints always visible inline in the status bar.
-//
-// No toggle, no overlay — the status bar's left slot shows every binding.
-// Info/error messages still work and appear in the middle slot when triggered.
+// Demo: all help hints always visible inline in the status bar, styled via
+// the theme package. Every color flows from one theme.Theme — switching
+// to theme.Accent() below re-skins the whole bar with no other edits.
 //
 // Keys:
 //   i         post info message
@@ -17,11 +16,11 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
 var keys = struct {
@@ -42,44 +41,23 @@ type model struct {
 }
 
 func initialModel() model {
+	th := theme.Dark() // swap to theme.Accent() to re-skin the whole app
+
 	lines := make([]string, 80)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("line %02d — pane content", i+1)
 	}
-	p := pane.New(pane.Options{
-		Title:        "Demo",
-		Focused:      true,
-		SlotBrackets: pane.SlotBracketsNone,
-	})
+	paneOpts := th.Pane()
+	paneOpts.Title = "Demo"
+	paneOpts.Focused = true
+	paneOpts.SlotBrackets = pane.SlotBracketsNone
+	p := pane.New(paneOpts)
 	p.SetContent(strings.Join(lines, "\n"))
 
-	// Every slot in the bar — including the key/desc inside the inline help
-	// — needs the same background for a continuous strip. Grab the bar's bg
-	// from the statusbar and feed it into the help styles.
-	barBG := lipgloss.Color("236")
-	keyFG := lipgloss.Color("75")
-	descFG := lipgloss.Color("252")
+	h := help.New(th.Help())
+	h.SetBindings([]key.Binding{keys.Up, keys.Down, keys.Info, keys.Error, keys.Quit})
 
-	h := help.New(help.Options{
-		KeyStyle: lipgloss.NewStyle().
-			Bold(true).
-			Foreground(keyFG).
-			Background(barBG),
-		DescStyle: lipgloss.NewStyle().
-			Foreground(descFG).
-			Background(barBG),
-		ShortSeparator: "  •  ",
-	})
-	h.SetBindings([]key.Binding{
-		keys.Up, keys.Down, keys.Info, keys.Error, keys.Quit,
-	})
-
-	sb := statusbar.New(statusbar.Options{
-		BarBackground: barBG,
-		BarForeground: descFG,
-		Left:          h.ShortView(),
-		Right:         "v0.1.0",
-	})
+	sb := statusbar.New(th.Statusbar(h.ShortView(), "v0.1.0"))
 
 	return model{pane: p, status: sb}
 }

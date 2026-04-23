@@ -1,8 +1,6 @@
-// Demo: breadcrumb header + nav.Stack + Pane-wrapped body + inline help.
-//
-// Each screen's view is rendered inside a pane.Pane, so the body area gets
-// a border, a title (matching the current screen), slot text, and a built-in
-// scrollbar if content overflows.
+// Demo: breadcrumb header + nav.Stack + Pane-wrapped body + inline help,
+// themed via the theme package. Change th below to swap palettes across the
+// whole app in one line.
 //
 // Keys:
 //   ↑/↓ or j/k   change selection
@@ -25,14 +23,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/nav"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-var (
-	barBG  = lipgloss.Color("236")
-	barFG  = lipgloss.Color("252")
-	keyFG  = lipgloss.Color("75")
-	accent = lipgloss.Color("213")
-)
+// Single source of truth for the palette. Swap to theme.Dark(), Dracula(),
+// Solarized(), … and every bar/border/highlight follows.
+var th = theme.Nord()
 
 var keys = struct {
 	Up, Down, Enter, Back, Quit key.Binding
@@ -81,7 +77,7 @@ func (s listScreen) Update(msg tea.Msg) (nav.Screen, tea.Cmd) {
 	return s, nil
 }
 func (s listScreen) View() string {
-	selected := lipgloss.NewStyle().Bold(true).Foreground(accent)
+	selected := lipgloss.NewStyle().Bold(true).Foreground(th.Accent)
 	var b strings.Builder
 	for i, item := range s.items {
 		if i == s.cursor {
@@ -99,11 +95,11 @@ func (s listScreen) ItemCount() int { return len(s.items) }
 
 type cityDetail struct{ region, city string }
 
-func (c cityDetail) Title() string                           { return c.city }
-func (c cityDetail) Init() tea.Cmd                           { return nil }
-func (c cityDetail) Update(_ tea.Msg) (nav.Screen, tea.Cmd)  { return c, nil }
+func (c cityDetail) Title() string                          { return c.city }
+func (c cityDetail) Init() tea.Cmd                          { return nil }
+func (c cityDetail) Update(_ tea.Msg) (nav.Screen, tea.Cmd) { return c, nil }
 func (c cityDetail) View() string {
-	header := lipgloss.NewStyle().Bold(true).Foreground(accent).Render(c.city)
+	header := lipgloss.NewStyle().Bold(true).Foreground(th.Accent).Render(c.city)
 	return fmt.Sprintf("%s\n\nregion:     %s\npopulation: (unknown)\nweather:    sunny", header, c.region)
 }
 
@@ -138,34 +134,23 @@ type model struct {
 func initialModel() model {
 	n := nav.New(nav.Options{Root: newRegionList()})
 
-	bc := breadcrumb.New(breadcrumb.Options{
-		BarBackground: barBG,
-		BarForeground: barFG,
-		Crumbs:        n.Crumbs(),
-	})
+	bcOpts := th.Breadcrumb()
+	bcOpts.Crumbs = n.Crumbs()
+	bc := breadcrumb.New(bcOpts)
 
-	body := pane.New(pane.Options{
-		Title:         n.Current().Title(),
-		TitlePosition: pane.TopMiddleBorder,
-		SlotBrackets:  pane.SlotBracketsNone, // no "dip" around title
-		Focused:       true,
-		ActiveBorder:  lipgloss.NormalBorder(),
-		ActiveColor:   lipgloss.Color("244"),
-	})
+	paneOpts := th.Pane()
+	paneOpts.Title = n.Current().Title()
+	paneOpts.TitlePosition = pane.TopMiddleBorder
+	paneOpts.SlotBrackets = pane.SlotBracketsNone
+	paneOpts.Focused = true
+	paneOpts.ActiveBorder = lipgloss.NormalBorder()
+	body := pane.New(paneOpts)
 	body.SetContent(n.View())
 
-	h := help.New(help.Options{
-		KeyStyle:  lipgloss.NewStyle().Bold(true).Foreground(keyFG).Background(barBG),
-		DescStyle: lipgloss.NewStyle().Foreground(barFG).Background(barBG),
-	})
+	h := help.New(th.Help())
 	h.SetBindings([]key.Binding{keys.Up, keys.Down, keys.Enter, keys.Back, keys.Quit})
 
-	sb := statusbar.New(statusbar.Options{
-		BarBackground: barBG,
-		BarForeground: barFG,
-		Left:          h.ShortView(),
-		Right:         "v0.1.0",
-	})
+	sb := statusbar.New(th.Statusbar(h.ShortView(), "v0.1.0"))
 
 	return model{nav: n, header: bc, body: body, status: sb}
 }
@@ -176,7 +161,6 @@ func (m *model) refreshBody() {
 	cur := m.nav.Current()
 	m.body.SetTitle(cur.Title())
 	m.body.SetContent(cur.View())
-	// Bottom-left slot: item count when the current screen is a list.
 	if ls, ok := cur.(listScreen); ok {
 		m.body.SetBottomLeft(fmt.Sprintf("%d items", ls.ItemCount()))
 	} else {
@@ -192,7 +176,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.w, m.h = msg.Width, msg.Height
 		m.header.SetWidth(m.w)
 		m.status.SetWidth(m.w)
-		// body fills between header (1 line) and footer (1 line)
 		m.body.SetDimensions(m.w, m.h-2)
 	case tea.KeyMsg:
 		if key.Matches(msg, keys.Quit) && m.nav.Depth() == 1 {

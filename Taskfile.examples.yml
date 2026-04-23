@@ -45,3 +45,22 @@ tasks:
     desc: Nav drilldown with the body wrapped in pane.Pane
     cmds:
       - go run ./examples/nav/pane
+
+  # ---- Data -----------------------------------------------------------------
+
+  data:list:
+    desc: Filterable list in a pane (breadcrumb + filter + pane + statusbar)
+    cmds:
+      - go run ./examples/data/list
+
+  data:table:
+    desc: Filterable table in a pane (breadcrumb + filter + pane + statusbar)
+    cmds:
+      - go run ./examples/data/table
+
+  # ---- Theme -----------------------------------------------------------------
+
+  themecheck:
+    desc: Interactive theme picker — cursor re-skins the whole TUI live
+    cmds:
+      - go run ./examples/themecheck
