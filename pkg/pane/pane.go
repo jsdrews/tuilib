@@ -53,7 +53,8 @@ type Options struct {
 	// lipgloss.NormalBorder().
 	InactiveBorder lipgloss.Border
 	// SlotBrackets controls how the title and other border slot text are
-	// bracketed against the border line. Defaults to SlotBracketsCorners.
+	// bracketed against the border line. Defaults to SlotBracketsNone
+	// (text sits inline on the border with no surrounding glyphs).
 	SlotBrackets SlotBracketStyle
 }
 

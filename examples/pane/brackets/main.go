@@ -57,10 +57,10 @@ type model struct {
 
 func initialModel() model {
 	p1 := makePane("Corners", pane.SlotBracketsCorners)
-	p1.SetContent(content("SlotBracketsCorners (default)"))
+	p1.SetContent(content("SlotBracketsCorners"))
 
 	p2 := makePane("No Brackets", pane.SlotBracketsNone)
-	p2.SetContent(content("SlotBracketsNone"))
+	p2.SetContent(content("SlotBracketsNone (default)"))
 
 	p3 := makePane("Tees", pane.SlotBracketsTees)
 	p3.SetContent(content("SlotBracketsTees"))

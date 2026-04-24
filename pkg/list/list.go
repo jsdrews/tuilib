@@ -214,6 +214,19 @@ func (m Model) Value() string {
 	return ""
 }
 
+// SetDimensions resizes the list in place. When filterable, the internal
+// filter pane consumes 3 rows at the top and the body pane gets the rest;
+// otherwise the body pane takes the full height.
+func (m *Model) SetDimensions(w, h int) {
+	bodyH := h
+	if m.filterable {
+		m.filter.SetWidth(w)
+		bodyH = max(0, h-3)
+	}
+	m.body.SetDimensions(w, bodyH)
+	m.refresh()
+}
+
 // SetItems replaces the item set, re-applies the current filter, and redraws.
 func (m *Model) SetItems(items []string) {
 	m.items = append([]string(nil), items...)

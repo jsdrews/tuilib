@@ -58,6 +58,18 @@ tasks:
     cmds:
       - go run ./examples/data/table
 
+  # ---- App shell ------------------------------------------------------------
+
+  app:layouts:
+    desc: Five screens in one app, each with a different layout.Node tree
+    cmds:
+      - go run ./examples/app/layouts
+
+  app:stack:
+    desc: Screen stack with data flow — parent→child via constructor, child→parent via Pop/OnEnter
+    cmds:
+      - go run ./examples/app/stack
+
   # ---- Theme -----------------------------------------------------------------
 
   themecheck:
