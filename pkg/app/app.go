@@ -47,6 +47,18 @@ type Options struct {
 	DisableAutoEscPop bool
 }
 
+// SetThemeMsg asks the app to switch to the named theme and rebroadcast it
+// across the stack. Emit via SetTheme(name) from any screen.
+type SetThemeMsg struct{ Name string }
+
+// SetTheme returns a command that tells the app shell to switch to the theme
+// whose Name matches. Useful for a theme-picker screen that wants to preview
+// palettes live as the cursor moves. No-op if no theme with that name is in
+// the app's Themes list.
+func SetTheme(name string) tea.Cmd {
+	return func() tea.Msg { return SetThemeMsg{Name: name} }
+}
+
 // Model is the app shell. Instantiate with New and pass to tea.NewProgram.
 type Model struct {
 	w, h int
@@ -131,6 +143,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		m.apply()
+		return m, nil
+
+	case SetThemeMsg:
+		for i, t := range m.themes {
+			if t.Name == msg.Name {
+				m.themeIdx = i
+				m.stack.SetTheme(m.theme())
+				m.apply()
+				break
+			}
+		}
 		return m, nil
 
 	case tea.KeyMsg:

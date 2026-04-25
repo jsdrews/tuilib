@@ -2,11 +2,6 @@ version: '3'
 
 silent: true
 
-includes:
-  examples:
-    taskfile: ./Taskfile.examples.yml
-    flatten: false
-
 tasks:
   default:
     cmds:
@@ -43,6 +38,11 @@ tasks:
     desc: Remove build artifacts
     cmds:
       - go clean ./...
+
+  examples:
+    desc: Open the examples launcher (menu of all demos)
+    cmds:
+      - go run ./examples/launcher
 
   list:
     desc: List available tasks

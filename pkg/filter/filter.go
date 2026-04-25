@@ -6,6 +6,7 @@
 package filter
 
 import (
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -115,6 +116,18 @@ func (m *Model) Blur() {
 
 // Focused reports whether the filter is currently accepting keystrokes.
 func (m Model) Focused() bool { return m.input.Focused() }
+
+// Help returns the keys the filter responds to. Empty when blurred
+// (the parent owns the "/" focus binding); commit/clear when focused.
+func (m Model) Help() []key.Binding {
+	if !m.input.Focused() {
+		return nil
+	}
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "apply")),
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
+	}
+}
 
 // Value is the current filter text. Read after every Update to drive the
 // downstream list/table filter.

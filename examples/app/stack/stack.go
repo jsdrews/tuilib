@@ -1,33 +1,21 @@
-// Demo: screen stack with data flowing in two directions —
+// Package stack demonstrates a screen stack with data flowing in two
+// directions:
 //
-//	Parent → child: via the constructor. CityList calls NewCityDetail(city).
-//	Child → parent: via Pop(result). TimezonePicker calls Pop(chosenTZ),
-//	                which lands in CityDetail.OnEnter(chosenTZ).
+//	Parent → child: via the constructor. cityList pushes newCityDetail(city).
+//	Child → parent: via Pop(result). timezonePicker calls Pop(chosenTZ),
+//	                which lands in cityDetail.OnEnter(chosenTZ).
 //
-// Interaction is menu-driven throughout: no per-screen letter shortcuts.
 // Each screen uses a different layout to show that the stack doesn't care
 // what its children look like — it just hosts layout.Node trees.
-//
-// Keys on every screen:
-//
-//	↑↓     move cursor
-//	/      focus filter (filterable lists)
-//	enter  pick / run
-//	esc    back / cancel
-//	t      cycle theme
-//	q      quit (at root)
-package main
+package stack
 
 import (
-	"fmt"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -35,7 +23,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-var themes = []theme.Theme{theme.Nord(), theme.Dark(), theme.TokyoNight(), theme.Light()}
+// New returns the stack demo's root screen.
+func New(t theme.Theme) screen.Screen {
+	s := &cityList{}
+	s.SetTheme(t)
+	return s
+}
 
 var cities = []string{
 	"London", "Paris", "Berlin", "Madrid", "Amsterdam",
@@ -62,12 +55,6 @@ var timezones = []string{
 type cityList struct {
 	t    theme.Theme
 	list list.Model
-}
-
-func newCityList() *cityList {
-	s := &cityList{}
-	s.SetTheme(themes[0])
-	return s
 }
 
 func (s *cityList) Title() string          { return "Cities" }
@@ -280,17 +267,3 @@ func (s *timezonePicker) SetTheme(t theme.Theme) {
 	s.list.SetCursor(cursor)
 }
 
-// ---- main ------------------------------------------------------------------
-
-func main() {
-	m := app.New(app.Options{
-		Root:     newCityList(),
-		Themes:   themes,
-		Version:  "stack",
-		ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	})
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}

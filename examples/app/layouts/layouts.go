@@ -1,25 +1,16 @@
-// Demo: one app shell, several screens — each with a different layout tree.
-// Proves that pkg/layout can describe arbitrary compositions without the
-// caller doing any "m.h-2" math.
-//
-// Interaction is menu-driven: no per-screen letter shortcuts. Arrow keys
-// move the cursor, enter opens the selection, esc pops.
-//
-// Global keys:
-//
-//	t     cycle theme
-//	q     quit (at root)
-package main
+// Package layouts demonstrates that pkg/layout can describe arbitrary
+// compositions without the caller doing "m.h-2" math. A home screen with a
+// menu pushes each sub-demo as a child screen, each with a different
+// layout.Node tree.
+package layouts
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -27,9 +18,11 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-var themes = []theme.Theme{
-	theme.Nord(), theme.Dark(), theme.Dracula(), theme.Gruvbox(),
-	theme.TokyoNight(), theme.Light(),
+// New returns the layouts demo's root screen.
+func New(t theme.Theme) screen.Screen {
+	s := &homeScreen{}
+	s.SetTheme(t)
+	return s
 }
 
 // ---- Home (root) -----------------------------------------------------------
@@ -52,12 +45,6 @@ const (
 )
 
 var menuItems = []string{menuSidebar, menuDashboard, menuFilter, menuModal, menuColumns}
-
-func newHomeScreen() *homeScreen {
-	s := &homeScreen{}
-	s.SetTheme(themes[0])
-	return s
-}
 
 func (s *homeScreen) Title() string         { return "Home" }
 func (s *homeScreen) Init() tea.Cmd         { return nil }
@@ -449,17 +436,3 @@ func (s *columnsScreen) SetTheme(t theme.Theme) {
 	}
 }
 
-// ---- main -----------------------------------------------------------------
-
-func main() {
-	m := app.New(app.Options{
-		Root:     newHomeScreen(),
-		Themes:   themes,
-		Version:  "layouts",
-		ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	})
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}

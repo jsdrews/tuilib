@@ -138,7 +138,9 @@ func (m *Model) refresh() {
 	}
 	m.body.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.body.EnsureVisible(m.cursor)
-	m.body.SetBottomLeft(fmt.Sprintf("%d / %d", len(m.visible), len(m.items)))
+	if m.filterable {
+		m.body.SetBottomLeft(fmt.Sprintf("%d / %d", len(m.visible), len(m.items)))
+	}
 }
 
 // Init satisfies tea.Model — nothing to kick off.
@@ -206,6 +208,22 @@ func (m Model) Items() []string { return m.items }
 // callers use this to decide whether to intercept global keys like "q".
 func (m Model) Filtering() bool { return m.filterable && m.filter.Focused() }
 
+// Help returns the keys this list responds to. While the embedded filter
+// is focused it returns the filter's keys; otherwise ↑↓ (always) plus "/"
+// when filterable.
+func (m Model) Help() []key.Binding {
+	if m.filterable && m.filter.Focused() {
+		return m.filter.Help()
+	}
+	out := []key.Binding{
+		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+	}
+	if m.filterable {
+		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")))
+	}
+	return out
+}
+
 // Value returns the current filter text ("" when not filterable or empty).
 func (m Model) Value() string {
 	if m.filterable {
@@ -249,5 +267,23 @@ func (m *Model) SetValue(s string) {
 	}
 	m.filter.SetValue(s)
 	m.applyFilter()
+	m.refresh()
+}
+
+// SetFocused sets the body pane's focus state so its border reads as
+// active or inactive. Useful when embedding a list inside a parent that
+// owns focus (e.g. a form field that gates input).
+func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
+
+// SetActiveColor updates the body pane's active border color. Useful when
+// reacting to a theme swap without rebuilding the model.
+func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor(c) }
+
+// SetInactiveColor updates the body pane's inactive border color.
+func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
+
+// SetSelectedColor updates the foreground color of the highlighted row.
+func (m *Model) SetSelectedColor(c lipgloss.TerminalColor) {
+	m.selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(c)
 	m.refresh()
 }

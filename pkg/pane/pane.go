@@ -166,6 +166,13 @@ func (p Pane) Focused() bool { return p.focused }
 func (p *Pane) SetFocused(b bool)               { p.focused = b }
 func (p *Pane) SetTitle(s string)               { p.title = s }
 func (p *Pane) SetTitlePosition(pos BorderPosition) { p.titlePos = pos }
+
+// SetActiveColor updates the border color used when the pane is focused.
+// Useful when reacting to a theme swap without rebuilding the model.
+func (p *Pane) SetActiveColor(c lipgloss.TerminalColor) { p.activeColor = c }
+
+// SetInactiveColor updates the border color used when the pane is unfocused.
+func (p *Pane) SetInactiveColor(c lipgloss.TerminalColor) { p.inactiveColor = c }
 func (p *Pane) SetTopLeft(s string)      { p.topLeft = s }
 func (p *Pane) SetTopRight(s string)     { p.topRight = s }
 func (p *Pane) SetBottomLeft(s string)   { p.bottomLeft = s }
@@ -180,6 +187,17 @@ func (p *Pane) GotoTop() { p.viewport.GotoTop() }
 
 // GotoBottom scrolls the viewport to the last line.
 func (p *Pane) GotoBottom() { p.viewport.GotoBottom() }
+
+// AtBottom reports whether the viewport is scrolled to the last line —
+// useful for streaming-content components that auto-follow new output
+// only while the user is parked at the bottom.
+func (p Pane) AtBottom() bool { return p.viewport.AtBottom() }
+
+// YOffset returns the current vertical scroll offset (top visible line).
+func (p Pane) YOffset() int { return p.viewport.YOffset }
+
+// SetYOffset jumps to the given vertical scroll offset.
+func (p *Pane) SetYOffset(n int) { p.viewport.SetYOffset(n) }
 
 // EnsureVisible scrolls the viewport the minimum amount needed to put line
 // `n` inside the visible window. Useful for cursor-driven list views, where

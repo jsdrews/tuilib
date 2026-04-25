@@ -20,10 +20,14 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/help"
+	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/toggle"
 )
 
 // Theme is a named palette. Every field is a color token consumed by one or
@@ -292,5 +296,70 @@ func (t Theme) List() list.Options {
 		SlotBrackets:   pane.SlotBracketsNone,
 		SelectedColor:  t.Accent,
 		Filter:         t.Filter(),
+	}
+}
+
+// Input returns input.Options pre-filled from the theme — text in BarFG,
+// placeholder in Subtle, cursor in Accent, border colors matching pane.
+// Set Width, Title (the field's label), and any placeholder before passing
+// to input.New.
+func (t Theme) Input() input.Options {
+	return input.Options{
+		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
+		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
+		CursorColor:      t.Accent,
+		ActiveColor:      t.BorderActive,
+		InactiveColor:    t.BorderInactive,
+		SlotBrackets:     pane.SlotBracketsNone,
+	}
+}
+
+// Toggle returns toggle.Options pre-filled from the theme — selected side in
+// Accent (bold), unselected in Muted, border colors matching pane. Set
+// Width, Title (the field's question), and Initial as needed.
+func (t Theme) Toggle() toggle.Options {
+	return toggle.Options{
+		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
+		ActiveColor:     t.BorderActive,
+		InactiveColor:   t.BorderInactive,
+		SlotBrackets:    pane.SlotBracketsNone,
+	}
+}
+
+// Logview returns logview.Options pre-filled from the theme — match
+// highlight in Accent (bold + reverse), border colors matching pane,
+// and the embedded filter using theme.Filter(). Set Width, Height, Title,
+// Searchable, MaxLines, and any Filter.Placeholder before passing to
+// logview.New.
+func (t Theme) Logview() logview.Options {
+	return logview.Options{
+		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
+		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
+		ActiveColor:      t.BorderActive,
+		InactiveColor:    t.BorderInactive,
+		ActiveBorder:     lipgloss.NormalBorder(),
+		InactiveBorder:   lipgloss.NormalBorder(),
+		SlotBrackets:     pane.SlotBracketsNone,
+		Filter:           t.Filter(),
+	}
+}
+
+// Form returns form.Options pre-filled with theme colors. Set Width, Height,
+// Fields, and any SubmitText on the returned value before passing to form.New
+// (or chain `.With(fields)`). Override individual Styles fields only if you
+// need to deviate from the palette.
+func (t Theme) Form() form.Options {
+	return form.Options{
+		Styles: form.Styles{
+			Input:        lipgloss.NewStyle().Foreground(t.BarFG),
+			Placeholder:  lipgloss.NewStyle().Foreground(t.Subtle),
+			CursorColor:  t.Accent,
+			Selected:     lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+			PaneActive:   t.BorderActive,
+			PaneInactive: t.BorderInactive,
+			Submit:       lipgloss.NewStyle().Foreground(t.BarFG),
+			SubmitActive: lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
+		},
 	}
 }

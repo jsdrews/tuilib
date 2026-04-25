@@ -62,6 +62,18 @@ example in `examples/`.
    This keeps `Help()` honest and avoids shortcut collisions across
    screens.
 
+9. **Components own their pane.** Every interactive component in `pkg/`
+   bundles a `pane.Pane` internally — `pkg/list`, `pkg/filter`, `pkg/input`,
+   `pkg/toggle` all return a bordered, titled render from `View()`. To put
+   a label on a component, set its `Title` field (which is rendered on the
+   pane's top border) — don't render a label line above the component, and
+   don't wrap a component in a second `pane.Pane`. The only things that
+   *don't* own a pane are bars (`breadcrumb`, `statusbar`), the `help`
+   key-hint renderer, the layout primitives, and `pkg/form` itself, which is
+   a vertical layout of bordered fields. New input-style components should
+   follow the same shape: `Options.Title` + an internal `pane.Pane` +
+   `View()` returns the bordered render.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -77,8 +89,16 @@ example in `examples/`.
 - **Don't handle `q`, `t`, or esc-pop inside a screen** when running under
   `pkg/app`. The shell routes those. Return them from `Help()` so they
   appear in the hints, but don't re-implement them.
-- **Don't instantiate `textinput.New()` directly.** Use `filter.Model` or
-  `list.Model` with `Filterable=true`.
+- **Don't instantiate `textinput.New()` directly.** Use `input.Model` for a
+  bare bordered text field, `filter.Model` for the "/-to-focus, enter-commits"
+  pattern, or `list.Model` with `Filterable=true` for a filtered list.
+- **Don't double-wrap a component in another `pane.Pane`.** Every
+  interactive component already owns one. If you find yourself writing
+  `pane.New(…).SetContent(list.View())`, set the component's `Title` instead
+  and place it directly via `layout.Sized(&c)`.
+- **Don't render a label line above an input/toggle/list/filter.** The
+  component's `Title` field renders the label on the border itself. The old
+  inline-label pattern is gone.
 - **Don't wrap `bubbles/table`.** We deliberately don't provide a table
   component — bubbles/table already owns rendering + scrolling + cursor,
   and wrapping it is passthrough bloat. For a filterable table, compose
@@ -141,9 +161,15 @@ path.
 
 ## Where to learn more
 
-- **Closest examples first:** `examples/app/stack/main.go` for nav + data
-  flow, `examples/app/layouts/main.go` for layout primitives across five
-  screens. Copy one and strip what you don't need.
+- **Run the launcher:** `task examples`. Every demo is hosted there as a
+  child screen. For code, each example lives at `examples/<area>/<name>/<name>.go`
+  as a package exposing `New(theme.Theme) screen.Screen`.
+- **Closest examples first:** `examples/app/stack/stack.go` for nav + data
+  flow, `examples/app/layouts/layouts.go` for layout primitives across
+  five sub-screens. Copy one and strip what you don't need.
+- **Launcher pattern:** `examples/launcher/main.go` shows how to compose
+  multiple screens into a single app — a filterable menu pushing the
+  selected example onto the stack.
 - **Package overview:** `go doc ./pkg/<name>` prints the package doc
   comment + every exported symbol's signature and doc.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.

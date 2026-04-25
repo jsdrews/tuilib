@@ -88,13 +88,21 @@ handles its own state in `Update`.
 | `pkg/screen` | `Screen` interface + `Stack` with push/pop and result passing via `OnEnter(result)` |
 | `pkg/layout` | Declarative layout engine: `VStack`/`HStack`/`ZStack` + `Fixed`/`Flex` — no `m.h-2` math |
 | `pkg/breadcrumb` | One-line header strip with click-or-keyboard crumbs |
-| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border |
+| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps |
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
-| `pkg/nav` | Drill-down stack of screens (legacy `Screen` interface — prefer `pkg/screen`) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
 | `pkg/list` | Cursor-driven, optionally filterable list inside a pane |
+| `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
+| `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
+| `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
 | `pkg/theme` | Single palette struct + per-component `Options` builders |
+
+> **Components own their pane.** Every interactive component (`pane`,
+> `filter`, `list`, `input`, `toggle`) bundles a `pane.Pane` internally and
+> returns a bordered render from `View()`. To label one, set its `Title`
+> field — it renders on the border. Don't wrap a component in a second pane;
+> don't render a label line above it.
 
 All components follow the same shape:
 
@@ -198,36 +206,34 @@ li := list.New(th.List())
 sb := statusbar.New(th.Statusbar(helpModel.ShortView(), "v0.1.0"))
 ```
 
-See all themes live with `task examples:themecheck`.
-
 ## Examples
 
-Each demo is a single `main.go` you can run with `task examples:<name>`:
+Run `task examples` to open a launcher with a menu of demos. Select one
+and press enter to drill in; esc pops back to the menu. The launcher itself
+is just `pkg/app` hosting a filterable list — the same pattern every other
+demo uses.
 
-| Task | Demonstrates |
+| Entry | Demonstrates |
 |---|---|
-| `examples:pane:basic` | Pane with scrollbar wrapping plain text |
-| `examples:pane:styles` | Border + title-position variants |
-| `examples:pane:brackets` | Title slot-bracket styles (none / corners / tees) |
-| `examples:footer:overlay` | Toggleable bordered help overlay above the statusbar |
-| `examples:footer:inline` | All help hints inline in the statusbar |
-| `examples:nav:breadcrumbs` | Breadcrumb header + nav.Stack drilldown (plain body) |
-| `examples:nav:pane` | Same, with the body wrapped in `pane.Pane` |
-| `examples:data:list` | Filterable `list.Model` with live theme cycling |
-| `examples:data:table` | Filterable `bubbles/table` with live theme cycling |
-| `examples:app:layouts` | Five screens in one app, each with a different layout tree |
-| `examples:app:stack` | Screen stack with two-way data flow (constructor + `OnEnter`) |
-| `examples:themecheck` | Interactive theme picker — cursor re-skins the TUI live |
+| Panes   | Border styles, title positions, and slot-bracket variants in one 2×2 grid |
+| List    | A filterable `list.Model` as a single-screen app |
+| Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane` |
+| Form    | `form.Model` with Text / Select / Confirm fields + submit button |
+| Themes  | Live palette picker — cursor re-skins the whole app via `app.SetTheme` |
+| Layouts | Five sub-screens, each with a different `layout.Node` tree |
+| Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |
 
-Run `task` (no args) for the full list.
+Each entry is a package under `examples/<area>/<name>/` that exports
+`New(theme.Theme) screen.Screen`. The launcher imports them all and pushes
+the chosen one onto its stack.
 
 ## Learning the library
 
 ### For humans
 
-1. **Run the examples.** `task examples:app:stack` (for nav + data flow),
-   `task examples:app:layouts` (for layout primitives), `task examples:data:list`,
-   `task examples:themecheck`. Each is self-contained and shows one idiom.
+1. **Run the launcher.** `task examples`, then drill into Stack (nav + data
+   flow), Layouts (layout primitives), or Themes (live palette preview).
+   Each entry is self-contained and shows one idiom.
 2. **Read the package doc comment.** Every `pkg/*/*.go` opens with a
    paragraph explaining what the component is and when to use it. `go doc
    ./pkg/pane` prints it.
@@ -253,14 +259,14 @@ convention. In order of signal density:
    its doc comment. The most complete single source.
 3. `pkg/<name>/<name>.go` top-of-file comment — the "what and why."
 4. `Options` struct field comments — the configurability surface.
-5. `examples/<area>/<name>/main.go` — the wiring patterns, including
-   theme-swap, resize, and focus-handoff flows.
+5. `examples/<area>/<name>/<name>.go` — each example is a package exposing
+   `New(theme.Theme) screen.Screen`. Read `examples/launcher/main.go` to
+   see the composition pattern (list of examples as a menu screen).
 6. `pkg/theme/theme.go` — the `Theme` struct's field comments are the
    semantic color vocabulary shared across every component.
 
-The examples are intentionally flat (no subpackages, no hidden helpers) so
-a single `Read` call fits them in context. A good first move for any new
-task is: find the closest example, read it end-to-end, then adapt.
+A good first move for any new task is: find the closest example, read it
+end-to-end, then adapt.
 
 ## Project layout
 
@@ -269,7 +275,8 @@ Follows [golang-standards/project-layout](https://github.com/golang-standards/pr
 - `pkg/` — public components (import surface for consumers)
 - `internal/` — private helpers not exported
 - `cmd/` — demo binaries
-- `examples/` — runnable example TUIs that exercise the components
+- `examples/launcher/` — the single entry point (`task examples`)
+- `examples/<area>/<name>/` — each demo as a package exposing `New()`
 - `docs/` — long-form usage notes
 
 ## CI
