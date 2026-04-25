@@ -64,15 +64,39 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/filter`, `pkg/input`,
-   `pkg/toggle` all return a bordered, titled render from `View()`. To put
-   a label on a component, set its `Title` field (which is rendered on the
-   pane's top border) — don't render a label line above the component, and
-   don't wrap a component in a second `pane.Pane`. The only things that
-   *don't* own a pane are bars (`breadcrumb`, `statusbar`), the `help`
-   key-hint renderer, the layout primitives, and `pkg/form` itself, which is
-   a vertical layout of bordered fields. New input-style components should
-   follow the same shape: `Options.Title` + an internal `pane.Pane` +
-   `View()` returns the bordered render.
+   `pkg/toggle`, `pkg/logview` all return a bordered, titled render from
+   `View()`. To put a label on a component, set its `Title` field (which is
+   rendered on the pane's top border) — don't render a label line above the
+   component, and don't wrap a component in a second `pane.Pane`. The only
+   things that *don't* own a pane are bars (`breadcrumb`, `statusbar`), the
+   `help` key-hint renderer, the layout primitives, `pkg/runner` (which is
+   not a UI component — it suspends the program to run a subprocess), and
+   `pkg/form` itself, which is a vertical layout of bordered fields. New
+   input-style components should follow the same shape: `Options.Title` +
+   an internal `pane.Pane` + `View()` returns the bordered render.
+
+10. **Components expose `Help() []key.Binding`.** Interactive components
+    (`list`, `filter`, `input`, `toggle`, `logview`, `form`) return the
+    bindings they currently respond to. Screens compose these into their
+    own `Help()` so the hint strip updates as state changes — e.g. the
+    focused field of a form, or whether a logview's filter is engaged.
+    When state changes the relevant bindings (filter focused vs. blurred,
+    a query is active in logview), `Help()` reflects it.
+
+11. **Run interactive subprocesses through `pkg/runner`.** For editors,
+    pagers, full-screen TUIs, or any command that needs the terminal
+    (`$EDITOR`, `less`, `htop`, `ssh`), call `runner.Run(*exec.Cmd)` from
+    your screen's `Update`. It suspends the alt-screen, hands the TTY to
+    the subprocess (with `Stdin/Stdout/Stderr` and `LINES`/`COLUMNS` env
+    pre-populated), and posts a `runner.Result` back when the subprocess
+    exits. Don't call `tea.ExecProcess` directly — the wrapper handles
+    fallback plumbing for terminals that miss the post-resume SIGWINCH.
+
+12. **Cap streaming buffers.** Components that accept open-ended input
+    (`pkg/logview`) apply a default `MaxLines` cap so an unbounded
+    producer can't grow memory without limit. When wiring up a streaming
+    component, decide on an explicit cap if the default isn't right;
+    only set `-1` (unbounded) when the producer is itself bounded.
 
 ## Anti-patterns
 
@@ -104,6 +128,18 @@ example in `examples/`.
   and wrapping it is passthrough bloat. For a filterable table, compose
   `bubbles/table` + `filter.Model` + `pane.Pane` directly. See
   `examples/data/table/main.go`.
+- **Don't roll your own log viewer.** Use `pkg/logview` for any append-
+  mostly text stream that needs search / jump / filter / auto-follow.
+  Wrapping `viewport.Model` directly skips the search highlight, current-
+  line indicator, and `MaxLines` cap that logview already gets right.
+- **Don't call `tea.ExecProcess` directly for subprocesses.** Use
+  `runner.Run(*exec.Cmd)` — it sets `Stdin/Stdout/Stderr` + `LINES`/
+  `COLUMNS` and returns a typed `runner.Result` your `Update` can match
+  on. Bypassing it loses those defenses and the consistent result type.
+- **Don't leave a streaming buffer uncapped.** `pkg/logview` defaults to
+  `DefaultMaxLines = 10000`. Override only when you have a real reason —
+  passing `-1` opts out of the cap entirely and makes the buffer grow
+  with the stream.
 - **Don't set colors in `Options` literals.** Start from the theme builder.
 - **Don't skip state preservation in `SetTheme`.** If you forget to carry
   cursor/value across rebuilds, theme-swap will silently reset the user's
@@ -150,6 +186,8 @@ If you genuinely can't use the app shell, here are the row costs:
 | `pane.Pane` | caller-controlled, min 3 |
 | `list.Model` (Filterable=false) | caller-controlled |
 | `list.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `logview.Model` (Searchable=false) | caller-controlled, all body |
+| `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 
 Typical body height:
 - Plain body pane: `m.h - 2`

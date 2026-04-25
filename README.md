@@ -95,7 +95,9 @@ handles its own state in `Update`.
 | `pkg/list` | Cursor-driven, optionally filterable list inside a pane |
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
+| `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
+| `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit |
 | `pkg/theme` | Single palette struct + per-component `Options` builders |
 
 > **Components own their pane.** Every interactive component (`pane`,
@@ -217,11 +219,14 @@ demo uses.
 |---|---|
 | Panes   | Border styles, title positions, and slot-bracket variants in one 2×2 grid |
 | List    | A filterable `list.Model` as a single-screen app |
+| Logview | Streaming log tail with `/`-search, n/N jump, `\` filter-mode toggle, current-line highlight |
 | Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane` |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
+| Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit |
 | Themes  | Live palette picker — cursor re-skins the whole app via `app.SetTheme` |
 | Layouts | Five sub-screens, each with a different `layout.Node` tree |
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |
+| Focus   | Multi-component focus cycling — tab/shift-tab between input + list + toggle, with `Help()` updating per focused component |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes
