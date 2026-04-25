@@ -223,6 +223,7 @@ demo uses.
 | Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane` |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
 | Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit |
+| Runlog  | Stream a subprocess's stdout/stderr into a `logview` pane; tab focus between picker and log, `x` to kill |
 | Themes  | Live palette picker — cursor re-skins the whole app via `app.SetTheme` |
 | Layouts | Five sub-screens, each with a different `layout.Node` tree |
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |

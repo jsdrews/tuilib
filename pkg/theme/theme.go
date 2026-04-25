@@ -341,6 +341,7 @@ func (t Theme) Logview() logview.Options {
 		ActiveBorder:     lipgloss.NormalBorder(),
 		InactiveBorder:   lipgloss.NormalBorder(),
 		SlotBrackets:     pane.SlotBracketsNone,
+		HScrollbar:       true,
 		Filter:           t.Filter(),
 	}
 }

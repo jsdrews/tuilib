@@ -24,6 +24,7 @@ import (
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
 	datalist "github.com/jsdrews/tuilib/examples/data/list"
 	datalogview "github.com/jsdrews/tuilib/examples/data/logview"
+	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
 	datarunner "github.com/jsdrews/tuilib/examples/data/runner"
 	datatable "github.com/jsdrews/tuilib/examples/data/table"
 	paneshowcase "github.com/jsdrews/tuilib/examples/pane/showcase"
@@ -43,6 +44,7 @@ var entries = []entry{
 	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
 	{"Runner — interactive subprocess", "Pick a command, hand the terminal to it, return on exit. Demonstrates pkg/runner with $EDITOR, less, man, htop.", datarunner.New},
+	{"Runlog — stream stdout into logview", "Pick a command on the left; its stdout/stderr stream into a logview on the right. Tab cycles focus, x kills the running process.", datarunlog.New},
 	{"Themes — live palette picker", "Cursor re-skins the whole app; enter shows a theme's field palette.", themecheck.New},
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},

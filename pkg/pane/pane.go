@@ -6,11 +6,16 @@ package pane
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// HScrollStep is how many cells left/right scroll the pane horizontally.
+const HScrollStep = 4
 
 // Pane is a bordered region with a title, six metadata slots around the
 // border, and a vertical scrollbar down the right edge.
@@ -19,6 +24,10 @@ type Pane struct {
 
 	width, height int
 
+	rawLines []string
+	maxLineW int
+	xOffset  int
+
 	title       string
 	topLeft     string
 	topRight    string
@@ -26,8 +35,9 @@ type Pane struct {
 	bottomMid   string
 	bottomRight string // empty => auto-filled with scroll percent
 
-	focused  bool
-	titlePos BorderPosition
+	focused     bool
+	hScrollbar  bool
+	titlePos    BorderPosition
 
 	activeColor    lipgloss.TerminalColor
 	inactiveColor  lipgloss.TerminalColor
@@ -56,6 +66,10 @@ type Options struct {
 	// bracketed against the border line. Defaults to SlotBracketsNone
 	// (text sits inline on the border with no surrounding glyphs).
 	SlotBrackets SlotBracketStyle
+	// HScrollbar reserves a single row at the bottom of the inner content
+	// area for a horizontal scrollbar. The thumb tracks xOffset against
+	// the longest line; when content fits, the track renders blank.
+	HScrollbar bool
 }
 
 // New constructs a Pane. SetContent must be called separately to populate it.
@@ -77,6 +91,7 @@ func New(opts Options) Pane {
 		title:          opts.Title,
 		titlePos:       opts.TitlePosition,
 		focused:        opts.Focused,
+		hScrollbar:     opts.HScrollbar,
 		activeColor:    opts.ActiveColor,
 		inactiveColor:  opts.InactiveColor,
 		activeBorder:   opts.ActiveBorder,
@@ -89,9 +104,24 @@ func New(opts Options) Pane {
 
 func (p Pane) Init() tea.Cmd { return nil }
 
-// Update forwards key/mouse events to the embedded viewport so scroll keys
-// (pgup/pgdn/arrow keys/mouse wheel) work by default.
+// Update forwards key/mouse events to the embedded viewport so vertical
+// scroll keys (pgup/pgdn/up/down/mouse wheel) work by default. Left and
+// right arrow keys are intercepted for horizontal scrolling — the
+// content is re-cut to the visible window via ansi.Cut so ANSI styles
+// stay intact across the slice.
 func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		switch k.String() {
+		case "left", "h":
+			p.xOffset -= HScrollStep
+			p.pushContent()
+			return p, nil
+		case "right", "l":
+			p.xOffset += HScrollStep
+			p.pushContent()
+			return p, nil
+		}
+	}
 	var cmd tea.Cmd
 	p.viewport, cmd = p.viewport.Update(msg)
 	return p, cmd
@@ -107,6 +137,11 @@ func (p Pane) View() string {
 		p.viewport.YOffset,
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
+	if p.hScrollbar {
+		inner := p.viewport.Width
+		hbar := HScrollbar(inner, p.maxLineW, inner, p.xOffset)
+		body = lipgloss.JoinVertical(lipgloss.Left, body, hbar+strings.Repeat(" ", ScrollbarWidth))
+	}
 
 	// Auto-fill bottom-right with scroll percent only when content actually
 	// overflows. Panes used as input strips (filter bars, one-liners) would
@@ -143,15 +178,82 @@ func (p *Pane) SetSlotBrackets(s SlotBracketStyle) { p.slotBrackets = s }
 
 // SetContent replaces the pane's content. Pass any string — a child model's
 // View() output, a pre-rendered table, a log, raw text — and the pane will
-// scroll it.
-func (p *Pane) SetContent(s string) { p.viewport.SetContent(s) }
+// scroll it. Long lines are truncated to the inner width so terminal wrap
+// can't break row counting; use left/right (or SetXOffset) to scroll
+// horizontally past the cut.
+func (p *Pane) SetContent(s string) {
+	if s == "" {
+		p.rawLines = nil
+	} else {
+		p.rawLines = strings.Split(s, "\n")
+	}
+	p.maxLineW = 0
+	for _, l := range p.rawLines {
+		if w := lipgloss.Width(l); w > p.maxLineW {
+			p.maxLineW = w
+		}
+	}
+	p.pushContent()
+}
 
 // SetDimensions sets the Pane's outer size (including border). The inner
-// content area is sized as (width-2-scrollbar) × (height-2).
+// content area is sized as (width-2-scrollbar) × (height-2), shrunk by
+// one more row when HScrollbar is enabled.
 func (p *Pane) SetDimensions(width, height int) {
 	p.width, p.height = width, height
 	p.viewport.Width = max(0, width-2-ScrollbarWidth)
-	p.viewport.Height = max(0, height-2)
+	innerH := height - 2
+	if p.hScrollbar {
+		innerH -= ScrollbarHeight
+	}
+	p.viewport.Height = max(0, innerH)
+	p.pushContent()
+}
+
+// XOffset returns the current horizontal scroll column.
+func (p Pane) XOffset() int { return p.xOffset }
+
+// MaxXOffset returns the largest meaningful horizontal scroll column —
+// 0 when content fits in the inner width.
+func (p Pane) MaxXOffset() int {
+	return max(0, p.maxLineW-p.viewport.Width)
+}
+
+// SetXOffset jumps to the given horizontal scroll column, clamped into
+// [0, MaxXOffset()].
+func (p *Pane) SetXOffset(n int) {
+	p.xOffset = n
+	p.pushContent()
+}
+
+// pushContent re-cuts every raw line to the visible window and pushes
+// the result to the viewport. Skips the cut entirely when xOffset is 0
+// and every line fits — a fast path for the common case.
+func (p *Pane) pushContent() {
+	maxOff := p.MaxXOffset()
+	if p.xOffset > maxOff {
+		p.xOffset = maxOff
+	}
+	if p.xOffset < 0 {
+		p.xOffset = 0
+	}
+	if len(p.rawLines) == 0 {
+		p.viewport.SetContent("")
+		return
+	}
+	inner := p.viewport.Width
+	if inner <= 0 || (p.xOffset == 0 && p.maxLineW <= inner) {
+		p.viewport.SetContent(strings.Join(p.rawLines, "\n"))
+		return
+	}
+	var b strings.Builder
+	for i, line := range p.rawLines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(ansi.Cut(line, p.xOffset, p.xOffset+inner))
+	}
+	p.viewport.SetContent(b.String())
 }
 
 // Width returns the Pane's outer width.

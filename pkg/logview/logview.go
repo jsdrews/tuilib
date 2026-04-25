@@ -80,6 +80,7 @@ type Options struct {
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
 	SlotBrackets   pane.SlotBracketStyle
+	HScrollbar     bool
 
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
@@ -159,6 +160,7 @@ func New(opts Options) Model {
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
 		SlotBrackets:   opts.SlotBrackets,
+		HScrollbar:     opts.HScrollbar,
 	})
 	m.refresh()
 	return m
@@ -368,6 +370,7 @@ func (m Model) Help() []key.Binding {
 	}
 	out := []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "scroll")),
+		key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")),
 		key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup/pgdn", "page")),
 		key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
 		key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
