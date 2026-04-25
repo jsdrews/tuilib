@@ -92,11 +92,32 @@ example in `examples/`.
     exits. Don't call `tea.ExecProcess` directly — the wrapper handles
     fallback plumbing for terminals that miss the post-resume SIGWINCH.
 
-12. **Cap streaming buffers.** Components that accept open-ended input
+12. **Stream subprocess output via a chained `tea.Cmd`.** When you want
+    stdout/stderr in a logview rather than a terminal handoff, point
+    `cmd.Stdout` and `cmd.Stderr` at one `io.Pipe`, call `cmd.Start()`,
+    then spawn a goroutine that does `cmd.Wait()` + `pw.Close()`. A
+    `tea.Cmd` reads one line via `bufio.Scanner` and posts a
+    `logLineMsg`; on receipt, `Update` appends + re-dispatches the read.
+    EOF posts `logDoneMsg`. No goroutine touches the model directly. To
+    interrupt or kill, call `cmd.Process.Signal(syscall.SIGINT)` or
+    `cmd.Process.Kill()` (SIGKILL). See `examples/data/runlog`.
+
+13. **Cap streaming buffers.** Components that accept open-ended input
     (`pkg/logview`) apply a default `MaxLines` cap so an unbounded
     producer can't grow memory without limit. When wiring up a streaming
     component, decide on an explicit cap if the default isn't right;
     only set `-1` (unbounded) when the producer is itself bounded.
+
+14. **Trust the pane to handle long lines.** `pane.Pane` truncates each
+    line to the inner width on `SetContent` (ANSI-aware via
+    `x/ansi.Cut`) and exposes left/right (and `h`/`l`) for horizontal
+    scroll, with an optional thin scrollbar via `Options.HScrollbar`.
+    Don't pre-wrap with newlines or `wordwrap.WrapString` to avoid
+    terminal-wrap glitches — the pane already prevents that. Pre-wrap
+    only when you specifically want soft-wrapping (prose paragraphs);
+    otherwise let truncation + horizontal scroll do the work.
+    `theme.Logview()` enables `HScrollbar` by default since long log
+    lines are common.
 
 ## Anti-patterns
 
@@ -140,6 +161,11 @@ example in `examples/`.
   `DefaultMaxLines = 10000`. Override only when you have a real reason —
   passing `-1` opts out of the cap entirely and makes the buffer grow
   with the stream.
+- **Don't pre-wrap content for the pane.** Pane already truncates lines
+  to its inner width (so terminal wrap can't break row counting) and
+  offers horizontal scroll. Pre-wrapping with `wordwrap.WrapString` or
+  manual `\n` insertion just makes content harder to read at narrow
+  widths. Pre-wrap only when the content is genuinely paragraph prose.
 - **Don't set colors in `Options` literals.** Start from the theme builder.
 - **Don't skip state preservation in `SetTheme`.** If you forget to carry
   cursor/value across rebuilds, theme-swap will silently reset the user's
@@ -183,7 +209,7 @@ If you genuinely can't use the app shell, here are the row costs:
 | `breadcrumb.Model` | 1 |
 | `statusbar.Model` | 1 |
 | `filter.Model` | 3 (border + content + border) |
-| `pane.Pane` | caller-controlled, min 3 |
+| `pane.Pane` | caller-controlled, min 3 (4 when `HScrollbar=true` — one inner row reserved for the bar) |
 | `list.Model` (Filterable=false) | caller-controlled |
 | `list.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `logview.Model` (Searchable=false) | caller-controlled, all body |

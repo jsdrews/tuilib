@@ -88,7 +88,7 @@ handles its own state in `Update`.
 | `pkg/screen` | `Screen` interface + `Stack` with push/pop and result passing via `OnEnter(result)` |
 | `pkg/layout` | Declarative layout engine: `VStack`/`HStack`/`ZStack` + `Fixed`/`Flex` — no `m.h-2` math |
 | `pkg/breadcrumb` | One-line header strip with click-or-keyboard crumbs |
-| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps |
+| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps. Truncates long lines to inner width and supports horizontal scroll (←→ / h / l) with an optional thin scrollbar. |
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
@@ -101,10 +101,10 @@ handles its own state in `Update`.
 | `pkg/theme` | Single palette struct + per-component `Options` builders |
 
 > **Components own their pane.** Every interactive component (`pane`,
-> `filter`, `list`, `input`, `toggle`) bundles a `pane.Pane` internally and
-> returns a bordered render from `View()`. To label one, set its `Title`
-> field — it renders on the border. Don't wrap a component in a second pane;
-> don't render a label line above it.
+> `filter`, `list`, `input`, `toggle`, `logview`) bundles a `pane.Pane`
+> internally and returns a bordered render from `View()`. To label one, set
+> its `Title` field — it renders on the border. Don't wrap a component in a
+> second pane; don't render a label line above it.
 
 All components follow the same shape:
 
