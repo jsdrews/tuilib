@@ -1,13 +1,16 @@
 // Package pane provides a bordered, titled, scrollable region for Bubble Tea
 // TUIs. A Pane owns a viewport and renders a vertical scrollbar along its
 // right edge. Any string content can be placed inside — render a child model
-// to a string via its View() method and pass it to SetContent.
+// to a string via its View() method and pass it to SetContent. While
+// SetLoading(true) is in effect, the body is replaced by a centered spinner
+// (with optional LoadingLabel) until SetLoading(false) restores the content.
 package pane
 
 import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,6 +41,10 @@ type Pane struct {
 	focused     bool
 	hScrollbar  bool
 	titlePos    BorderPosition
+
+	loading      bool
+	spinner      spinner.Model
+	loadingLabel string
 
 	activeColor    lipgloss.TerminalColor
 	inactiveColor  lipgloss.TerminalColor
@@ -70,6 +77,16 @@ type Options struct {
 	// area for a horizontal scrollbar. The thumb tracks xOffset against
 	// the longest line; when content fits, the track renders blank.
 	HScrollbar bool
+	// Spinner picks the spinner frames used while the pane is in a
+	// loading state (see SetLoading). When zero, defaults to spinner.Dot.
+	Spinner *spinner.Spinner
+	// SpinnerStyle is applied to the spinner glyph. The zero value
+	// renders without any style; pass via theme.Pane() for a sensible
+	// foreground.
+	SpinnerStyle lipgloss.Style
+	// LoadingLabel is rendered next to the spinner while loading. Use it
+	// to give the user context — e.g. "loading cities…" or "fetching".
+	LoadingLabel string
 }
 
 // New constructs a Pane. SetContent must be called separately to populate it.
@@ -86,12 +103,20 @@ func New(opts Options) Pane {
 	if (opts.InactiveBorder == lipgloss.Border{}) {
 		opts.InactiveBorder = lipgloss.NormalBorder()
 	}
+	frames := spinner.Dot
+	if opts.Spinner != nil {
+		frames = *opts.Spinner
+	}
+	sp := spinner.New(spinner.WithSpinner(frames), spinner.WithStyle(opts.SpinnerStyle))
+
 	p := Pane{
 		viewport:       viewport.New(0, 0),
 		title:          opts.Title,
 		titlePos:       opts.TitlePosition,
 		focused:        opts.Focused,
 		hScrollbar:     opts.HScrollbar,
+		spinner:        sp,
+		loadingLabel:   opts.LoadingLabel,
 		activeColor:    opts.ActiveColor,
 		inactiveColor:  opts.InactiveColor,
 		activeBorder:   opts.ActiveBorder,
@@ -108,8 +133,18 @@ func (p Pane) Init() tea.Cmd { return nil }
 // scroll keys (pgup/pgdn/up/down/mouse wheel) work by default. Left and
 // right arrow keys are intercepted for horizontal scrolling — the
 // content is re-cut to the visible window via ansi.Cut so ANSI styles
-// stay intact across the slice.
+// stay intact across the slice. While loading, spinner.TickMsg events
+// are consumed to advance the spinner; the chained next-tick command is
+// returned so the animation keeps running.
 func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
+	if _, ok := msg.(spinner.TickMsg); ok {
+		if !p.loading {
+			return p, nil
+		}
+		var cmd tea.Cmd
+		p.spinner, cmd = p.spinner.Update(msg)
+		return p, cmd
+	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
 		case "left", "h":
@@ -128,27 +163,36 @@ func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 }
 
 // View renders the pane: content inside viewport, scrollbar on the right,
-// both wrapped in a titled border with metadata slots.
+// both wrapped in a titled border with metadata slots. While loading, the
+// inner content area is replaced with a centered spinner glyph (plus an
+// optional label) and scroll chrome is suppressed.
 func (p Pane) View() string {
-	bar := Scrollbar(
-		p.viewport.Height,
-		p.viewport.TotalLineCount(),
-		p.viewport.VisibleLineCount(),
-		p.viewport.YOffset,
-	)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
-	if p.hScrollbar {
-		inner := p.viewport.Width
-		hbar := HScrollbar(inner, p.maxLineW, inner, p.xOffset)
-		body = lipgloss.JoinVertical(lipgloss.Left, body, hbar+strings.Repeat(" ", ScrollbarWidth))
-	}
+	innerW := max(0, p.width-2)
+	innerH := max(0, p.height-2)
 
-	// Auto-fill bottom-right with scroll percent only when content actually
-	// overflows. Panes used as input strips (filter bars, one-liners) would
-	// otherwise show a meaningless "100%".
+	var body string
 	br := p.bottomRight
-	if br == "" && p.viewport.TotalLineCount() > p.viewport.VisibleLineCount() {
-		br = fmt.Sprintf("%d%%", int(p.viewport.ScrollPercent()*100))
+	if p.loading {
+		body = lipgloss.Place(innerW, innerH, lipgloss.Center, lipgloss.Center, p.loadingView())
+	} else {
+		bar := Scrollbar(
+			p.viewport.Height,
+			p.viewport.TotalLineCount(),
+			p.viewport.VisibleLineCount(),
+			p.viewport.YOffset,
+		)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
+		if p.hScrollbar {
+			inner := p.viewport.Width
+			hbar := HScrollbar(inner, p.maxLineW, inner, p.xOffset)
+			body = lipgloss.JoinVertical(lipgloss.Left, body, hbar+strings.Repeat(" ", ScrollbarWidth))
+		}
+		// Auto-fill bottom-right with scroll percent only when content actually
+		// overflows. Panes used as input strips (filter bars, one-liners) would
+		// otherwise show a meaningless "100%".
+		if br == "" && p.viewport.TotalLineCount() > p.viewport.VisibleLineCount() {
+			br = fmt.Sprintf("%d%%", int(p.viewport.ScrollPercent()*100))
+		}
 	}
 
 	slots := map[BorderPosition]string{
@@ -172,6 +216,43 @@ func (p Pane) View() string {
 	}
 	return Borderize(body, border, color, slots, p.slotBrackets)
 }
+
+// loadingView returns the spinner glyph plus an optional " loading…"
+// suffix, all in the spinner's style.
+func (p Pane) loadingView() string {
+	v := p.spinner.View()
+	if p.loadingLabel != "" {
+		v += " " + p.spinner.Style.Render(p.loadingLabel)
+	}
+	return v
+}
+
+// Loading reports whether the pane is currently in its loading state.
+func (p Pane) Loading() bool { return p.loading }
+
+// SetLoading toggles the loading state. When entering the loading state,
+// returns the spinner's initial Tick command — propagate it back to
+// bubbletea (typically by returning it from your screen's Update or
+// batching with other commands) so the spinner animates. When leaving
+// the loading state, returns nil; any in-flight TickMsg is silently
+// dropped on the next Update.
+func (p *Pane) SetLoading(b bool) tea.Cmd {
+	if p.loading == b {
+		return nil
+	}
+	p.loading = b
+	if b {
+		return p.spinner.Tick
+	}
+	return nil
+}
+
+// SetLoadingLabel updates the text shown next to the spinner while loading.
+func (p *Pane) SetLoadingLabel(s string) { p.loadingLabel = s }
+
+// SetSpinnerStyle updates the lipgloss style applied to the spinner glyph.
+// Useful for re-theming without rebuilding the pane.
+func (p *Pane) SetSpinnerStyle(s lipgloss.Style) { p.spinner.Style = s }
 
 // SetSlotBrackets controls how the title and other slot text meet the border.
 func (p *Pane) SetSlotBrackets(s SlotBracketStyle) { p.slotBrackets = s }

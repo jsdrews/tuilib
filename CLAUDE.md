@@ -64,20 +64,21 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/filter`, `pkg/input`,
-   `pkg/toggle`, `pkg/logview` all return a bordered, titled render from
-   `View()`. To put a label on a component, set its `Title` field (which is
-   rendered on the pane's top border) — don't render a label line above the
-   component, and don't wrap a component in a second `pane.Pane`. The only
-   things that *don't* own a pane are bars (`breadcrumb`, `statusbar`), the
-   `help` key-hint renderer, the layout primitives, `pkg/runner` (which is
-   not a UI component — it suspends the program to run a subprocess), and
-   `pkg/form` itself, which is a vertical layout of bordered fields. New
-   input-style components should follow the same shape: `Options.Title` +
-   an internal `pane.Pane` + `View()` returns the bordered render.
+   `pkg/toggle`, `pkg/logview`, `pkg/tree` all return a bordered, titled
+   render from `View()`. To put a label on a component, set its `Title`
+   field (which is rendered on the pane's top border) — don't render a label
+   line above the component, and don't wrap a component in a second
+   `pane.Pane`. The only things that *don't* own a pane are bars
+   (`breadcrumb`, `statusbar`), the `help` key-hint renderer, the layout
+   primitives, `pkg/runner` (which is not a UI component — it suspends the
+   program to run a subprocess), and `pkg/form` itself, which is a vertical
+   layout of bordered fields. New input-style components should follow the
+   same shape: `Options.Title` + an internal `pane.Pane` + `View()` returns
+   the bordered render.
 
 10. **Components expose `Help() []key.Binding`.** Interactive components
-    (`list`, `filter`, `input`, `toggle`, `logview`, `form`) return the
-    bindings they currently respond to. Screens compose these into their
+    (`list`, `filter`, `input`, `toggle`, `logview`, `tree`, `form`) return
+    the bindings they currently respond to. Screens compose these into their
     own `Help()` so the hint strip updates as state changes — e.g. the
     focused field of a form, or whether a logview's filter is engaged.
     When state changes the relevant bindings (filter focused vs. blurred,
@@ -108,7 +109,35 @@ example in `examples/`.
     component, decide on an explicit cap if the default isn't right;
     only set `-1` (unbounded) when the producer is itself bounded.
 
-14. **Trust the pane to handle long lines.** `pane.Pane` truncates each
+14. **Enter means "open the focused selection."** In multi-pane screens
+    with focus cycling, enter should have a single conceptual meaning
+    across the whole screen — open whatever is highlighted in the
+    focused pane. The *side effect* differs per pane: on a master list
+    enter loads the adjacent detail (and typically transfers focus to
+    it); on a detail list enter pushes a child screen via
+    `screen.Push(...)`; on a form it submits. The user never has to
+    remember "which pane uses enter for what" — same verb, different
+    object. This matches the launcher's enter-to-push convention and
+    avoids the alternative of overloading per-pane keys (e.g. `>`/`d`
+    just to drill in). The pattern's payoff is most visible in
+    `examples/data/drilldown` where enter on the cities list loads
+    detail + shifts focus right, and enter on the focused detail
+    pushes the level-3 attribute screen.
+
+15. **Use `SetLoading(b bool) tea.Cmd` while data is in flight.** Any
+    component that owns a pane (`list`, `logview`, `tree`, …) inherits a
+    loading state from `pane.Pane`. Calling `SetLoading(true)` returns a
+    `tea.Cmd` you must batch into your screen's command stream — that's
+    the spinner's first tick. The pane then renders a centered spinner
+    (with optional `LoadingLabel`) in place of the body. On the fetched
+    message, push the data into the component (`SetItems`/`AppendLines`/
+    `SetRoot`) and call `SetLoading(false)`. Reset stale data before
+    `SetLoading(true)` on refetch so the spinner replaces the previous
+    result instead of overlaying it. Theme builders set `SpinnerStyle`
+    from `Theme.Accent`; override only when you need a different color.
+    See `examples/data/loading/loading.go`.
+
+16. **Trust the pane to handle long lines.** `pane.Pane` truncates each
     line to the inner width on `SetContent` (ANSI-aware via
     `x/ansi.Cut`) and exposes left/right (and `h`/`l`) for horizontal
     scroll, with an optional thin scrollbar via `Options.HScrollbar`.
@@ -153,6 +182,12 @@ example in `examples/`.
   mostly text stream that needs search / jump / filter / auto-follow.
   Wrapping `viewport.Model` directly skips the search highlight, current-
   line indicator, and `MaxLines` cap that logview already gets right.
+- **Don't roll your own tree viewer.** Use `pkg/tree` for any
+  hierarchical data the user needs to expand/collapse and search. Provide
+  a `Node` (Label + Children) over your own data shape — don't force
+  tuilib's structs into your domain model. Pre-flattening into a list +
+  manual indentation strings re-implements expand/collapse + filter-with-
+  ancestors badly.
 - **Don't call `tea.ExecProcess` directly for subprocesses.** Use
   `runner.Run(*exec.Cmd)` — it sets `Stdin/Stdout/Stderr` + `LINES`/
   `COLUMNS` and returns a typed `runner.Result` your `Update` can match
@@ -214,6 +249,8 @@ If you genuinely can't use the app shell, here are the row costs:
 | `list.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `logview.Model` (Searchable=false) | caller-controlled, all body |
 | `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `tree.Model` (Searchable=false) | caller-controlled, all body |
+| `tree.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 
 Typical body height:
 - Plain body pane: `m.h - 2`

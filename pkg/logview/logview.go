@@ -82,6 +82,13 @@ type Options struct {
 	SlotBrackets   pane.SlotBracketStyle
 	HScrollbar     bool
 
+	// SpinnerStyle is applied to the spinner glyph rendered while the
+	// logview is in its loading state (see SetLoading). Pass via
+	// theme.Logview() for a sensible default.
+	SpinnerStyle lipgloss.Style
+	// LoadingLabel is rendered next to the spinner while loading.
+	LoadingLabel string
+
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
 }
@@ -161,6 +168,8 @@ func New(opts Options) Model {
 		InactiveBorder: opts.InactiveBorder,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
+		SpinnerStyle:   opts.SpinnerStyle,
+		LoadingLabel:   opts.LoadingLabel,
 	})
 	m.refresh()
 	return m
@@ -360,6 +369,20 @@ func (m *Model) SetCurrentLineStyle(s lipgloss.Style) {
 	m.currentLineStyle = s
 	m.refresh()
 }
+
+// Loading reports whether the logview is currently in its loading state.
+func (m Model) Loading() bool { return m.body.Loading() }
+
+// SetLoading toggles the loading state. When entering, returns the
+// spinner's initial Tick command — propagate it back from your screen's
+// Update so the spinner animates.
+func (m *Model) SetLoading(b bool) tea.Cmd { return m.body.SetLoading(b) }
+
+// SetLoadingLabel updates the text rendered next to the spinner while loading.
+func (m *Model) SetLoadingLabel(s string) { m.body.SetLoadingLabel(s) }
+
+// SetSpinnerStyle updates the lipgloss style applied to the spinner glyph.
+func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }
 
 // Help returns the keys this logview responds to. While the embedded
 // filter is focused, returns the filter's keys; otherwise the navigation

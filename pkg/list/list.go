@@ -21,6 +21,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
+
 // Options configures a new list. Zero-value fields fall back to sane defaults
 // where that's meaningful; otherwise the pane/filter defaults apply.
 type Options struct {
@@ -43,6 +44,14 @@ type Options struct {
 
 	// SelectedColor foregrounds the highlighted row (bold).
 	SelectedColor lipgloss.TerminalColor
+
+	// SpinnerStyle is applied to the spinner glyph rendered while the list
+	// is in its loading state (see SetLoading). Pass via theme.List() for
+	// a sensible default.
+	SpinnerStyle lipgloss.Style
+	// LoadingLabel is rendered next to the spinner while loading — e.g.
+	// "loading cities…".
+	LoadingLabel string
 
 	// Filter configures the embedded filter. Ignored when Filterable=false.
 	Filter filter.Options
@@ -99,6 +108,8 @@ func New(opts Options) Model {
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
 		SlotBrackets:   opts.SlotBrackets,
+		SpinnerStyle:   opts.SpinnerStyle,
+		LoadingLabel:   opts.LoadingLabel,
 	})
 	m.refresh()
 	return m
@@ -147,12 +158,14 @@ func (m *Model) refresh() {
 func (m Model) Init() tea.Cmd { return nil }
 
 // Update consumes up/down/j/k and "/" (when filterable); while the filter is
-// focused, every key is forwarded to it. Non-list keys pass through the
-// caller untouched.
+// focused, every key is forwarded to it. Non-key messages are forwarded
+// to the body pane so spinner ticks reach the loading-state animation.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
-		return m, nil
+		var cmd tea.Cmd
+		m.body, cmd = m.body.Update(msg)
+		return m, cmd
 	}
 	if m.filterable && m.filter.Focused() {
 		var cmd tea.Cmd
@@ -275,6 +288,11 @@ func (m *Model) SetValue(s string) {
 // owns focus (e.g. a form field that gates input).
 func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
 
+// SetTitle updates the title rendered on the body pane's top border.
+// Useful when the list represents a slice that can change identity at
+// runtime (e.g. "detail · <selection>").
+func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
+
 // SetActiveColor updates the body pane's active border color. Useful when
 // reacting to a theme swap without rebuilding the model.
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor(c) }
@@ -287,3 +305,19 @@ func (m *Model) SetSelectedColor(c lipgloss.TerminalColor) {
 	m.selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(c)
 	m.refresh()
 }
+
+// Loading reports whether the list is currently in its loading state.
+func (m Model) Loading() bool { return m.body.Loading() }
+
+// SetLoading toggles the loading state. When entering, returns the
+// spinner's initial Tick command — propagate it back from your screen's
+// Update so the spinner animates. The list's Update already forwards
+// every msg to the body pane, so subsequent ticks chain automatically.
+func (m *Model) SetLoading(b bool) tea.Cmd { return m.body.SetLoading(b) }
+
+// SetLoadingLabel updates the text rendered next to the spinner while
+// loading.
+func (m *Model) SetLoadingLabel(s string) { m.body.SetLoadingLabel(s) }
+
+// SetSpinnerStyle updates the lipgloss style applied to the spinner glyph.
+func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }

@@ -88,7 +88,7 @@ handles its own state in `Update`.
 | `pkg/screen` | `Screen` interface + `Stack` with push/pop and result passing via `OnEnter(result)` |
 | `pkg/layout` | Declarative layout engine: `VStack`/`HStack`/`ZStack` + `Fixed`/`Flex` — no `m.h-2` math |
 | `pkg/breadcrumb` | One-line header strip with click-or-keyboard crumbs |
-| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps. Truncates long lines to inner width and supports horizontal scroll (←→ / h / l) with an optional thin scrollbar. |
+| `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps. Truncates long lines to inner width and supports horizontal scroll (←→ / h / l) with an optional thin scrollbar. Built-in loading state replaces the body with a centered spinner via `SetLoading(true)`. |
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
@@ -96,15 +96,16 @@ handles its own state in `Update`.
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
+| `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit |
 | `pkg/theme` | Single palette struct + per-component `Options` builders |
 
 > **Components own their pane.** Every interactive component (`pane`,
-> `filter`, `list`, `input`, `toggle`, `logview`) bundles a `pane.Pane`
-> internally and returns a bordered render from `View()`. To label one, set
-> its `Title` field — it renders on the border. Don't wrap a component in a
-> second pane; don't render a label line above it.
+> `filter`, `list`, `input`, `toggle`, `logview`, `tree`) bundles a
+> `pane.Pane` internally and returns a bordered render from `View()`. To
+> label one, set its `Title` field — it renders on the border. Don't wrap a
+> component in a second pane; don't render a label line above it.
 
 All components follow the same shape:
 
@@ -222,8 +223,12 @@ demo uses.
 | Logview | Streaming log tail with `/`-search, n/N jump, `\` filter-mode toggle, current-line highlight |
 | Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane` |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
+| Loading | `list`, `logview`, and `tree` start in `SetLoading(true)`; staggered `tea.Tick` delays simulate fetches. Press `r` to refetch. |
+| Detail  | Master-detail with async fetches at both levels — the cities list itself loads on Init, then pressing enter on a city fetches its body into the right pane. Stale results are dropped via reqID tagging. |
+| Drilldown | Three-level navigation. Cities + detail with focus cycling; enter "opens the focused selection" — left-enter loads detail and shifts focus right, right-enter pushes a child screen for the attribute. Esc pops back with the parent's state intact. |
 | Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit |
 | Runlog  | Stream a subprocess's stdout/stderr into a `logview` pane; tab focus between picker and log, `x` to kill |
+| Tree    | Synthetic project tree with cursor, expand/collapse (←→/space), `/`-search, and `\` filter mode that hides non-matching subtrees |
 | Themes  | Live palette picker — cursor re-skins the whole app via `app.SetTheme` |
 | Layouts | Five sub-screens, each with a different `layout.Node` tree |
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |

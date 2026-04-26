@@ -19,14 +19,19 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
+	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
+	datadetail "github.com/jsdrews/tuilib/examples/data/detail"
+	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
+	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
 	datalist "github.com/jsdrews/tuilib/examples/data/list"
 	datalogview "github.com/jsdrews/tuilib/examples/data/logview"
 	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
 	datarunner "github.com/jsdrews/tuilib/examples/data/runner"
 	datatable "github.com/jsdrews/tuilib/examples/data/table"
+	datatree "github.com/jsdrews/tuilib/examples/data/tree"
 	paneshowcase "github.com/jsdrews/tuilib/examples/pane/showcase"
 	"github.com/jsdrews/tuilib/examples/themecheck"
 )
@@ -43,12 +48,17 @@ var entries = []entry{
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
 	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
+	{"Loading — spinners while fetching", "List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch.", dataloading.New},
+	{"Detail — selection triggers async fetch", "Master-detail. The cities list itself loads on Init via tea.Tick; once populated, pressing enter on a city fires another async fetch into the right pane. Stale results are dropped via reqID tagging so hammering enter never displays an out-of-order body. Press r to refetch.", datadetail.New},
+	{"Drilldown — three-level stack with focus", "Cities list + detail list with focus cycling; enter \"opens the focused selection\" on either pane — left-enter loads the detail and shifts focus right, right-enter pushes a child screen describing the attribute. Esc on the child screen pops back with the parent's state intact.", datadrilldown.New},
 	{"Runner — interactive subprocess", "Pick a command, hand the terminal to it, return on exit. Demonstrates pkg/runner with $EDITOR, less, man, htop.", datarunner.New},
 	{"Runlog — stream stdout into logview", "Pick a command on the left; its stdout/stderr stream into a logview on the right. Tab cycles focus, x kills the running process.", datarunlog.New},
+	{"Tree — searchable expand/collapse", "A synthetic project tree with cursor, expand/collapse (←→/space), search (/), and filter mode (\\) that hides non-matching subtrees.", datatree.New},
 	{"Themes — live palette picker", "Cursor re-skins the whole app; enter shows a theme's field palette.", themecheck.New},
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},
 	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
+	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
 }
 
 type rootScreen struct {

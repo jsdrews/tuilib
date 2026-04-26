@@ -28,6 +28,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/toggle"
+	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
 // Theme is a named palette. Every field is a color token consumed by one or
@@ -260,11 +261,14 @@ func (t Theme) Help() help.Options {
 }
 
 // Pane returns pane.Options with only the color tokens applied. Border shape,
-// title, title position, and slot brackets stay the caller's call.
+// title, title position, and slot brackets stay the caller's call. Includes
+// a SpinnerStyle so panes set into a loading state render the spinner in the
+// theme's accent color.
 func (t Theme) Pane() pane.Options {
 	return pane.Options{
 		ActiveColor:   t.BorderActive,
 		InactiveColor: t.BorderInactive,
+		SpinnerStyle:  lipgloss.NewStyle().Foreground(t.Accent),
 	}
 }
 
@@ -295,6 +299,7 @@ func (t Theme) List() list.Options {
 		InactiveBorder: lipgloss.NormalBorder(),
 		SlotBrackets:   pane.SlotBracketsNone,
 		SelectedColor:  t.Accent,
+		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
 	}
 }
@@ -342,6 +347,27 @@ func (t Theme) Logview() logview.Options {
 		InactiveBorder:   lipgloss.NormalBorder(),
 		SlotBrackets:     pane.SlotBracketsNone,
 		HScrollbar:       true,
+		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
+		Filter:           t.Filter(),
+	}
+}
+
+// Tree returns tree.Options pre-filled from the theme — match highlight
+// in Accent (bold + reverse), current-line background in Subtle, border
+// colors matching pane, and the embedded filter using theme.Filter().
+// Set Width, Height, Title, Root, Searchable, and InitialDepth before
+// passing to tree.New.
+func (t Theme) Tree() tree.Options {
+	return tree.Options{
+		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
+		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
+		ActiveColor:      t.BorderActive,
+		InactiveColor:    t.BorderInactive,
+		ActiveBorder:     lipgloss.NormalBorder(),
+		InactiveBorder:   lipgloss.NormalBorder(),
+		SlotBrackets:     pane.SlotBracketsNone,
+		HScrollbar:       true,
+		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 	}
 }
