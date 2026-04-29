@@ -21,6 +21,7 @@ package runner
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -37,8 +38,30 @@ type Result struct {
 	Err error
 }
 
+// Options configures RunWith. The zero value clears the screen and prints
+// no notice — the right defaults for typical interactive subprocesses.
+type Options struct {
+	// Cmd is the subprocess to run. Required.
+	Cmd *exec.Cmd
+	// Notice, when non-empty, is printed once to stderr after the TUI
+	// suspends and before the subprocess starts. Use it for slow handoffs
+	// (kubectl exec, ssh, anything with a perceptible connect latency) so
+	// the user sees feedback instead of a blank gap. The subprocess is
+	// free to clear the screen on startup; that's fine, the goal is
+	// feedback during the handoff, not a persistent banner.
+	Notice string
+	// NoClear suppresses the screen clear that normally precedes the
+	// subprocess. By default the terminal is cleared so the alt-screen
+	// exit doesn't leave TUI artifacts visible during commands that
+	// don't repaint (sh -c, echo, short scripts). Set NoClear=true to
+	// preserve whatever was on the normal screen prior to the TUI.
+	NoClear bool
+}
+
 // Run returns a tea.Cmd that suspends the program, runs cmd connected to
 // the controlling terminal, and posts a Result when the subprocess exits.
+// The screen is cleared before the subprocess starts (use RunWith with
+// NoClear=true to opt out).
 //
 // Plumbing the runner takes care of:
 //
@@ -50,6 +73,29 @@ type Result struct {
 //     post-resume SIGWINCH on some terminal emulators (htop, top, less
 //     are the usual suspects).
 func Run(cmd *exec.Cmd) tea.Cmd {
+	return RunWith(Options{Cmd: cmd})
+}
+
+// RunWithNotice is shorthand for RunWith(Options{Cmd: cmd, Notice: notice}).
+// The screen is cleared before the notice is printed.
+func RunWithNotice(cmd *exec.Cmd, notice string) tea.Cmd {
+	return RunWith(Options{Cmd: cmd, Notice: notice})
+}
+
+// RunWith runs an interactive subprocess with the given options. See Options
+// for the available knobs (notice, screen-clear).
+func RunWith(opts Options) tea.Cmd {
+	prepCmd(opts.Cmd)
+	return tea.Exec(&wrappedCmd{
+		cmd:    opts.Cmd,
+		notice: opts.Notice,
+		clear:  !opts.NoClear,
+	}, func(err error) tea.Msg {
+		return Result{Cmd: opts.Cmd, Err: err}
+	})
+}
+
+func prepCmd(cmd *exec.Cmd) {
 	if cmd.Stdin == nil {
 		cmd.Stdin = os.Stdin
 	}
@@ -63,9 +109,41 @@ func Run(cmd *exec.Cmd) tea.Cmd {
 		cmd.Env = appendOrReplaceEnv(cmd.Env, "LINES", fmt.Sprintf("%d", h))
 		cmd.Env = appendOrReplaceEnv(cmd.Env, "COLUMNS", fmt.Sprintf("%d", w))
 	}
-	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return Result{Cmd: cmd, Err: err}
-	})
+}
+
+type wrappedCmd struct {
+	cmd    *exec.Cmd
+	notice string
+	clear  bool
+}
+
+func (c *wrappedCmd) Run() error {
+	if c.clear {
+		// ESC[2J clears the screen; ESC[H homes the cursor.
+		fmt.Fprint(os.Stderr, "\x1b[2J\x1b[H")
+	}
+	if c.notice != "" {
+		fmt.Fprintln(os.Stderr, c.notice)
+	}
+	return c.cmd.Run()
+}
+
+func (c *wrappedCmd) SetStdin(r io.Reader) {
+	if c.cmd.Stdin == nil {
+		c.cmd.Stdin = r
+	}
+}
+
+func (c *wrappedCmd) SetStdout(w io.Writer) {
+	if c.cmd.Stdout == nil {
+		c.cmd.Stdout = w
+	}
+}
+
+func (c *wrappedCmd) SetStderr(w io.Writer) {
+	if c.cmd.Stderr == nil {
+		c.cmd.Stderr = w
+	}
 }
 
 func appendOrReplaceEnv(env []string, key, value string) []string {
