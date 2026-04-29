@@ -53,7 +53,7 @@ var entries = []entry{
 	{"Drilldown — three-level stack with focus", "Cities list + detail list with focus cycling; enter \"opens the focused selection\" on either pane — left-enter loads the detail and shifts focus right, right-enter pushes a child screen describing the attribute. Esc on the child screen pops back with the parent's state intact.", datadrilldown.New},
 	{"Runner — interactive subprocess", "Pick a command, hand the terminal to it, return on exit. Demonstrates pkg/runner with $EDITOR, less, man, htop. Last entry uses RunWithNotice to print \"connecting…\" during the handoff.", datarunner.New},
 	{"Runlog — stream stdout into logview", "Pick a command on the left; its stdout/stderr stream into a logview on the right. Tab cycles focus, x kills the running process.", datarunlog.New},
-	{"Tree — searchable expand/collapse", "A synthetic project tree with cursor, expand/collapse (←→/space), search (/), and filter mode (\\) that hides non-matching subtrees.", datatree.New},
+	{"Tree — searchable expand/collapse", "A synthetic project tree with cursor, expand/collapse (←→/space), search (/), and filter mode (\\) that hides non-matching subtrees. Leaves carry colored status icons (lipgloss-rendered) so the row highlight stays intact across ANSI segments.", datatree.New},
 	{"Themes — live palette picker", "Cursor re-skins the whole app; enter shows a theme's field palette.", themecheck.New},
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},

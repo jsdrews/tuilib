@@ -7,11 +7,18 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	tw "github.com/jsdrews/tuilib/pkg/tree"
+)
+
+var (
+	iconOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render("●")
+	iconWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Render("●")
+	iconErr  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("●")
 )
 
 // node is the example's data shape — a label plus children. It satisfies
@@ -36,60 +43,62 @@ func dir(label string, kids ...*node) *node {
 }
 
 // sample returns a synthetic project tree with enough depth and breadth to
-// exercise expand/collapse and search.
+// exercise expand/collapse and search. A handful of leaves carry colored
+// status icons (lipgloss-rendered ANSI in Label) so the cursor's row-level
+// background highlight can be visually verified across colored segments.
 func sample() *node {
 	return dir("tuilib",
 		dir("pkg",
 			dir("app",
-				leaf("app.go"),
-				leaf("app_test.go"),
+				leaf(iconOK+" app.go"),
+				leaf(iconOK+" app_test.go"),
 			),
 			dir("layout",
-				leaf("layout.go"),
-				leaf("layout_test.go"),
+				leaf(iconOK+" layout.go"),
+				leaf(iconOK+" layout_test.go"),
 			),
 			dir("list",
-				leaf("list.go"),
+				leaf(iconOK+" list.go"),
 			),
 			dir("logview",
-				leaf("logview.go"),
+				leaf(iconWarn+" logview.go"),
 			),
 			dir("pane",
-				leaf("pane.go"),
-				leaf("border.go"),
-				leaf("scrollbar.go"),
+				leaf(iconOK+" pane.go"),
+				leaf(iconOK+" border.go"),
+				leaf(iconErr+" scrollbar.go"),
 			),
 			dir("tree",
-				leaf("tree.go"),
+				leaf(iconOK+" tree.go"),
 			),
 			dir("theme",
-				leaf("theme.go"),
-				leaf("named.go"),
-				leaf("base16.go"),
+				leaf(iconOK+" theme.go"),
+				leaf(iconOK+" named.go"),
+				leaf(iconWarn+" base16.go"),
 			),
 		),
 		dir("examples",
 			dir("app",
-				dir("focus", leaf("focus.go")),
-				dir("layouts", leaf("layouts.go")),
-				dir("stack", leaf("stack.go")),
+				dir("focus", leaf(iconOK+" focus.go")),
+				dir("layouts", leaf(iconOK+" layouts.go")),
+				dir("stack", leaf(iconOK+" stack.go")),
 			),
 			dir("data",
-				dir("form", leaf("form.go")),
-				dir("list", leaf("list.go")),
-				dir("logview", leaf("logview.go")),
-				dir("runlog", leaf("runlog.go")),
-				dir("runner", leaf("runner.go")),
-				dir("table", leaf("table.go")),
-				dir("tree", leaf("tree.go")),
+				dir("form", leaf(iconOK+" form.go")),
+				dir("list", leaf(iconOK+" list.go")),
+				dir("logview", leaf(iconOK+" logview.go")),
+				dir("runlog", leaf(iconOK+" runlog.go")),
+				dir("runner", leaf(iconOK+" runner.go")),
+				dir("table", leaf(iconWarn+" table.go")),
+				dir("tree", leaf(iconOK+" tree.go")),
 			),
-			dir("launcher", leaf("main.go")),
+			dir("launcher", leaf(iconOK+" main.go")),
 		),
-		leaf("README.md"),
-		leaf("CLAUDE.md"),
-		leaf("Taskfile.yml"),
-		leaf("go.mod"),
-		leaf("go.sum"),
+		leaf(iconOK+" README.md"),
+		leaf(iconOK+" CLAUDE.md"),
+		leaf(iconOK+" Taskfile.yml"),
+		leaf(iconOK+" go.mod"),
+		leaf(iconOK+" go.sum"),
 	)
 }
 

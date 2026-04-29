@@ -608,37 +608,69 @@ func (m *Model) formatRow(r row, current bool) string {
 	base := m.currentLineStyle
 	matchOnRow := m.matchStyle.Inherit(base)
 	var b strings.Builder
-	b.WriteString(base.Render(indent + glyph))
+	b.WriteString(renderPreserving(base, indent+glyph))
 	b.WriteString(m.renderHighlightedSegments(label, base, matchOnRow))
 
 	inner := max(0, m.body.Width()-2-pane.ScrollbarWidth)
 	if pad := inner - lipgloss.Width(b.String()); pad > 0 {
-		b.WriteString(base.Render(strings.Repeat(" ", pad)))
+		b.WriteString(renderPreserving(base, strings.Repeat(" ", pad)))
 	}
 	return b.String()
 }
 
 func (m *Model) renderHighlightedSegments(label string, base, matchOnRow lipgloss.Style) string {
 	if m.query == "" {
-		return base.Render(label)
+		return renderPreserving(base, label)
 	}
 	spans := matchSpans(label, m.query)
 	if len(spans) == 0 {
-		return base.Render(label)
+		return renderPreserving(base, label)
 	}
 	var b strings.Builder
 	cursor := 0
 	for _, sp := range spans {
 		if sp[0] > cursor {
-			b.WriteString(base.Render(label[cursor:sp[0]]))
+			b.WriteString(renderPreserving(base, label[cursor:sp[0]]))
 		}
-		b.WriteString(matchOnRow.Render(label[sp[0]:sp[1]]))
+		b.WriteString(renderPreserving(matchOnRow, label[sp[0]:sp[1]]))
 		cursor = sp[1]
 	}
 	if cursor < len(label) {
-		b.WriteString(base.Render(label[cursor:]))
+		b.WriteString(renderPreserving(base, label[cursor:]))
 	}
 	return b.String()
+}
+
+// renderPreserving wraps text with style s, like s.Render, but re-emits
+// the open SGR after every embedded `\x1b[0m` reset inside text. This
+// keeps the outer background (or any other styling) intact when the
+// inner text includes ANSI-styled segments — e.g. a Node label that
+// returns lipgloss-colored status icons. Without this, the inner reset
+// would clobber the row-level highlight bg from the colored point on.
+func renderPreserving(s lipgloss.Style, text string) string {
+	if !strings.ContainsRune(text, '\x1b') {
+		return s.Render(text)
+	}
+	open, close := styleSGR(s)
+	if open == "" {
+		return s.Render(text)
+	}
+	fixed := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+open)
+	fixed = strings.ReplaceAll(fixed, "\x1b[m", "\x1b[m"+open)
+	return open + fixed + close
+}
+
+// styleSGR returns the open and close SGR sequences a style emits around
+// its content. Works by rendering a unique probe and slicing on either
+// side. Returns "", "" for styles that produce no SGR codes.
+func styleSGR(s lipgloss.Style) (open, close string) {
+	const probe = "\x00\x00tuilib-tree-probe\x00\x00"
+	r := s.Render(probe)
+	i := strings.Index(r, probe)
+	if i < 0 {
+		return "", ""
+	}
+	return r[:i], r[i+len(probe):]
 }
 
 func (m *Model) highlightLabel(label string) string {
