@@ -148,6 +148,28 @@ example in `examples/`.
     `theme.Logview()` enables `HScrollbar` by default since long log
     lines are common.
 
+17. **Color bubbles/table cells with `ansi.CellColor`, not lipgloss.**
+    `bubbles/table` wraps each cell in its `Selected` style via
+    `lipgloss.Render`, and lipgloss's full `\x1b[0m` reset clobbers the
+    outer background mid-cell. `ansi.CellColor(n, text)` emits a
+    foreground-only escape that closes with `\x1b[39m`, so the row's bg
+    stays intact across colored cells. CellColor picks the shortest open
+    form for the palette index (`\x1b[3Nm` for n<8, `\x1b[9Nm` for n<16,
+    `\x1b[38;5;Nm` for 16+).
+
+    Important sizing rule: `bubbles/table`'s truncation is **not**
+    ANSI-aware (upstream uses `runewidth.Truncate`, which counts the
+    escape bytes as visible width). If a cell exceeds its column width,
+    the closing reset gets chopped off and the foreground bleeds into
+    later cells. Size columns at least `visible_chars + 8` for n<16, or
+    `+ ~14` for 256-color indices. The example's Status column uses 22
+    cells for 10-char content with 8/16-color CellColor.
+
+    This caveat is bubbles/table-only — every component that owns its
+    own pane (`list`, `tree`, `logview`, …) renders ANSI-aware and you
+    can keep using lipgloss inside them. See `examples/data/table/table.go`
+    Status column.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**

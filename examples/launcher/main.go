@@ -46,7 +46,7 @@ var entries = []entry{
 	{"Panes — border + title showcase", "Four panes demonstrating border styles, title positions, and slot-bracket variants.", paneshowcase.New},
 	{"List — filterable cities", "A filterable list.Model as a single-screen app.", datalist.New},
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
-	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline.", datatable.New},
+	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline. Status column uses ansi.CellColor so the selected-row bg stays intact across colored cells.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
 	{"Loading — spinners while fetching", "List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch.", dataloading.New},
 	{"Detail — selection triggers async fetch", "Master-detail. The cities list itself loads on Init via tea.Tick; once populated, pressing enter on a city fires another async fetch into the right pane. Stale results are dropped via reqID tagging so hammering enter never displays an out-of-order body. Press r to refetch.", datadetail.New},
