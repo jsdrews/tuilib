@@ -61,7 +61,11 @@ type Options struct {
 type Model struct {
 	items   []string
 	visible []string
-	cursor  int
+	// visibleIdx maps visible[i] back to items[visibleIdx[i]]. Used by
+	// SelectedIndex so callers with parallel source data can recover the
+	// original (pre-filter) row position from a selection.
+	visibleIdx []int
+	cursor     int
 
 	filter     filter.Model
 	filterable bool
@@ -89,6 +93,7 @@ func New(opts Options) Model {
 		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
 	}
 	m.visible = m.items
+	m.visibleIdx = identityIndex(len(m.items))
 
 	bodyH := opts.Height
 	if m.filterable {
@@ -118,23 +123,36 @@ func New(opts Options) Model {
 func (m *Model) applyFilter() {
 	if !m.filterable {
 		m.visible = m.items
+		m.visibleIdx = identityIndex(len(m.items))
 		return
 	}
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
 	if q == "" {
 		m.visible = m.items
+		m.visibleIdx = identityIndex(len(m.items))
 	} else {
 		out := make([]string, 0, len(m.items))
-		for _, it := range m.items {
+		idx := make([]int, 0, len(m.items))
+		for i, it := range m.items {
 			if strings.Contains(strings.ToLower(it), q) {
 				out = append(out, it)
+				idx = append(idx, i)
 			}
 		}
 		m.visible = out
+		m.visibleIdx = idx
 	}
 	if m.cursor >= len(m.visible) {
 		m.cursor = max(0, len(m.visible)-1)
 	}
+}
+
+func identityIndex(n int) []int {
+	out := make([]int, n)
+	for i := 0; i < n; i++ {
+		out[i] = i
+	}
+	return out
 }
 
 func (m *Model) refresh() {
@@ -206,6 +224,21 @@ func (m Model) Selected() (string, bool) {
 		return "", false
 	}
 	return m.visible[m.cursor], true
+}
+
+// SelectedIndex returns the highlighted row's index into the original
+// (pre-filter) Items() slice. ok is false when the visible set is empty.
+//
+// Use this when list items are formatted display strings rendered from
+// a richer source slice — SelectedIndex identifies which source row is
+// selected, regardless of whether a filter is currently applied. For
+// the row's text, use Selected; for the cursor's position within the
+// filtered view, use Cursor.
+func (m Model) SelectedIndex() (int, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.visibleIdx) {
+		return 0, false
+	}
+	return m.visibleIdx[m.cursor], true
 }
 
 // Cursor returns the current cursor index into the visible (post-filter) set.

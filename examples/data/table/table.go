@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -19,38 +20,46 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
+// Status values use ansi.CellColor so the foreground-only \x1b[39m reset
+// keeps the selected-row background intact across colored cells.
+var (
+	statusOK    = ansi.CellColor(2, "✓ healthy")  // green
+	statusWarn  = ansi.CellColor(3, "● degraded") // yellow
+	statusError = ansi.CellColor(1, "✗ down")     // red
+)
+
 var allRows = []table.Row{
-	{"New York", "North America", "8.3M"},
-	{"San Francisco", "North America", "0.87M"},
-	{"Toronto", "North America", "2.8M"},
-	{"Vancouver", "North America", "0.67M"},
-	{"Chicago", "North America", "2.7M"},
-	{"Mexico City", "North America", "9.2M"},
-	{"London", "Europe", "8.9M"},
-	{"Berlin", "Europe", "3.7M"},
-	{"Paris", "Europe", "2.1M"},
-	{"Madrid", "Europe", "3.3M"},
-	{"Amsterdam", "Europe", "0.9M"},
-	{"Lisbon", "Europe", "0.55M"},
-	{"Prague", "Europe", "1.3M"},
-	{"Tokyo", "Asia", "13.9M"},
-	{"Singapore", "Asia", "5.7M"},
-	{"Seoul", "Asia", "9.7M"},
-	{"Mumbai", "Asia", "20.4M"},
-	{"Bangkok", "Asia", "10.7M"},
-	{"Hong Kong", "Asia", "7.5M"},
-	{"Taipei", "Asia", "2.6M"},
-	{"Sydney", "Oceania", "5.3M"},
-	{"Melbourne", "Oceania", "5.1M"},
-	{"Auckland", "Oceania", "1.7M"},
-	{"São Paulo", "South America", "12.3M"},
-	{"Buenos Aires", "South America", "3.1M"},
-	{"Lima", "South America", "10.7M"},
-	{"Bogotá", "South America", "7.9M"},
-	{"Nairobi", "Africa", "4.4M"},
-	{"Cape Town", "Africa", "4.6M"},
-	{"Lagos", "Africa", "15.4M"},
-	{"Cairo", "Africa", "9.5M"},
+	{"New York", "North America", "8.3M", statusOK},
+	{"San Francisco", "North America", "0.87M", statusOK},
+	{"Toronto", "North America", "2.8M", statusWarn},
+	{"Vancouver", "North America", "0.67M", statusOK},
+	{"Chicago", "North America", "2.7M", statusOK},
+	{"Mexico City", "North America", "9.2M", statusError},
+	{"London", "Europe", "8.9M", statusOK},
+	{"Berlin", "Europe", "3.7M", statusOK},
+	{"Paris", "Europe", "2.1M", statusWarn},
+	{"Madrid", "Europe", "3.3M", statusOK},
+	{"Amsterdam", "Europe", "0.9M", statusOK},
+	{"Lisbon", "Europe", "0.55M", statusOK},
+	{"Prague", "Europe", "1.3M", statusWarn},
+	{"Tokyo", "Asia", "13.9M", statusOK},
+	{"Singapore", "Asia", "5.7M", statusOK},
+	{"Seoul", "Asia", "9.7M", statusOK},
+	{"Mumbai", "Asia", "20.4M", statusError},
+	{"Bangkok", "Asia", "10.7M", statusWarn},
+	{"Hong Kong", "Asia", "7.5M", statusOK},
+	{"Taipei", "Asia", "2.6M", statusOK},
+	{"Sydney", "Oceania", "5.3M", statusOK},
+	{"Melbourne", "Oceania", "5.1M", statusOK},
+	{"Auckland", "Oceania", "1.7M", statusOK},
+	{"São Paulo", "South America", "12.3M", statusOK},
+	{"Buenos Aires", "South America", "3.1M", statusWarn},
+	{"Lima", "South America", "10.7M", statusOK},
+	{"Bogotá", "South America", "7.9M", statusOK},
+	{"Nairobi", "Africa", "4.4M", statusError},
+	{"Cape Town", "Africa", "4.6M", statusOK},
+	{"Lagos", "Africa", "15.4M", statusWarn},
+	{"Cairo", "Africa", "9.5M", statusOK},
 }
 
 type Screen struct {
@@ -66,6 +75,14 @@ func New(t theme.Theme) screen.Screen {
 			{Title: "City", Width: 20},
 			{Title: "Region", Width: 16},
 			{Title: "Population", Width: 12},
+			// Status column is sized generously: bubbles/table's truncation
+			// is not ANSI-aware, so colored cells need to fit comfortably.
+			// Status column needs ~visible_chars + 8 width budget when using
+			// 8/16-color CellColor (4 bytes open + 4 bytes close that
+			// bubbles/table's runewidth.Truncate counts as visible). Longest
+			// status here is "● degraded" (10 visible) → 18 minimum. We use
+			// 22 for breathing room.
+			{Title: "Status", Width: 22},
 		}),
 		table.WithRows(allRows),
 		table.WithFocused(true),

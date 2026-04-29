@@ -38,20 +38,28 @@ type Screen struct {
 type option struct {
 	label string
 	build func() *exec.Cmd
+	// notice, when non-empty, switches the dispatch to runner.RunWithNotice
+	// so the user sees a transitional line during the TUI→subprocess handoff.
+	notice string
 }
 
 var commands = []option{
-	{"$EDITOR /tmp/tuilib-scratch.txt", func() *exec.Cmd {
+	{label: "$EDITOR /tmp/tuilib-scratch.txt", build: func() *exec.Cmd {
 		ed := os.Getenv("EDITOR")
 		if ed == "" {
 			ed = "vi"
 		}
 		return exec.Command(ed, "/tmp/tuilib-scratch.txt")
 	}},
-	{"less /etc/hosts", func() *exec.Cmd { return exec.Command("less", "/etc/hosts") }},
-	{"man ls", func() *exec.Cmd { return exec.Command("man", "ls") }},
-	{"htop", func() *exec.Cmd { return exec.Command("htop") }},
-	{"sh -c 'echo hello; sleep 1'", func() *exec.Cmd { return exec.Command("sh", "-c", "echo hello; sleep 1") }},
+	{label: "less /etc/hosts", build: func() *exec.Cmd { return exec.Command("less", "/etc/hosts") }},
+	{label: "man ls", build: func() *exec.Cmd { return exec.Command("man", "ls") }},
+	{label: "htop", build: func() *exec.Cmd { return exec.Command("htop") }},
+	{label: "sh -c 'echo hello; sleep 1'", build: func() *exec.Cmd { return exec.Command("sh", "-c", "echo hello; sleep 1") }},
+	{
+		label:  "sh -c 'sleep 2; echo connected' — with notice",
+		build:  func() *exec.Cmd { return exec.Command("sh", "-c", "sleep 2; echo connected") },
+		notice: "connecting…",
+	},
 }
 
 func (s *Screen) Title() string         { return "Runner" }
@@ -69,7 +77,11 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
 		idx := s.list.Cursor()
 		if idx >= 0 && idx < len(commands) {
-			return s, tea.Batch(cmd, runner.Run(commands[idx].build()))
+			c := commands[idx]
+			if c.notice != "" {
+				return s, tea.Batch(cmd, runner.RunWithNotice(c.build(), c.notice))
+			}
+			return s, tea.Batch(cmd, runner.Run(c.build()))
 		}
 	}
 	return s, cmd
