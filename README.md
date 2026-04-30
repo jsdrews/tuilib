@@ -92,14 +92,15 @@ handles its own state in `Update`.
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
-| `pkg/list` | Cursor-driven, optionally filterable list inside a pane |
+| `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active |
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
-| `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors |
+| `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors. Labels may contain lipgloss-styled ANSI (colored status icons, etc.) — the cursor's row highlight stays intact across colored segments |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
-| `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit |
+| `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
 | `pkg/theme` | Single palette struct + per-component `Options` builders |
+| `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in `bubbles/table` cells where lipgloss's full reset would clobber the selected-row background |
 
 > **Components own their pane.** Every interactive component (`pane`,
 > `filter`, `list`, `input`, `toggle`, `logview`, `tree`) bundles a
@@ -221,18 +222,19 @@ demo uses.
 | Panes   | Border styles, title positions, and slot-bracket variants in one 2×2 grid |
 | List    | A filterable `list.Model` as a single-screen app |
 | Logview | Streaming log tail with `/`-search, n/N jump, `\` filter-mode toggle, current-line highlight |
-| Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane` |
+| Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane`; Status column uses `ansi.CellColor` so the selected-row background stays intact across colored cells |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
 | Loading | `list`, `logview`, and `tree` start in `SetLoading(true)`; staggered `tea.Tick` delays simulate fetches. Press `r` to refetch. |
 | Detail  | Master-detail with async fetches at both levels — the cities list itself loads on Init, then pressing enter on a city fetches its body into the right pane. Stale results are dropped via reqID tagging. |
 | Drilldown | Three-level navigation. Cities + detail with focus cycling; enter "opens the focused selection" — left-enter loads detail and shifts focus right, right-enter pushes a child screen for the attribute. Esc pops back with the parent's state intact. |
-| Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit |
+| Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit. Last entry uses `RunWithNotice` to print "connecting…" during the handoff |
 | Runlog  | Stream a subprocess's stdout/stderr into a `logview` pane; tab focus between picker and log, `x` to kill |
-| Tree    | Synthetic project tree with cursor, expand/collapse (←→/space), `/`-search, and `\` filter mode that hides non-matching subtrees |
+| Tree    | Synthetic project tree with cursor, expand/collapse (←→/space), `/`-search, and `\` filter mode that hides non-matching subtrees. Leaves carry colored status icons (lipgloss-rendered) so the row highlight stays intact across ANSI segments |
 | Themes  | Live palette picker — cursor re-skins the whole app via `app.SetTheme` |
 | Layouts | Five sub-screens, each with a different `layout.Node` tree |
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |
 | Focus   | Multi-component focus cycling — tab/shift-tab between input + list + toggle, with `Help()` updating per focused component |
+| Gate    | A root screen that pushes a login form on first OnEnter; submit pops back with creds, `L` re-pushes for logout |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes
