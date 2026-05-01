@@ -95,6 +95,7 @@ handles its own state in `Update`.
 | `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active |
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
+| `pkg/confirm` | Modal yes/no dialog with title + message + confirm/cancel buttons; resolves via `ConfirmedMsg` / `CancelledMsg` so parent screens stay bubbletea-idiomatic. Designed for `layout.ZStack(base, layout.Center(w, h, ...))` |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
 | `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors. Labels may contain lipgloss-styled ANSI (colored status icons, etc.) — the cursor's row highlight stays intact across colored segments |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
@@ -291,6 +292,7 @@ demo uses.
 | Gate    | A root screen that pushes a login form on first OnEnter; submit pops back with creds, `L` re-pushes for logout |
 | Tabs    | Three sub-screens (filterable list / streaming logview / counter) behind one tab strip; switch via shift+arrows or 1/2/3. Each body keeps its own state across switches; the logview keeps streaming while you're on another tab |
 | Status  | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s; the shell mirrors the result into the statusbar's center slot. Auto-clears on the next keypress |
+| Confirm | A `pkg/confirm` modal overlaid on a list via `ZStack` + `Center`. Press `d` on a file to bring up the dialog; on confirm the file is removed and the outcome is reported via `app.Info`. Demonstrates the message-driven result flow |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes

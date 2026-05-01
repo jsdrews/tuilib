@@ -24,6 +24,7 @@ import (
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
 	apptabs "github.com/jsdrews/tuilib/examples/app/tabs"
+	dataconfirm "github.com/jsdrews/tuilib/examples/data/confirm"
 	datadetail "github.com/jsdrews/tuilib/examples/data/detail"
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
@@ -63,6 +64,7 @@ var entries = []entry{
 	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
+	{"Confirm — modal yes/no dialog", "Press d on a file to bring up a confirm modal via pkg/confirm; ConfirmedMsg/CancelledMsg flow back as tea.Msg, the parent dismisses and reports the outcome via app.Info.", dataconfirm.New},
 }
 
 type rootScreen struct {

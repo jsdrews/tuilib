@@ -209,6 +209,22 @@ example in `examples/`.
     streaming. See `examples/app/tabs`, where the Logs tab keeps appending
     lines while you're on the Cities or Counter tab.
 
+20. **For yes/no modals, use `pkg/confirm`.** A `confirm.Model` renders a
+    bordered titled pane with two buttons and resolves via
+    `confirm.ConfirmedMsg` / `confirm.CancelledMsg` posted as `tea.Cmd`s.
+    The parent screen owns show/hide state, gates `IsCapturingKeys()`
+    while the modal is up, and matches the result messages in its own
+    `Update` to dismiss + act. The modal sits in a `ZStack` overlay on
+    top of the base layout via `layout.Center(w, h, layout.Sized(&m))`.
+    Default `Initial` is `false` (the cancel side starts highlighted),
+    which matches the safer choice for destructive actions. While the
+    modal is up, forward every `tea.Msg` to it; while down, don't.
+    Compose the modal's `Help()` into the host's `Help()` only while
+    the modal is up so the hint strip reflects the active context.
+    Don't roll your own ZStack + toggle + key-routing — it re-implements
+    what `pkg/confirm` already gets right (selection movement, y/n/esc
+    shortcuts, theme-aware styling).
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -239,6 +255,11 @@ example in `examples/`.
   and wrapping it is passthrough bloat. For a filterable table, compose
   `bubbles/table` + `filter.Model` + `pane.Pane` directly. See
   `examples/data/table/main.go`.
+- **Don't roll your own confirm modal.** `pkg/confirm` already handles
+  selection movement, y/n/esc shortcuts, message-driven results, and
+  theme-aware styling. Hand-rolling a `pane.Pane` + `toggle.Model` +
+  ZStack tree skips theme swap robustness and the typed result messages
+  the rest of the codebase expects.
 - **Don't roll your own log viewer.** Use `pkg/logview` for any append-
   mostly text stream that needs search / jump / filter / auto-follow.
   Wrapping `viewport.Model` directly skips the search highlight, current-
@@ -351,6 +372,10 @@ path.
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
   `tea.KeyMsg`. See `examples/app/status` and rule 18.
+- **Confirm modal:** `pkg/confirm` is a yes/no dialog meant to live in a
+  ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
+  as `tea.Cmd`s the parent matches in its own `Update`. See
+  `examples/data/confirm` and rule 20.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.
