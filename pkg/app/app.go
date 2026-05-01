@@ -59,6 +59,36 @@ func SetTheme(name string) tea.Cmd {
 	return func() tea.Msg { return SetThemeMsg{Name: name} }
 }
 
+// StatusInfoMsg asks the app to show s as an info message in the statusbar's
+// center slot. The message auto-clears on the next KeyMsg (matching the
+// statusbar's own Update behavior). Emit via Info(s) from any screen.
+type StatusInfoMsg struct{ Text string }
+
+// StatusErrorMsg asks the app to show s as an error message in the
+// statusbar's center slot. Same auto-clear semantics as StatusInfoMsg. Emit
+// via Error(s) from any screen.
+type StatusErrorMsg struct{ Text string }
+
+// StatusClearMsg asks the app to clear any active statusbar message
+// immediately. Useful for screens that want to wipe a stale message on a
+// non-key event (e.g. a fetch result that resolves cleanly).
+type StatusClearMsg struct{}
+
+// Info returns a command that posts an info message to the statusbar.
+func Info(s string) tea.Cmd {
+	return func() tea.Msg { return StatusInfoMsg{Text: s} }
+}
+
+// Error returns a command that posts an error message to the statusbar.
+func Error(s string) tea.Cmd {
+	return func() tea.Msg { return StatusErrorMsg{Text: s} }
+}
+
+// ClearStatus returns a command that clears any active statusbar message.
+func ClearStatus() tea.Cmd {
+	return func() tea.Msg { return StatusClearMsg{} }
+}
+
 // Model is the app shell. Instantiate with New and pass to tea.NewProgram.
 type Model struct {
 	w, h int
@@ -116,7 +146,9 @@ func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
 
 // apply rebuilds breadcrumb + statusbar from the current theme and stack.
 // Called on init, resize, theme swap, and any stack mutation so the
-// breadcrumb and help hints stay in sync.
+// breadcrumb and help hints stay in sync. Any in-flight info/error message
+// on the statusbar is captured before the rebuild and re-applied after, so
+// stack updates don't wipe a screen-emitted status message.
 func (m *Model) apply() {
 	t := m.theme()
 
@@ -130,15 +162,27 @@ func (m *Model) apply() {
 		h.SetBindings(cur.Help())
 	}
 
+	prevMsg, prevKind := m.sb.Message()
 	sbOpts := t.Statusbar(h.ShortView(), m.version)
 	sbOpts.Width = m.w
 	m.sb = statusbar.New(sbOpts)
+	switch prevKind {
+	case statusbar.MessageInfo:
+		m.sb.SetInfo(prevMsg)
+	case statusbar.MessageError:
+		m.sb.SetError(prevMsg)
+	}
 }
 
 // Update handles resize, global keys, and forwards everything else to the
 // stack. Global keys are suppressed when the active screen reports
 // IsCapturingKeys so text input isn't hijacked.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Forward to the statusbar so its KeyMsg auto-clear runs before any
+	// status message a screen emits in response to the same key. Returns
+	// nil cmd; only the KeyMsg branch mutates state.
+	m.sb, _ = m.sb.Update(msg)
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
@@ -154,6 +198,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		return m, nil
+
+	case StatusInfoMsg:
+		m.sb.SetInfo(msg.Text)
+		return m, nil
+
+	case StatusErrorMsg:
+		m.sb.SetError(msg.Text)
+		return m, nil
+
+	case StatusClearMsg:
+		m.sb.ClearMessage()
 		return m, nil
 
 	case tea.KeyMsg:

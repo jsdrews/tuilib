@@ -170,7 +170,22 @@ example in `examples/`.
     can keep using lipgloss inside them. See `examples/data/table/table.go`
     Status column.
 
-18. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
+18. **Send transient feedback through `app.Info` / `app.Error` /
+    `app.ClearStatus`.** Screens don't touch the statusbar directly — they
+    return one of these `tea.Cmd`s from `Update` and the shell paints the
+    bar's center slot. Use `Info` for successful operations ("Run
+    completed", "Deployment triggered"), `Error` for surfaced failures
+    ("Error: API request failed"), `ClearStatus` to wipe a stale message
+    on a non-key event. Messages auto-clear on the next `tea.KeyMsg`, so
+    don't try to manage their lifetime — set the message in response to
+    the action that produced it and let the next keypress retire it. The
+    auto-clear runs *before* the screen handles the key, so a screen can
+    set a fresh message in response to the same key without it being
+    immediately wiped. Don't read or mutate `m.sb` directly from outside
+    `pkg/app`; the shell rebuilds the statusbar on every update and only
+    preserves message state through `Message()` round-trips.
+
+19. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
     `screen.Screen` bodies behind a one-row strip and lives entirely inside
     one host screen — it never touches the screen stack. The host forwards
     `Update` / `OnEnter` / `IsCapturingKeys` / `SetTheme` / `Help` to
@@ -332,6 +347,10 @@ path.
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
   (not `pkg/theme`) when they grow their own user-tunable defaults.
+- **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
+  `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
+  paints into the statusbar's center slot. Auto-clears on the next
+  `tea.KeyMsg`. See `examples/app/status` and rule 18.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

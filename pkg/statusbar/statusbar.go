@@ -153,3 +153,8 @@ func (m *Model) ClearMessage() {
 
 // MessageKind reports the current state of the center slot.
 func (m Model) MessageKind() MessageKind { return m.middleKind }
+
+// Message returns the current center-slot text and its kind. Useful when
+// rebuilding the bar (e.g. on theme swap) and you want to carry an
+// in-flight info/error message across the rebuild.
+func (m Model) Message() (string, MessageKind) { return m.middle, m.middleKind }

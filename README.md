@@ -193,6 +193,23 @@ arguments it needs (`screen.Push(newCityDetail(city))`). No special method.
 `IsCapturingKeys()` tells the shell when a screen owns input (e.g. filter
 is focused) so global keys like `q`, `t`, and esc-pop are suppressed.
 
+**Statusbar messages.** Screens push transient feedback into the
+statusbar's center slot via `tea.Cmd`s the shell intercepts:
+
+```go
+// inside Update, after a successful run:
+return s, app.Info("Run completed successfully.")
+// or, on failure:
+return s, app.Error("Error: API request failed — connection refused.")
+// to wipe an existing message without setting a new one:
+return s, app.ClearStatus()
+```
+
+The shell mirrors the message into the bar with the appropriate style
+(green for info, red for error). Messages auto-clear on the next keypress —
+the same behavior as pug's footer — so you don't have to manage their
+lifetime. See `examples/app/status` for the full pattern.
+
 ## Theming
 
 `theme.Theme` is a single struct of semantic color tokens (`BarBG`, `KeyFG`,
@@ -273,6 +290,7 @@ demo uses.
 | Focus   | Multi-component focus cycling — tab/shift-tab between input + list + toggle, with `Help()` updating per focused component |
 | Gate    | A root screen that pushes a login form on first OnEnter; submit pops back with creds, `L` re-pushes for logout |
 | Tabs    | Three sub-screens (filterable list / streaming logview / counter) behind one tab strip; switch via shift+arrows or 1/2/3. Each body keeps its own state across switches; the logview keeps streaming while you're on another tab |
+| Status  | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s; the shell mirrors the result into the statusbar's center slot. Auto-clears on the next keypress |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes
