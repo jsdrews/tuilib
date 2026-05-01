@@ -22,6 +22,7 @@ import (
 	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
+	apptabs "github.com/jsdrews/tuilib/examples/app/tabs"
 	datadetail "github.com/jsdrews/tuilib/examples/data/detail"
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
@@ -59,6 +60,7 @@ var entries = []entry{
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},
 	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
 	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
+	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 }
 
 type rootScreen struct {
@@ -154,7 +156,7 @@ func entryNames() []string {
 func main() {
 	m := app.New(app.Options{
 		Root:     newRoot(),
-		Themes:   themecheck.Themes(),
+		Themes:   theme.Resolve(themecheck.Themes(), "TUILIB_THEME"),
 		Version:  "examples",
 		ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	})
