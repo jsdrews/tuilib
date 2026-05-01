@@ -170,6 +170,30 @@ example in `examples/`.
     can keep using lipgloss inside them. See `examples/data/table/table.go`
     Status column.
 
+18. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
+    `screen.Screen` bodies behind a one-row strip and lives entirely inside
+    one host screen — it never touches the screen stack. The host forwards
+    `Update` / `OnEnter` / `IsCapturingKeys` / `SetTheme` / `Help` to
+    `tabs`, and surfaces the active tab in its breadcrumb via
+    `Title() { return "Host › " + s.tabs.ActiveLabel() }`. Hold pointers to
+    each body on the host (not just inside `tab.Model`) so theme rebuilds
+    can reuse them and preserve cursors / queries / counters. Tab-switch
+    keys default to `shift+left` / `shift+right` + `1`–`9`; do **not**
+    rebind to `tab` / `shift+tab` — those are reserved across the library
+    for inner pane focus cycling. If a tab body pushes a child screen via
+    `screen.Push`, the cmd bubbles up through the host into the app stack
+    and the host (with its tab pane intact) is preserved underneath. When
+    that child later pops with a value, the host's `OnEnter(result)` should
+    forward to `tabs.OnEnterActive(result)` so the body that initiated the
+    push receives it (rather than a sibling tab).
+
+    Message routing inside `tab.Model`: `tea.KeyMsg` goes to the active body
+    only (otherwise `/` filters, `j/k` cursors, etc. race across hidden
+    tabs); everything else (timers, async fetch results, custom messages)
+    fans out to every body so a `tea.Tick` re-arm in an inactive tab keeps
+    streaming. See `examples/app/tabs`, where the Logs tab keeps appending
+    lines while you're on the Cities or Counter tab.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -298,6 +322,16 @@ path.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.
 - **Color vocabulary:** `pkg/theme/theme.go` — field comments on the
   `Theme` struct name every semantic slot.
+- **User-default theme:** `theme.Resolve(themes, envVar)` picks the
+  initial theme from (1) `$envVar`, (2) `~/.config/tuilib/config.yaml`'s
+  `theme:` field, (3) `themes[0]`. Returns `themes` reordered so the pick
+  is first — pass straight to `app.Options.Themes`. Config is opt-in: the
+  library never writes the file. Unknown names fall through silently;
+  malformed YAML surfaces only via `config.Load` directly.
+- **User config in general:** `pkg/config` owns the YAML file shape
+  (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
+  as fields on `Config`. Other packages should import `pkg/config`
+  (not `pkg/theme`) when they grow their own user-tunable defaults.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

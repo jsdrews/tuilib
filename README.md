@@ -98,8 +98,10 @@ handles its own state in `Update`.
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
 | `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors. Labels may contain lipgloss-styled ANSI (colored status icons, etc.) — the cursor's row highlight stays intact across colored segments |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
+| `pkg/tab` | Tabbed container hosting multiple `screen.Screen` bodies behind a one-row strip. Each body keeps its own state across switches; `shift+left`/`shift+right` and `1`–`9` switch tabs (`tab`/`shift+tab` is left alone for inner pane focus cycling). Host screen forwards `Update`/`OnEnter`/`IsCapturingKeys`/`SetTheme`/`Help` to `tabs` |
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
-| `pkg/theme` | Single palette struct + per-component `Options` builders |
+| `pkg/theme` | Single palette struct + per-component `Options` builders. `theme.Resolve(themes, envVar)` picks an initial theme from env/config |
+| `pkg/config` | YAML user-config at `~/.config/tuilib/config.yaml`. Pure data + I/O; opt-in (library never writes). Today carries `Theme`; expands as components grow user-tunable knobs |
 | `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in `bubbles/table` cells where lipgloss's full reset would clobber the selected-row background |
 
 > **Components own their pane.** Every interactive component (`pane`,
@@ -210,6 +212,41 @@ li := list.New(th.List())
 sb := statusbar.New(th.Statusbar(helpModel.ShortView(), "v0.1.0"))
 ```
 
+### Default theme via env / config
+
+`theme.Resolve(themes, envVar)` picks an initial theme by checking, in
+order, the named environment variable, the `theme:` field in
+`$XDG_CONFIG_HOME/tuilib/config.yaml` (falls back to
+`~/.config/tuilib/config.yaml`, via `pkg/config`), and `themes[0]`.
+Returns `themes` reordered so the chosen theme is first — drop it straight
+into `app.Options.Themes`:
+
+```go
+m := app.New(app.Options{
+    Root:   newRoot(),
+    Themes: theme.Resolve(theme.All(), "MY_APP_THEME"),
+    // ...
+})
+```
+
+User-side, `~/.config/tuilib/config.yaml`:
+
+```yaml
+theme: dracula
+```
+
+The library never writes the file and never creates the directory — config
+is opt-in. A missing file is the steady state. Unknown theme names fall
+through silently (typo `dracla` just leaves `themes[0]` as the default);
+malformed YAML surfaces as an error if you call `config.Load` directly.
+Pass `envVar = ""` to skip env-var resolution and rely on the config file
+alone.
+
+The shared file lives in `pkg/config` — as other components grow
+user-tunable knobs (logview defaults, key remaps, custom palettes) their
+fields will land on `config.Config` and any package can consult the same
+file without going through `pkg/theme`.
+
 ## Examples
 
 Run `task examples` to open a launcher with a menu of demos. Select one
@@ -235,6 +272,7 @@ demo uses.
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |
 | Focus   | Multi-component focus cycling — tab/shift-tab between input + list + toggle, with `Help()` updating per focused component |
 | Gate    | A root screen that pushes a login form on first OnEnter; submit pops back with creds, `L` re-pushes for logout |
+| Tabs    | Three sub-screens (filterable list / streaming logview / counter) behind one tab strip; switch via shift+arrows or 1/2/3. Each body keeps its own state across switches; the logview keeps streaming while you're on another tab |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes
