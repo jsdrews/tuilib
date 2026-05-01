@@ -170,6 +170,61 @@ example in `examples/`.
     can keep using lipgloss inside them. See `examples/data/table/table.go`
     Status column.
 
+18. **Send transient feedback through `app.Info` / `app.Error` /
+    `app.ClearStatus`.** Screens don't touch the statusbar directly — they
+    return one of these `tea.Cmd`s from `Update` and the shell paints the
+    bar's center slot. Use `Info` for successful operations ("Run
+    completed", "Deployment triggered"), `Error` for surfaced failures
+    ("Error: API request failed"), `ClearStatus` to wipe a stale message
+    on a non-key event. Messages auto-clear on the next `tea.KeyMsg`, so
+    don't try to manage their lifetime — set the message in response to
+    the action that produced it and let the next keypress retire it. The
+    auto-clear runs *before* the screen handles the key, so a screen can
+    set a fresh message in response to the same key without it being
+    immediately wiped. Don't read or mutate `m.sb` directly from outside
+    `pkg/app`; the shell rebuilds the statusbar on every update and only
+    preserves message state through `Message()` round-trips.
+
+19. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
+    `screen.Screen` bodies behind a one-row strip and lives entirely inside
+    one host screen — it never touches the screen stack. The host forwards
+    `Update` / `OnEnter` / `IsCapturingKeys` / `SetTheme` / `Help` to
+    `tabs`, and surfaces the active tab in its breadcrumb via
+    `Title() { return "Host › " + s.tabs.ActiveLabel() }`. Hold pointers to
+    each body on the host (not just inside `tab.Model`) so theme rebuilds
+    can reuse them and preserve cursors / queries / counters. Tab-switch
+    keys default to `shift+left` / `shift+right` + `1`–`9`; do **not**
+    rebind to `tab` / `shift+tab` — those are reserved across the library
+    for inner pane focus cycling. If a tab body pushes a child screen via
+    `screen.Push`, the cmd bubbles up through the host into the app stack
+    and the host (with its tab pane intact) is preserved underneath. When
+    that child later pops with a value, the host's `OnEnter(result)` should
+    forward to `tabs.OnEnterActive(result)` so the body that initiated the
+    push receives it (rather than a sibling tab).
+
+    Message routing inside `tab.Model`: `tea.KeyMsg` goes to the active body
+    only (otherwise `/` filters, `j/k` cursors, etc. race across hidden
+    tabs); everything else (timers, async fetch results, custom messages)
+    fans out to every body so a `tea.Tick` re-arm in an inactive tab keeps
+    streaming. See `examples/app/tabs`, where the Logs tab keeps appending
+    lines while you're on the Cities or Counter tab.
+
+20. **For yes/no modals, use `pkg/confirm`.** A `confirm.Model` renders a
+    bordered titled pane with two buttons and resolves via
+    `confirm.ConfirmedMsg` / `confirm.CancelledMsg` posted as `tea.Cmd`s.
+    The parent screen owns show/hide state, gates `IsCapturingKeys()`
+    while the modal is up, and matches the result messages in its own
+    `Update` to dismiss + act. The modal sits in a `ZStack` overlay on
+    top of the base layout via `layout.Center(w, h, layout.Sized(&m))`.
+    Default `Initial` is `false` (the cancel side starts highlighted),
+    which matches the safer choice for destructive actions. While the
+    modal is up, forward every `tea.Msg` to it; while down, don't.
+    Compose the modal's `Help()` into the host's `Help()` only while
+    the modal is up so the hint strip reflects the active context.
+    Don't roll your own ZStack + toggle + key-routing — it re-implements
+    what `pkg/confirm` already gets right (selection movement, y/n/esc
+    shortcuts, theme-aware styling).
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -200,6 +255,11 @@ example in `examples/`.
   and wrapping it is passthrough bloat. For a filterable table, compose
   `bubbles/table` + `filter.Model` + `pane.Pane` directly. See
   `examples/data/table/main.go`.
+- **Don't roll your own confirm modal.** `pkg/confirm` already handles
+  selection movement, y/n/esc shortcuts, message-driven results, and
+  theme-aware styling. Hand-rolling a `pane.Pane` + `toggle.Model` +
+  ZStack tree skips theme swap robustness and the typed result messages
+  the rest of the codebase expects.
 - **Don't roll your own log viewer.** Use `pkg/logview` for any append-
   mostly text stream that needs search / jump / filter / auto-follow.
   Wrapping `viewport.Model` directly skips the search highlight, current-
@@ -298,6 +358,24 @@ path.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.
 - **Color vocabulary:** `pkg/theme/theme.go` — field comments on the
   `Theme` struct name every semantic slot.
+- **User-default theme:** `theme.Resolve(themes, envVar)` picks the
+  initial theme from (1) `$envVar`, (2) `~/.config/tuilib/config.yaml`'s
+  `theme:` field, (3) `themes[0]`. Returns `themes` reordered so the pick
+  is first — pass straight to `app.Options.Themes`. Config is opt-in: the
+  library never writes the file. Unknown names fall through silently;
+  malformed YAML surfaces only via `config.Load` directly.
+- **User config in general:** `pkg/config` owns the YAML file shape
+  (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
+  as fields on `Config`. Other packages should import `pkg/config`
+  (not `pkg/theme`) when they grow their own user-tunable defaults.
+- **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
+  `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
+  paints into the statusbar's center slot. Auto-clears on the next
+  `tea.KeyMsg`. See `examples/app/status` and rule 18.
+- **Confirm modal:** `pkg/confirm` is a yes/no dialog meant to live in a
+  ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
+  as `tea.Cmd`s the parent matches in its own `Update`. See
+  `examples/data/confirm` and rule 20.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

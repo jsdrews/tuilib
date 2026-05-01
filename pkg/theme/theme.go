@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
+	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/help"
@@ -326,6 +327,21 @@ func (t Theme) Toggle() toggle.Options {
 	return toggle.Options{
 		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
+		ActiveColor:     t.BorderActive,
+		InactiveColor:   t.BorderInactive,
+		SlotBrackets:    pane.SlotBracketsNone,
+	}
+}
+
+// Confirm returns confirm.Options pre-filled from the theme — selected
+// button in Accent (bold), unselected in Muted, message body in BarFG,
+// border colors matching pane. Set Width, Height, Title, Message,
+// Confirm/Cancel labels, and Initial as needed.
+func (t Theme) Confirm() confirm.Options {
+	return confirm.Options{
+		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
+		MessageStyle:    lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
 		SlotBrackets:    pane.SlotBracketsNone,
