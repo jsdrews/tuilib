@@ -376,6 +376,18 @@ path.
   ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
   as `tea.Cmd`s the parent matches in its own `Update`. See
   `examples/data/confirm` and rule 20.
+- **Atomic screen swap:** `screen.Replace(s)` swaps the active top of the
+  stack in one tick. Use it for "fresh instance of this view" (reset
+  filter, reset scroll, refetch from scratch) — pop+push flickers and
+  fires `OnEnter` on the parent below, which is wrong for a self-refresh.
+  Pass the new screen with its theme already applied, same as Push.
+- **List nav keys:** `pkg/list` handles `↑↓`/`j`/`k` per row, `g`/`G` for
+  jump-to-top/bottom, and `ctrl+u`/`ctrl+d` for half-page jumps. Half-page
+  is half the pane's `VisibleRows()` (floor 1) so it always moves at least
+  one row even on tiny panes. The keys are gated on `Filtering()`, so
+  typing `G` into the filter doesn't trigger the jump. Long rows scroll
+  horizontally with `←→` / `h` / `l` when `HScrollbar` is enabled (default
+  via `theme.List()`).
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

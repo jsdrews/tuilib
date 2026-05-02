@@ -343,6 +343,12 @@ func (p Pane) Width() int { return p.width }
 // Height returns the Pane's outer height.
 func (p Pane) Height() int { return p.height }
 
+// VisibleRows returns the inner viewport height — the number of content
+// rows the pane can display at once, after subtracting borders and the
+// horizontal scrollbar (when enabled). Useful for components that need to
+// move a cursor by a window-relative amount (e.g. half-page jumps).
+func (p Pane) VisibleRows() int { return p.viewport.Height }
+
 // Focused reports whether the pane is drawn in its active style.
 func (p Pane) Focused() bool { return p.focused }
 

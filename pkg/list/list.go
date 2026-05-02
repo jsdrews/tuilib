@@ -82,11 +82,15 @@ type Model struct {
 }
 
 var keys = struct {
-	Up, Down, Filter key.Binding
+	Up, Down, Top, Bottom, HalfUp, HalfDown, Filter key.Binding
 }{
-	Up:     key.NewBinding(key.WithKeys("up", "k")),
-	Down:   key.NewBinding(key.WithKeys("down", "j")),
-	Filter: key.NewBinding(key.WithKeys("/")),
+	Up:       key.NewBinding(key.WithKeys("up", "k")),
+	Down:     key.NewBinding(key.WithKeys("down", "j")),
+	Top:      key.NewBinding(key.WithKeys("g")),
+	Bottom:   key.NewBinding(key.WithKeys("G")),
+	HalfUp:   key.NewBinding(key.WithKeys("ctrl+u")),
+	HalfDown: key.NewBinding(key.WithKeys("ctrl+d")),
+	Filter:   key.NewBinding(key.WithKeys("/")),
 }
 
 // New constructs a list. Call Update/View from the parent model.
@@ -164,6 +168,15 @@ func identityIndex(n int) []int {
 	return out
 }
 
+// halfPage is the cursor step for ctrl+u/ctrl+d — half the viewport,
+// floor 1 so it always moves at least one row even on tiny panes.
+func (m Model) halfPage() int {
+	if n := m.body.VisibleRows() / 2; n > 0 {
+		return n
+	}
+	return 1
+}
+
 func (m *Model) refresh() {
 	var b strings.Builder
 	for i, it := range m.visible {
@@ -212,6 +225,26 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case key.Matches(km, keys.Down):
 		if m.cursor < len(m.visible)-1 {
 			m.cursor++
+			m.refresh()
+		}
+	case key.Matches(km, keys.Top):
+		if m.cursor != 0 && len(m.visible) > 0 {
+			m.cursor = 0
+			m.refresh()
+		}
+	case key.Matches(km, keys.Bottom):
+		if last := len(m.visible) - 1; last >= 0 && m.cursor != last {
+			m.cursor = last
+			m.refresh()
+		}
+	case key.Matches(km, keys.HalfUp):
+		if m.cursor > 0 {
+			m.cursor = max(0, m.cursor-m.halfPage())
+			m.refresh()
+		}
+	case key.Matches(km, keys.HalfDown):
+		if last := len(m.visible) - 1; last >= 0 && m.cursor < last {
+			m.cursor = min(last, m.cursor+m.halfPage())
 			m.refresh()
 		}
 	default:
@@ -276,6 +309,8 @@ func (m Model) Help() []key.Binding {
 	}
 	out := []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+		key.NewBinding(key.WithKeys("ctrl+u", "ctrl+d"), key.WithHelp("^u/^d", "½ page")),
+		key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "top/bot")),
 	}
 	if m.hScrollbar {
 		out = append(out, key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")))

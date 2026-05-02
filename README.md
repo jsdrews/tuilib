@@ -92,7 +92,7 @@ handles its own state in `Update`.
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
-| `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active |
+| `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active. Vim-style nav: `g`/`G` top/bottom, `ctrl+u`/`ctrl+d` half-page, plus `↑↓` per row |
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/confirm` | Modal yes/no dialog with title + message + confirm/cancel buttons; resolves via `ConfirmedMsg` / `CancelledMsg` so parent screens stay bubbletea-idiomatic. Designed for `layout.ZStack(base, layout.Center(w, h, ...))` |
@@ -191,6 +191,19 @@ func (s *cityDetail) OnEnter(result any) tea.Cmd {
 Parent → child flows the other way: construct the child with whatever
 arguments it needs (`screen.Push(newCityDetail(city))`). No special method.
 
+**Atomic replace.** When you want a fresh instance of the current view
+(reset filter, reset scroll, refetch from scratch) without disturbing the
+parent below, use `screen.Replace(s)`:
+
+```go
+return s, screen.Replace(newCityDetail(s.city, s.t))
+```
+
+Replace swaps the top of the stack in one tick — no pop+push flicker, and
+the parent's `OnEnter` doesn't fire spuriously. Pass the new screen with
+its theme already applied (`s.t` in the example), same convention as Push.
+See `examples/app/replace`.
+
 `IsCapturingKeys()` tells the shell when a screen owns input (e.g. filter
 is focused) so global keys like `q`, `t`, and esc-pop are suppressed.
 
@@ -280,8 +293,7 @@ demo uses.
 | Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane`; Status column uses `ansi.CellColor` so the selected-row background stays intact across colored cells |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
 | Loading | `list`, `logview`, and `tree` start in `SetLoading(true)`; staggered `tea.Tick` delays simulate fetches. Press `r` to refetch. |
-| Detail  | Master-detail with async fetches at both levels — the cities list itself loads on Init, then pressing enter on a city fetches its body into the right pane. Stale results are dropped via reqID tagging. |
-| Drilldown | Three-level navigation. Cities + detail with focus cycling; enter "opens the focused selection" — left-enter loads detail and shifts focus right, right-enter pushes a child screen for the attribute. Esc pops back with the parent's state intact. |
+| Drilldown | Master-detail with async fetches at both levels, plus a third level via push. Cities list loads on Init; enter on a city fetches its attributes into the right pane (reqID-tagged so stale results are dropped); enter on a focused attribute pushes a child screen. Esc pops back with parent state intact. |
 | Runner  | Pick a command, hand the terminal to it (`$EDITOR`, less, man, htop), return on exit. Last entry uses `RunWithNotice` to print "connecting…" during the handoff |
 | Runlog  | Stream a subprocess's stdout/stderr into a `logview` pane; tab focus between picker and log, `x` to kill |
 | Tree    | Synthetic project tree with cursor, expand/collapse (←→/space), `/`-search, and `\` filter mode that hides non-matching subtrees. Leaves carry colored status icons (lipgloss-rendered) so the row highlight stays intact across ANSI segments |
