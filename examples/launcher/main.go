@@ -85,17 +85,16 @@ func (s *rootScreen) OnEnter(any) tea.Cmd    { return nil }
 func (s *rootScreen) IsCapturingKeys() bool  { return s.menu.Filtering() }
 
 func (s *rootScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	prev := s.menu.Cursor()
+	prevIdx, prevOK := s.menu.SelectedIndex()
 	var cmd tea.Cmd
 	s.menu, cmd = s.menu.Update(msg)
 
-	if s.menu.Cursor() != prev {
+	if curIdx, curOK := s.menu.SelectedIndex(); curIdx != prevIdx || curOK != prevOK {
 		s.rebuildInfo()
 	}
 
 	if k, ok := msg.(tea.KeyMsg); ok && !s.menu.Filtering() && k.String() == "enter" {
-		idx := s.menu.Cursor()
-		if idx >= 0 && idx < len(entries) {
+		if idx, ok := s.menu.SelectedIndex(); ok && idx >= 0 && idx < len(entries) {
 			return s, tea.Batch(cmd, screen.Push(entries[idx].build(s.t)))
 		}
 	}
@@ -140,8 +139,8 @@ func (s *rootScreen) SetTheme(t theme.Theme) {
 func (s *rootScreen) rebuildInfo() {
 	s.info = pane.New(s.t.Pane())
 	s.info.SetTitle("about")
-	idx := s.menu.Cursor()
-	if idx < 0 || idx >= len(entries) {
+	idx, ok := s.menu.SelectedIndex()
+	if !ok || idx < 0 || idx >= len(entries) {
 		s.info.SetContent("Pick an example on the left and press enter.")
 		return
 	}

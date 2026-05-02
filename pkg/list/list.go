@@ -42,6 +42,12 @@ type Options struct {
 	InactiveBorder lipgloss.Border
 	SlotBrackets   pane.SlotBracketStyle
 
+	// HScrollbar reserves a row at the bottom of the list pane for a
+	// horizontal scrollbar and lets ←/h and →/l scroll long rows
+	// horizontally. theme.List() enables this by default — disable when
+	// items are guaranteed short and the extra row is unwanted.
+	HScrollbar bool
+
 	// SelectedColor foregrounds the highlighted row (bold).
 	SelectedColor lipgloss.TerminalColor
 
@@ -72,6 +78,7 @@ type Model struct {
 
 	body          pane.Pane
 	selectedStyle lipgloss.Style
+	hScrollbar    bool
 }
 
 var keys = struct {
@@ -91,6 +98,7 @@ func New(opts Options) Model {
 		items:         append([]string(nil), opts.Items...),
 		filterable:    opts.Filterable,
 		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
+		hScrollbar:    opts.HScrollbar,
 	}
 	m.visible = m.items
 	m.visibleIdx = identityIndex(len(m.items))
@@ -113,6 +121,7 @@ func New(opts Options) Model {
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
 		SlotBrackets:   opts.SlotBrackets,
+		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
 	})
@@ -205,6 +214,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cursor++
 			m.refresh()
 		}
+	default:
+		var cmd tea.Cmd
+		m.body, cmd = m.body.Update(msg)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -263,6 +276,9 @@ func (m Model) Help() []key.Binding {
 	}
 	out := []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+	}
+	if m.hScrollbar {
+		out = append(out, key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")))
 	}
 	if m.filterable {
 		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")))
