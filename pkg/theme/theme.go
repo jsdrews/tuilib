@@ -290,8 +290,10 @@ func (t Theme) Filter() filter.Options {
 }
 
 // List returns list.Options pre-filled from the theme, including nested
-// Filter options (used only if Filterable=true). Set Width, Height, Title,
-// Items, Filterable, and any placeholder via Filter.Placeholder.
+// Filter options (used only if Filterable=true). HScrollbar is enabled by
+// default so long item labels stay readable via ←/→ / h/l. Set Width,
+// Height, Title, Items, Filterable, and any placeholder via
+// Filter.Placeholder.
 func (t Theme) List() list.Options {
 	return list.Options{
 		ActiveColor:    t.BorderActive,
@@ -300,6 +302,7 @@ func (t Theme) List() list.Options {
 		InactiveBorder: lipgloss.NormalBorder(),
 		SlotBrackets:   pane.SlotBracketsNone,
 		SelectedColor:  t.Accent,
+		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
 	}
