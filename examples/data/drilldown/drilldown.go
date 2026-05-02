@@ -1,21 +1,23 @@
-// Package drilldown extends the master-detail pattern from
-// examples/data/detail with a third level: pressing enter on a focused
-// attribute pushes a new screen that describes it. Esc pops back to
-// the parent with all of its state intact (focus index, fetched
-// detail, cursor position) — that's free because screen.Stack keeps
-// parent screens alive while a child is on top.
+// Package drilldown demonstrates a master-detail screen with async
+// fetches at both levels, plus a third level via push:
 //
-// Enter has a single conceptual meaning across the whole screen — "open
-// the focused selection" — and a different side effect per pane:
+//   - The cities list (left) loads on Init via tea.Tick. Until it
+//     resolves the pane spins; the detail pane sits idle.
+//   - Pressing enter on a focused city fires another async fetch into
+//     the detail list (right). Each fetch is tagged with a request ID
+//     so hammering enter never races a slow response into the pane
+//     after a newer selection — the standard "stale-response cancel"
+//     pattern in Bubble Tea (you can't stop a tea.Cmd, so you discard
+//     its result on arrival instead).
+//   - Pressing enter on a focused attribute pushes a child screen.
+//     Esc pops back with parent state intact (focus index, fetched
+//     detail, cursor) — that's free because screen.Stack keeps parent
+//     screens alive while a child is on top.
 //
-//   - Focus on the cities list: enter loads that city's attributes
-//     into the detail list and moves focus to the right.
-//   - Focus on the detail list: enter pushes a child screen for the
-//     highlighted attribute.
-//
-// Tab/shift-tab cycles focus explicitly. The cities list itself loads
-// on Init via tea.Tick; detail fetches are tagged with a request ID so
-// stale results are dropped on arrival.
+// Enter has a single conceptual meaning across the whole screen —
+// "open the focused selection" — with a different side effect per
+// pane (load detail + shift focus right, or push child screen).
+// Tab/shift-tab cycles focus explicitly.
 package drilldown
 
 import (

@@ -59,6 +59,11 @@ type PushMsg struct{ Screen Screen }
 // the newly-active screen's OnEnter.
 type PopMsg struct{ Result any }
 
+// ReplaceMsg is emitted by Replace; the Stack handles it by swapping the
+// active (top) screen with Screen. The previous top is discarded; the
+// screen below it is left undisturbed (no OnEnter fires on it).
+type ReplaceMsg struct{ Screen Screen }
+
 // Push returns a command that pushes s onto the stack.
 func Push(s Screen) tea.Cmd {
 	return func() tea.Msg { return PushMsg{Screen: s} }
@@ -68,6 +73,20 @@ func Push(s Screen) tea.Cmd {
 // whatever screen is uncovered. Pass nil to indicate "no result / cancel".
 func Pop(result any) tea.Cmd {
 	return func() tea.Msg { return PopMsg{Result: result} }
+}
+
+// Replace returns a command that swaps the active screen with s. The
+// previous top is discarded and s.Init + s.OnEnter(nil) run, exactly as if
+// it had just been pushed. The screen below is not notified (no OnEnter
+// fires on it), so this is the right tool for a "fresh instance" of the
+// current view (reset filter, reset scroll, refetch from scratch) without
+// the visible flicker or accidental parent-side-effect that pop+push
+// would cause. Pass the new screen with its theme already applied — Replace
+// does not call SetTheme, matching Push's convention.
+//
+// On a single-screen stack (only the root), Replace swaps the root.
+func Replace(s Screen) tea.Cmd {
+	return func() tea.Msg { return ReplaceMsg{Screen: s} }
 }
 
 // Stack is the push/pop navigation stack. The last element is active.
@@ -125,6 +144,14 @@ func (s Stack) Update(msg tea.Msg) (Stack, tea.Cmd) {
 			return s, top.OnEnter(m.Result)
 		}
 		return s, nil
+
+	case ReplaceMsg:
+		if len(s.items) == 0 {
+			s.items = []Screen{m.Screen}
+		} else {
+			s.items[len(s.items)-1] = m.Screen
+		}
+		return s, tea.Batch(m.Screen.Init(), m.Screen.OnEnter(nil))
 	}
 
 	if len(s.items) == 0 {

@@ -21,11 +21,11 @@ import (
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
 	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
+	appreplace "github.com/jsdrews/tuilib/examples/app/replace"
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
 	apptabs "github.com/jsdrews/tuilib/examples/app/tabs"
 	dataconfirm "github.com/jsdrews/tuilib/examples/data/confirm"
-	datadetail "github.com/jsdrews/tuilib/examples/data/detail"
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
 	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
@@ -52,8 +52,7 @@ var entries = []entry{
 	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline. Status column uses ansi.CellColor so the selected-row bg stays intact across colored cells.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
 	{"Loading — spinners while fetching", "List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch.", dataloading.New},
-	{"Detail — selection triggers async fetch", "Master-detail. The cities list itself loads on Init via tea.Tick; once populated, pressing enter on a city fires another async fetch into the right pane. Stale results are dropped via reqID tagging so hammering enter never displays an out-of-order body. Press r to refetch.", datadetail.New},
-	{"Drilldown — three-level stack with focus", "Cities list + detail list with focus cycling; enter \"opens the focused selection\" on either pane — left-enter loads the detail and shifts focus right, right-enter pushes a child screen describing the attribute. Esc on the child screen pops back with the parent's state intact.", datadrilldown.New},
+	{"Drilldown — master-detail + push, with async fetches", "Cities list (loads on Init via tea.Tick) + detail list with focus cycling. Enter on either pane \"opens the focused selection\" — left-enter loads the detail (reqID tags drop stale results so hammering enter never races) and shifts focus right; right-enter pushes a child screen describing the attribute. Esc on the child pops back with parent state intact.", datadrilldown.New},
 	{"Runner — interactive subprocess", "Pick a command, hand the terminal to it, return on exit. Demonstrates pkg/runner with $EDITOR, less, man, htop. Last entry uses RunWithNotice to print \"connecting…\" during the handoff.", datarunner.New},
 	{"Runlog — stream stdout into logview", "Pick a command on the left; its stdout/stderr stream into a logview on the right. Tab cycles focus, x kills the running process.", datarunlog.New},
 	{"Tree — searchable expand/collapse", "A synthetic project tree with cursor, expand/collapse (←→/space), search (/), and filter mode (\\) that hides non-matching subtrees. Leaves carry colored status icons (lipgloss-rendered) so the row highlight stays intact across ANSI segments.", datatree.New},
@@ -65,6 +64,7 @@ var entries = []entry{
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
 	{"Confirm — modal yes/no dialog", "Press d on a file to bring up a confirm modal via pkg/confirm; ConfirmedMsg/CancelledMsg flow back as tea.Msg, the parent dismisses and reports the outcome via app.Info.", dataconfirm.New},
+	{"Replace — atomic top-of-stack swap", "Press r on the city list (filter set, cursor moved) to swap in a fresh instance — depth stays at 1, no flicker. Push a city detail, bump the visit counter, then r to reset the counter without re-firing the parent's OnEnter.", appreplace.New},
 }
 
 type rootScreen struct {
