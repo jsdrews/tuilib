@@ -46,6 +46,16 @@ type Pane struct {
 	spinner      spinner.Model
 	loadingLabel string
 
+	// Virtual scroll metrics override the right-edge scrollbar's source data
+	// when set externally (virtualTotal > 0). Used by components that window
+	// their own content (e.g. pkg/table reserves the top row for a sticky
+	// header) so the bar still reports an accurate scroll position over the
+	// caller's logical row count rather than the in-viewport line count.
+	// Auto-fill of bottom-right "%" is suppressed while virtual is active.
+	virtualTotal   int
+	virtualVisible int
+	virtualOffset  int
+
 	activeColor    lipgloss.TerminalColor
 	inactiveColor  lipgloss.TerminalColor
 	activeBorder   lipgloss.Border
@@ -175,12 +185,11 @@ func (p Pane) View() string {
 	if p.loading {
 		body = lipgloss.Place(innerW, innerH, lipgloss.Center, lipgloss.Center, p.loadingView())
 	} else {
-		bar := Scrollbar(
-			p.viewport.Height,
-			p.viewport.TotalLineCount(),
-			p.viewport.VisibleLineCount(),
-			p.viewport.YOffset,
-		)
+		total, visible, offset := p.viewport.TotalLineCount(), p.viewport.VisibleLineCount(), p.viewport.YOffset
+		if p.virtualTotal > 0 {
+			total, visible, offset = p.virtualTotal, p.virtualVisible, p.virtualOffset
+		}
+		bar := Scrollbar(p.viewport.Height, total, visible, offset)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
 		if p.hScrollbar {
 			inner := p.viewport.Width
@@ -189,8 +198,10 @@ func (p Pane) View() string {
 		}
 		// Auto-fill bottom-right with scroll percent only when content actually
 		// overflows. Panes used as input strips (filter bars, one-liners) would
-		// otherwise show a meaningless "100%".
-		if br == "" && p.viewport.TotalLineCount() > p.viewport.VisibleLineCount() {
+		// otherwise show a meaningless "100%". When virtual scroll is active
+		// the caller paints its own indicator (e.g. "5 / 100") in
+		// SetBottomRight, so skip the auto-fill there too.
+		if br == "" && p.virtualTotal == 0 && p.viewport.TotalLineCount() > p.viewport.VisibleLineCount() {
 			br = fmt.Sprintf("%d%%", int(p.viewport.ScrollPercent()*100))
 		}
 	}
@@ -387,6 +398,27 @@ func (p Pane) YOffset() int { return p.viewport.YOffset }
 
 // SetYOffset jumps to the given vertical scroll offset.
 func (p *Pane) SetYOffset(n int) { p.viewport.SetYOffset(n) }
+
+// SetVirtualScroll overrides the right-edge scrollbar's source data.
+// Instead of computing thumb size and position from the viewport's
+// in-memory line count, the bar uses (total, visible, offset) directly —
+// in any units the caller chooses, commonly logical row counts. Used by
+// components that window their own content outside the viewport so the
+// scrollbar still reflects the full dataset rather than the in-viewport
+// slice (e.g. pkg/table reserves the top inner row for a sticky header
+// and feeds the bar with len(rows) / dataRowsWindow / firstVisibleRow).
+//
+// While virtual scroll is active the bottom-right "%" auto-fill is
+// suppressed so the caller can paint a more meaningful indicator (e.g.
+// "5 / 100") via SetBottomRight. Pass total <= 0 to disable and revert
+// to viewport-driven metrics.
+func (p *Pane) SetVirtualScroll(total, visible, offset int) {
+	if total <= 0 {
+		p.virtualTotal, p.virtualVisible, p.virtualOffset = 0, 0, 0
+		return
+	}
+	p.virtualTotal, p.virtualVisible, p.virtualOffset = total, visible, offset
+}
 
 // EnsureVisible scrolls the viewport the minimum amount needed to put line
 // `n` inside the visible window. Useful for cursor-driven list views, where

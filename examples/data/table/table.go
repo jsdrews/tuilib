@@ -1,27 +1,27 @@
-// Package table demonstrates a filterable bubbles/table inside a pane,
-// composed with filter.Model via pkg/layout.
+// Package table demonstrates pkg/table — a filterable cursor-driven
+// tabular view with a sticky header. Cells use ansi.CellColor for the
+// status column so the selected-row background passes through unbroken
+// across colored cells.
 package table
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/ansi"
-	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/layout"
-	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// Status values use ansi.CellColor so the foreground-only \x1b[39m reset
-// keeps the selected-row background intact across colored cells.
+// Status values use ansi.CellColor (foreground-only \x1b[39m reset) so
+// the selected-row Background stays intact across colored cells. pkg/table
+// truncates ANSI-aware via x/ansi.Cut, so column Width is the visible cell
+// width — no escape-byte budget to add.
 var (
 	statusOK    = ansi.CellColor(2, "✓ healthy")  // green
 	statusWarn  = ansi.CellColor(3, "● degraded") // yellow
@@ -63,131 +63,93 @@ var allRows = []table.Row{
 }
 
 type Screen struct {
-	t      theme.Theme
-	table  table.Model
-	filter filter.Model
-	body   pane.Pane
+	t   theme.Theme
+	tab table.Model
 }
 
 func New(t theme.Theme) screen.Screen {
-	tab := table.New(
-		table.WithColumns([]table.Column{
-			{Title: "City", Width: 20},
-			{Title: "Region", Width: 16},
-			{Title: "Population", Width: 12},
-			// Status column is sized generously: bubbles/table's truncation
-			// is not ANSI-aware, so colored cells need to fit comfortably.
-			// Status column needs ~visible_chars + 8 width budget when using
-			// 8/16-color CellColor (4 bytes open + 4 bytes close that
-			// bubbles/table's runewidth.Truncate counts as visible). Longest
-			// status here is "● degraded" (10 visible) → 18 minimum. We use
-			// 22 for breathing room.
-			{Title: "Status", Width: 22},
-		}),
-		table.WithRows(allRows),
-		table.WithFocused(true),
-	)
-	s := &Screen{table: tab}
+	s := &Screen{}
 	s.SetTheme(t)
 	return s
 }
 
 func (s *Screen) Title() string         { return "Table" }
-func (s *Screen) Init() tea.Cmd         { return textinput.Blink }
+func (s *Screen) Init() tea.Cmd         { return nil }
 func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
-func (s *Screen) IsCapturingKeys() bool { return s.filter.Focused() }
+func (s *Screen) IsCapturingKeys() bool { return s.tab.Filtering() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok {
-		if s.filter.Focused() {
-			var cmd tea.Cmd
-			s.filter, cmd = s.filter.Update(msg)
-			s.applyFilter()
-			return s, cmd
-		}
-		if k.String() == "/" {
-			return s, s.filter.Focus()
-		}
-	}
 	var cmd tea.Cmd
-	s.table, cmd = s.table.Update(msg)
+	s.tab, cmd = s.tab.Update(msg)
 	return s, cmd
 }
 
 func (s *Screen) Layout() layout.Node {
-	return layout.VStack(
-		layout.Fixed(3, layout.Bar(&s.filter)),
-		layout.Flex(1, layout.RenderFunc(s.renderBody)),
-	)
+	return layout.Sized(&s.tab)
 }
 
 func (s *Screen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	out := s.tab.Help()
+	out = append(out,
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	)
+	return out
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	prev := s.filter.Value()
-	fOpts := t.Filter()
-	fOpts.Placeholder = "filter rows…"
-	s.filter = filter.New(fOpts)
-	if prev != "" {
-		s.filter.SetValue(prev)
+	cursor, value := s.tab.Cursor(), s.tab.Value()
+	sortCol, sortDesc := s.tab.SortColumn(), s.tab.SortDescending()
+	opts := t.Table()
+	opts.Title = "Cities"
+	opts.Filterable = true
+	opts.Filter.Placeholder = "filter, region:europe, ~^new…"
+	opts.Columns = []table.Column{
+		{Title: "City", Width: 20, Sortable: true},
+		{Title: "Region", Width: 16, Sortable: true},
+		// Population cells are "8.3M" / "20.4M" — sort numerically by
+		// parsing the leading float, not lexically (else "8.3M" sorts
+		// after "20.4M").
+		{Title: "Population", Width: 12, Sortable: true, Less: popLess},
+		// Status sorts by severity (healthy < degraded < down), not by
+		// the leading icon glyph. Press s with Status active to flip
+		// to "errors first".
+		{Title: "Status", Width: 12, Sortable: true, Less: statusLess},
 	}
-
-	// Non-selected cells fall through to terminal default so the Selected row's
-	// Accent fg wins; Subtle bg gives the row a faint highlight band.
-	s.table.SetStyles(table.Styles{
-		Header:   lipgloss.NewStyle().Bold(true).Foreground(t.Current).Padding(0, 1),
-		Cell:     lipgloss.NewStyle().Padding(0, 1),
-		Selected: lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
-	})
-
-	paneOpts := t.Pane()
-	paneOpts.Title = "Cities"
-	paneOpts.Focused = true
-	paneOpts.ActiveBorder = lipgloss.NormalBorder()
-	s.body = pane.New(paneOpts)
+	opts.Rows = allRows
+	s.tab = table.New(opts)
+	if value != "" {
+		s.tab.SetValue(value)
+	}
+	s.tab.SetCursor(cursor)
+	s.tab.SetSort(sortCol, sortDesc)
 }
 
-func (s *Screen) applyFilter() {
-	q := strings.ToLower(strings.TrimSpace(s.filter.Value()))
-	if q == "" {
-		s.table.SetRows(allRows)
-		return
-	}
-	out := make([]table.Row, 0, len(allRows))
-	for _, r := range allRows {
-		if rowMatches(r, q) {
-			out = append(out, r)
-		}
-	}
-	s.table.SetRows(out)
-	if s.table.Cursor() >= len(out) {
-		s.table.SetCursor(max(0, len(out)-1))
-	}
+func popLess(a, b string) bool {
+	return parsePop(a) < parsePop(b)
 }
 
-func rowMatches(r table.Row, q string) bool {
-	for _, cell := range r {
-		if strings.Contains(strings.ToLower(cell), q) {
-			return true
-		}
-	}
-	return false
+func parsePop(s string) float64 {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, "M")
+	f, _ := strconv.ParseFloat(s, 64)
+	return f
 }
 
-func (s *Screen) renderBody(w, h int) string {
-	s.table.SetWidth(max(0, w-2-pane.ScrollbarWidth))
-	s.table.SetHeight(max(0, h-2-2))
-	s.body.SetDimensions(w, h)
-	s.body.SetContent(s.table.View())
-	s.body.SetBottomLeft(fmt.Sprintf("%d / %d", len(s.table.Rows()), len(allRows)))
-	return s.body.View()
+func statusLess(a, b string) bool {
+	return statusRank(a) < statusRank(b)
+}
+
+func statusRank(s string) int {
+	switch {
+	case strings.Contains(s, "down"):
+		return 2
+	case strings.Contains(s, "degraded"):
+		return 1
+	case strings.Contains(s, "healthy"):
+		return 0
+	}
+	return -1
 }

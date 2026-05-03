@@ -63,22 +63,22 @@ example in `examples/`.
    screens.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
-   bundles a `pane.Pane` internally — `pkg/list`, `pkg/filter`, `pkg/input`,
-   `pkg/toggle`, `pkg/logview`, `pkg/tree` all return a bordered, titled
-   render from `View()`. To put a label on a component, set its `Title`
-   field (which is rendered on the pane's top border) — don't render a label
-   line above the component, and don't wrap a component in a second
-   `pane.Pane`. The only things that *don't* own a pane are bars
-   (`breadcrumb`, `statusbar`), the `help` key-hint renderer, the layout
-   primitives, `pkg/runner` (which is not a UI component — it suspends the
-   program to run a subprocess), and `pkg/form` itself, which is a vertical
-   layout of bordered fields. New input-style components should follow the
-   same shape: `Options.Title` + an internal `pane.Pane` + `View()` returns
-   the bordered render.
+   bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/tree` all return a
+   bordered, titled render from `View()`. To put a label on a component,
+   set its `Title` field (which is rendered on the pane's top border) —
+   don't render a label line above the component, and don't wrap a
+   component in a second `pane.Pane`. The only things that *don't* own a
+   pane are bars (`breadcrumb`, `statusbar`), the `help` key-hint
+   renderer, the layout primitives, `pkg/runner` (which is not a UI
+   component — it suspends the program to run a subprocess), and
+   `pkg/form` itself, which is a vertical layout of bordered fields. New
+   input-style components should follow the same shape: `Options.Title` +
+   an internal `pane.Pane` + `View()` returns the bordered render.
 
 10. **Components expose `Help() []key.Binding`.** Interactive components
-    (`list`, `filter`, `input`, `toggle`, `logview`, `tree`, `form`) return
-    the bindings they currently respond to. Screens compose these into their
+    (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `tree`,
+    `form`) return the bindings they currently respond to. Screens compose these into their
     own `Help()` so the hint strip updates as state changes — e.g. the
     focused field of a form, or whether a logview's filter is engaged.
     When state changes the relevant bindings (filter focused vs. blurred,
@@ -148,27 +148,23 @@ example in `examples/`.
     `theme.Logview()` enables `HScrollbar` by default since long log
     lines are common.
 
-17. **Color bubbles/table cells with `ansi.CellColor`, not lipgloss.**
-    `bubbles/table` wraps each cell in its `Selected` style via
-    `lipgloss.Render`, and lipgloss's full `\x1b[0m` reset clobbers the
-    outer background mid-cell. `ansi.CellColor(n, text)` emits a
-    foreground-only escape that closes with `\x1b[39m`, so the row's bg
-    stays intact across colored cells. CellColor picks the shortest open
-    form for the palette index (`\x1b[3Nm` for n<8, `\x1b[9Nm` for n<16,
-    `\x1b[38;5;Nm` for 16+).
+17. **Color cells in a table row with `ansi.CellColor`, not full lipgloss
+    backgrounds.** `pkg/table` applies the row's `SelectedStyle` (which
+    typically sets `Background`) on top of cell content. A cell that
+    contains its own `lipgloss.Render` with a full `\x1b[0m` reset will
+    clobber the selected row's background mid-cell. `ansi.CellColor(n,
+    text)` emits a foreground-only escape that closes with `\x1b[39m`,
+    so the row's bg stays intact across colored cells. CellColor picks
+    the shortest open form for the palette index (`\x1b[3Nm` for n<8,
+    `\x1b[9Nm` for n<16, `\x1b[38;5;Nm` for 16+).
 
-    Important sizing rule: `bubbles/table`'s truncation is **not**
-    ANSI-aware (upstream uses `runewidth.Truncate`, which counts the
-    escape bytes as visible width). If a cell exceeds its column width,
-    the closing reset gets chopped off and the foreground bleeds into
-    later cells. Size columns at least `visible_chars + 8` for n<16, or
-    `+ ~14` for 256-color indices. The example's Status column uses 22
-    cells for 10-char content with 8/16-color CellColor.
-
-    This caveat is bubbles/table-only — every component that owns its
-    own pane (`list`, `tree`, `logview`, …) renders ANSI-aware and you
-    can keep using lipgloss inside them. See `examples/data/table/table.go`
-    Status column.
+    Column truncation is ANSI-aware: `pkg/table` cuts cells via
+    `x/ansi.Cut`, so `Column.Width` is the visible cell width — no
+    escape-byte budget to add. The table example's Status column uses
+    `Width: 12` for 10-char status text. (This is a change from the old
+    bubbles/table-based example, which had to pad the Status column to
+    22 to survive non-ANSI-aware truncation in upstream `runewidth`.)
+    See `examples/data/table/table.go` Status column.
 
 18. **Send transient feedback through `app.Info` / `app.Error` /
     `app.ClearStatus`.** Screens don't touch the statusbar directly — they
@@ -225,6 +221,20 @@ example in `examples/`.
     what `pkg/confirm` already gets right (selection movement, y/n/esc
     shortcuts, theme-aware styling).
 
+21. **For "stop and acknowledge" modals, use `pkg/alert`.** Same shape as
+    `pkg/confirm` but with a single OK button and an `alert.DismissedMsg`
+    result. Reach for it when the user *must* see and dismiss something
+    before continuing — surfaced errors, destructive-action results,
+    blocking notices. For passive feedback (success notices, transient
+    warnings) prefer the lighter `app.Info` / `app.Error` statusbar
+    messages from rule 18; the modal is heavier and breaks flow. The
+    chrome from `theme.Alert()` is intentionally neutral: for an
+    error-tinted look, override `ActiveColor` with `t.ErrorBG` (and
+    optionally `OKStyle` foreground with the same) — the component is
+    palette-agnostic and the semantics live in the override. Hosting,
+    `IsCapturingKeys`, `Help()` composition, and ZStack placement all
+    follow rule 20. See `examples/data/alert`.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -250,16 +260,22 @@ example in `examples/`.
 - **Don't render a label line above an input/toggle/list/filter.** The
   component's `Title` field renders the label on the border itself. The old
   inline-label pattern is gone.
-- **Don't wrap `bubbles/table`.** We deliberately don't provide a table
-  component — bubbles/table already owns rendering + scrolling + cursor,
-  and wrapping it is passthrough bloat. For a filterable table, compose
-  `bubbles/table` + `filter.Model` + `pane.Pane` directly. See
-  `examples/data/table/main.go`.
+- **Don't use `bubbles/table` directly.** Use `pkg/table` — it owns the
+  pane, has ANSI-aware cell truncation (so `Column.Width` is the visible
+  width, no escape-byte padding), pins the header at line 0 while still
+  scrolling horizontally with the body, and mirrors `pkg/list`'s
+  ergonomics (cursor, filterable, `g`/`G`/`ctrl+u/d` nav, `SetLoading`,
+  `SetTheme`-friendly setters). See `examples/data/table/table.go`.
 - **Don't roll your own confirm modal.** `pkg/confirm` already handles
   selection movement, y/n/esc shortcuts, message-driven results, and
   theme-aware styling. Hand-rolling a `pane.Pane` + `toggle.Model` +
   ZStack tree skips theme swap robustness and the typed result messages
   the rest of the codebase expects.
+- **Don't roll your own alert modal.** `pkg/alert` covers the
+  acknowledgement case (single OK button, `DismissedMsg`); use it for
+  blocking errors and notices. For passive feedback prefer
+  `app.Info` / `app.Error` (rule 18) — modals break flow, statusbar
+  doesn't.
 - **Don't roll your own log viewer.** Use `pkg/logview` for any append-
   mostly text stream that needs search / jump / filter / auto-follow.
   Wrapping `viewport.Model` directly skips the search highlight, current-
@@ -329,6 +345,8 @@ If you genuinely can't use the app shell, here are the row costs:
 | `pane.Pane` | caller-controlled, min 3 (4 when `HScrollbar=true` — one inner row reserved for the bar) |
 | `list.Model` (Filterable=false) | caller-controlled |
 | `list.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `table.Model` (Filterable=false) | caller-controlled, all body (header consumes 1 inner row, leaving `VisibleRows()-1` data rows) |
+| `table.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body (then header consumes 1) |
 | `logview.Model` (Searchable=false) | caller-controlled, all body |
 | `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `tree.Model` (Searchable=false) | caller-controlled, all body |
@@ -358,12 +376,15 @@ path.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.
 - **Color vocabulary:** `pkg/theme/theme.go` — field comments on the
   `Theme` struct name every semantic slot.
-- **User-default theme:** `theme.Resolve(themes, envVar)` picks the
-  initial theme from (1) `$envVar`, (2) `~/.config/tuilib/config.yaml`'s
-  `theme:` field, (3) `themes[0]`. Returns `themes` reordered so the pick
-  is first — pass straight to `app.Options.Themes`. Config is opt-in: the
-  library never writes the file. Unknown names fall through silently;
-  malformed YAML surfaces only via `config.Load` directly.
+- **User-default theme:** `app.New` runs `theme.Resolve` on `Options.Themes`
+  by default, picking the initial theme from (1) `Options.ThemeEnvVar` if
+  set, (2) `~/.config/tuilib/config.yaml`'s `theme:` field, (3) `Themes[0]`.
+  Pass the raw theme list — the shell reorders it. Set `Options.SkipConfig
+  = true` to disable resolution (tests, or apps pinned to a single theme).
+  Config is opt-in: the library never writes the file. Unknown names fall
+  through silently; malformed YAML surfaces only via `config.Load`
+  directly. `theme.Resolve` is still exported for callers that need the
+  resolved order outside `app.New`.
 - **User config in general:** `pkg/config` owns the YAML file shape
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
@@ -376,6 +397,12 @@ path.
   ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
   as `tea.Cmd`s the parent matches in its own `Update`. See
   `examples/data/confirm` and rule 20.
+- **Alert modal:** `pkg/alert` is the acknowledgement counterpart to
+  confirm — a single OK button, `alert.DismissedMsg` result, identical
+  hosting pattern. Override `ActiveColor` with `t.ErrorBG` for an
+  error-tinted look. Use it for "stop and acknowledge" feedback; prefer
+  `app.Info` / `app.Error` for passive notices. See `examples/data/alert`
+  and rule 21.
 - **Atomic screen swap:** `screen.Replace(s)` swaps the active top of the
   stack in one tick. Use it for "fresh instance of this view" (reset
   filter, reset scroll, refetch from scratch) — pop+push flickers and
@@ -388,6 +415,41 @@ path.
   typing `G` into the filter doesn't trigger the jump. Long rows scroll
   horizontally with `←→` / `h` / `l` when `HScrollbar` is enabled (default
   via `theme.List()`).
+- **Table component:** `pkg/table` is the cursor-driven tabular companion
+  to `pkg/list`. `Column{Title, Width, Align, Sortable, Less}` declares
+  the layout; rows are `[]string` cells. The header pins to the top of
+  the body (it does not scroll out as the cursor moves down) but scrolls
+  horizontally with the body so column titles stay aligned with their
+  data. Cell truncation is ANSI-aware via `x/ansi.Cut`, so `Width` is
+  the visible cell width. Same nav verbs as list (`g`/`G`, `ctrl+u/d`,
+  `↑↓`/`j`/`k`), same `Filterable` story (filter matches
+  case-insensitively across all cells, with ANSI stripped before
+  matching). Filter input is split on whitespace into AND-ed terms; a
+  term shaped `key:value` scopes the match to the column whose Title
+  case-insensitively starts with `key` (e.g. `region:europe pop:5`).
+  Bare terms still match any cell, so existing single-word filters keep
+  working. An ambiguous or unknown `key` falls through as a literal
+  bare term, which is also how you'd search for a literal colon. A term
+  whose value starts with `~` is compiled as a case-insensitive Go regex
+  (`~^new`, `region:~^euro`); compile errors fall back to a literal
+  substring including the tilde, so the parser never refuses input.
+  While the user is mid-typing a `key:val` term, the filter pane's
+  bottom-left slot lists the column's distinct values matching `val` so
+  they don't have to guess what's there; `tab` completes `val` to the
+  longest common prefix of the remaining candidates (regex terms skip
+  the hint — enumerating regex matches isn't useful). Same `SetLoading`
+  / `SetTheme` ergonomics. Set
+  `Column.Sortable = true` to opt a column into sort: `[`/`]` step the
+  active sort column among Sortable columns and `s` toggles direction
+  (asc/desc indicator ▲/▼ renders after the active column's title).
+  Default comparator is case-insensitive on the ANSI-stripped text;
+  override with `Column.Less func(a, b string) bool` for numeric, date,
+  or unit-aware columns ("8.3M") — see the table example's `popLess`.
+  Carry `SortColumn()`/`SortDescending()` across `SetTheme` rebuilds via
+  `SetSort(col, desc)` the same way you carry `Cursor()`/`Value()`. For
+  colored cells inside a row, prefer `pkg/ansi.CellColor` over
+  `lipgloss.Render` so the selected-row background passes through
+  unbroken (rule 17). See `examples/data/table` and `theme.Table()`.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.
