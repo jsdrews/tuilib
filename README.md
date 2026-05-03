@@ -93,21 +93,23 @@ handles its own state in `Update`.
 | `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
 | `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active. Vim-style nav: `g`/`G` top/bottom, `ctrl+u`/`ctrl+d` half-page, plus `↑↓` per row |
+| `pkg/table` | Cursor-driven, optionally filterable tabular view inside a pane. `Column{Title, Width, Align, Sortable, Less}` declares the layout; rows are `[]string` cells. Header pins to the top while scrolling horizontally with the body so columns stay aligned. ANSI-aware truncation via `x/ansi.Cut` — `Width` is the visible cell width. Same nav verbs as `pkg/list` (`g`/`G`, `ctrl+u/d`, `↑↓`/`j`/`k`); filter matches across all cells (ANSI stripped before matching) and accepts space-separated AND-ed terms; a `key:value` term scopes the match to the column whose Title starts with `key` (e.g. `region:europe pop:5`); a `~` prefix on the value makes that term a case-insensitive regex (e.g. `~^new`, `region:~^euro`). Mid-typing a `key:val` term shows the column's distinct matching values in the filter's bottom-left slot, and `tab` completes to the longest common prefix. `Sortable` columns expose `[`/`]` (step active sort column) + `s` (toggle direction); supply `Column.Less` for numeric or unit-aware sort |
 | `pkg/input` | Single-line text input in a pane; bare textbox without filter's commit/cancel keys |
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/confirm` | Modal yes/no dialog with title + message + confirm/cancel buttons; resolves via `ConfirmedMsg` / `CancelledMsg` so parent screens stay bubbletea-idiomatic. Designed for `layout.ZStack(base, layout.Center(w, h, ...))` |
+| `pkg/alert` | Modal acknowledgement dialog with title + message + single OK button; resolves via `DismissedMsg`. Use for "stop and acknowledge" feedback (errors, blocking notices); for passive feedback prefer the lighter `app.Info` / `app.Error` statusbar messages. Override `ActiveColor` with `theme.ErrorBG` for an error-tinted look |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
 | `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors. Labels may contain lipgloss-styled ANSI (colored status icons, etc.) — the cursor's row highlight stays intact across colored segments |
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
 | `pkg/tab` | Tabbed container hosting multiple `screen.Screen` bodies behind a one-row strip. Each body keeps its own state across switches; `shift+left`/`shift+right` and `1`–`9` switch tabs (`tab`/`shift+tab` is left alone for inner pane focus cycling). Host screen forwards `Update`/`OnEnter`/`IsCapturingKeys`/`SetTheme`/`Help` to `tabs` |
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
-| `pkg/theme` | Single palette struct + per-component `Options` builders. `theme.Resolve(themes, envVar)` picks an initial theme from env/config |
+| `pkg/theme` | Single palette struct + per-component `Options` builders. `app.New` resolves the initial theme from `Options.ThemeEnvVar` + the user config file automatically (set `SkipConfig=true` to opt out) |
 | `pkg/config` | YAML user-config at `~/.config/tuilib/config.yaml`. Pure data + I/O; opt-in (library never writes). Today carries `Theme`; expands as components grow user-tunable knobs |
-| `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in `bubbles/table` cells where lipgloss's full reset would clobber the selected-row background |
+| `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in table cells (or any context that wraps content in its own SGR with a background); the foreground-only `\x1b[39m` reset preserves the outer background where lipgloss's full `\x1b[0m` would clobber it |
 
 > **Components own their pane.** Every interactive component (`pane`,
-> `filter`, `list`, `input`, `toggle`, `logview`, `tree`) bundles a
-> `pane.Pane` internally and returns a bordered render from `View()`. To
+> `filter`, `list`, `table`, `input`, `toggle`, `logview`, `tree`) bundles
+> a `pane.Pane` internally and returns a bordered render from `View()`. To
 > label one, set its `Title` field — it renders on the border. Don't wrap a
 > component in a second pane; don't render a label line above it.
 
@@ -245,17 +247,18 @@ sb := statusbar.New(th.Statusbar(helpModel.ShortView(), "v0.1.0"))
 
 ### Default theme via env / config
 
-`theme.Resolve(themes, envVar)` picks an initial theme by checking, in
-order, the named environment variable, the `theme:` field in
+`app.New` resolves the initial theme by checking, in order, the env var
+named by `Options.ThemeEnvVar`, the `theme:` field in
 `$XDG_CONFIG_HOME/tuilib/config.yaml` (falls back to
-`~/.config/tuilib/config.yaml`, via `pkg/config`), and `themes[0]`.
-Returns `themes` reordered so the chosen theme is first — drop it straight
-into `app.Options.Themes`:
+`~/.config/tuilib/config.yaml`, via `pkg/config`), and `Themes[0]`. Hand
+the raw theme list to `app.Options.Themes` — the shell reorders it for
+you:
 
 ```go
 m := app.New(app.Options{
-    Root:   newRoot(),
-    Themes: theme.Resolve(theme.All(), "MY_APP_THEME"),
+    Root:        newRoot(),
+    Themes:      theme.All(),
+    ThemeEnvVar: "MY_APP_THEME",
     // ...
 })
 ```
@@ -268,10 +271,13 @@ theme: dracula
 
 The library never writes the file and never creates the directory — config
 is opt-in. A missing file is the steady state. Unknown theme names fall
-through silently (typo `dracla` just leaves `themes[0]` as the default);
-malformed YAML surfaces as an error if you call `config.Load` directly.
-Pass `envVar = ""` to skip env-var resolution and rely on the config file
-alone.
+through silently (typo `dracla` just leaves `Themes[0]` as the default);
+malformed YAML surfaces as an error only if you call `config.Load`
+directly. Leave `ThemeEnvVar` empty to skip the env-var step and rely on
+the config file alone, or set `Options.SkipConfig = true` to disable
+resolution entirely (useful for tests, or when the app should always pin
+to `Themes[0]`). The underlying `theme.Resolve(themes, envVar)` is still
+exported if you need the resolved order outside `app.New`.
 
 The shared file lives in `pkg/config` — as other components grow
 user-tunable knobs (logview defaults, key remaps, custom palettes) their
@@ -290,7 +296,7 @@ demo uses.
 | Panes   | Border styles, title positions, and slot-bracket variants in one 2×2 grid |
 | List    | A filterable `list.Model` as a single-screen app |
 | Logview | Streaming log tail with `/`-search, n/N jump, `\` filter-mode toggle, current-line highlight |
-| Table   | `bubbles/table` composed with `filter.Model` and `pane.Pane`; Status column uses `ansi.CellColor` so the selected-row background stays intact across colored cells |
+| Table   | `table.Model` with sticky header, per-column widths, `g`/`G`/`ctrl+u/d` nav, sort via `[`/`]`/`s` (City + Region default-string, Population uses a custom `Less` to parse "8.3M"), and a Status column using `ansi.CellColor` so the selected-row background passes through colored cells. ANSI-aware truncation means `Column.Width` is the visible cell width — no escape-byte budget |
 | Form    | `form.Model` with Text / Select / Confirm fields + submit button |
 | Loading | `list`, `logview`, and `tree` start in `SetLoading(true)`; staggered `tea.Tick` delays simulate fetches. Press `r` to refetch. |
 | Drilldown | Master-detail with async fetches at both levels, plus a third level via push. Cities list loads on Init; enter on a city fetches its attributes into the right pane (reqID-tagged so stale results are dropped); enter on a focused attribute pushes a child screen. Esc pops back with parent state intact. |
@@ -305,6 +311,7 @@ demo uses.
 | Tabs    | Three sub-screens (filterable list / streaming logview / counter) behind one tab strip; switch via shift+arrows or 1/2/3. Each body keeps its own state across switches; the logview keeps streaming while you're on another tab |
 | Status  | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s; the shell mirrors the result into the statusbar's center slot. Auto-clears on the next keypress |
 | Confirm | A `pkg/confirm` modal overlaid on a list via `ZStack` + `Center`. Press `d` on a file to bring up the dialog; on confirm the file is removed and the outcome is reported via `app.Info`. Demonstrates the message-driven result flow |
+| Alert | A list of mock operations; some succeed (statusbar info), some fail with an error-tinted `pkg/alert` modal whose border is overridden with `theme.ErrorBG`. Contrasts the lightweight statusbar pattern with the modal "stop and acknowledge" pattern |
 
 Each entry is a package under `examples/<area>/<name>/` that exports
 `New(theme.Theme) screen.Screen`. The launcher imports them all and pushes

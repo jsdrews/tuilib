@@ -18,6 +18,7 @@ package theme
 import (
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/alert"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/filter"
@@ -28,6 +29,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
@@ -348,6 +350,43 @@ func (t Theme) Confirm() confirm.Options {
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
 		SlotBrackets:    pane.SlotBracketsNone,
+	}
+}
+
+// Alert returns alert.Options pre-filled from the theme — OK button in
+// Accent (bold), message body in BarFG, neutral active/inactive border
+// colors. The chrome is intentionally neutral; for an error-styled alert,
+// override ActiveColor with t.ErrorBG (and OKStyle's foreground with
+// t.ErrorBG) after this builder. Set Width, Height, Title, Message, and
+// OK label as needed before passing to alert.New.
+func (t Theme) Alert() alert.Options {
+	return alert.Options{
+		OKStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		MessageStyle:  lipgloss.NewStyle().Foreground(t.BarFG),
+		ActiveColor:   t.BorderActive,
+		InactiveColor: t.BorderInactive,
+		SlotBrackets:  pane.SlotBracketsNone,
+	}
+}
+
+// Table returns table.Options pre-filled from the theme — header bold +
+// Current fg, selected row bold + Accent fg + Subtle bg, border colors
+// matching pane, HScrollbar enabled (wide tables are common), spinner in
+// Accent, and the embedded filter using theme.Filter(). Set Width,
+// Height, Title, Columns, Rows, Filterable, and any Filter.Placeholder
+// before passing to table.New.
+func (t Theme) Table() table.Options {
+	return table.Options{
+		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
+		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   lipgloss.NormalBorder(),
+		InactiveBorder: lipgloss.NormalBorder(),
+		SlotBrackets:   pane.SlotBracketsNone,
+		HScrollbar:     true,
+		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
+		Filter:         t.Filter(),
 	}
 }
 

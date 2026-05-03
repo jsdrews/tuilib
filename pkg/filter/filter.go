@@ -2,7 +2,10 @@
 // "press / to search, enter to commit, esc to clear" pattern every TUI
 // eventually needs. Model owns its focus state and the commit/cancel key
 // handling; the caller reads Value() after each Update to drive whatever
-// list or table is being filtered.
+// list or table is being filtered. SetBottomLeft / SetBottomRight expose
+// the surrounding pane's bottom-border slots so a host (e.g. pkg/table)
+// can paint hints, completion previews, or counts into the filter chrome
+// without wrapping it in a second pane.
 package filter
 
 import (
@@ -150,6 +153,12 @@ func (m *Model) Reset() {
 
 // SetWidth resizes the surrounding pane. Height is fixed at 3.
 func (m *Model) SetWidth(w int) { m.pane.SetDimensions(w, 3) }
+
+// SetBottomLeft / SetBottomRight write into the surrounding pane's bottom
+// border slots. Useful for hints, completion previews, or counts that
+// pertain to whatever the filter is driving. Pass "" to clear.
+func (m *Model) SetBottomLeft(s string)  { m.pane.SetBottomLeft(s) }
+func (m *Model) SetBottomRight(s string) { m.pane.SetBottomRight(s) }
 
 // Update is a no-op when blurred. When focused, "enter" commits (blur, keep
 // value) and "esc" cancels (reset + blur); anything else is forwarded to the

@@ -36,6 +36,12 @@ func ByName(themes []Theme, name string) (Theme, bool) {
 // directly.
 //
 // Pass envVar = "" to disable env-var resolution.
+//
+// Most apps don't need to call this directly: app.New runs Resolve on
+// Options.Themes by default (using Options.ThemeEnvVar). Call it yourself
+// only when you need the resolved order outside the app shell, or when
+// you've set Options.SkipConfig = true to bypass app.New's automatic
+// resolution. Calling Resolve twice is safe — the operation is idempotent.
 func Resolve(themes []Theme, envVar string) []Theme {
 	if len(themes) == 0 {
 		return themes

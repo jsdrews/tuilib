@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Node is the unit of layout — something that can render itself at a given
@@ -134,12 +135,14 @@ func Center(naturalW, naturalH int, child Node) Node {
 }
 
 // ZStack layers overlay on top of base. Both are rendered at the full
-// (w, h). Lines in overlay that consist entirely of whitespace pass the
-// base through; any other line replaces the base line at that row.
+// (w, h). Compositing happens cell-by-cell: cells that are spaces in the
+// overlay pass the base through; non-space cells replace base at that
+// column. Empty overlay rows pass through entirely.
 //
-// This is a deliberately simple compositor — it covers the common case
-// of a centered modal drawn with Center(...). For anything richer,
-// write a RenderFunc and do the compositing manually.
+// In practice this means a centered modal drawn with Center(...) only
+// blots out the modal's bounding box; pane borders and content to the
+// left and right of the modal stay visible. Wide characters and ANSI
+// styles are handled via x/ansi cell-aware cutting.
 func ZStack(base, overlay Node) Node { return zstack{base: base, overlay: overlay} }
 
 type zstack struct {
@@ -158,12 +161,45 @@ func (z zstack) Render(w, h int) string {
 		if i >= len(baseLines) {
 			break
 		}
-		if strings.TrimSpace(stripANSI(ol)) == "" {
+		plain := stripANSI(ol)
+		if strings.TrimSpace(plain) == "" {
 			continue
 		}
-		baseLines[i] = ol
+		// Cell-aware compositing: find the first and last non-space cell
+		// in the overlay, then splice those columns from overlay into
+		// the base, leaving the surrounding base cells intact.
+		left, right := nonSpaceBounds(plain)
+		if left < 0 {
+			continue
+		}
+		baseLines[i] = ansi.Cut(baseLines[i], 0, left) +
+			"\x1b[0m" +
+			ansi.Cut(ol, left, right+1) +
+			"\x1b[0m" +
+			ansi.Cut(baseLines[i], right+1, w)
 	}
 	return strings.Join(baseLines, "\n")
+}
+
+// nonSpaceBounds returns the cell-index of the first and last non-space
+// rune in s (which must be ANSI-stripped). Returns (-1, -1) when s is
+// entirely whitespace.
+func nonSpaceBounds(s string) (int, int) {
+	left, right, cell := -1, -1, 0
+	for _, r := range s {
+		w := ansi.StringWidth(string(r))
+		if w == 0 {
+			continue
+		}
+		if r != ' ' {
+			if left < 0 {
+				left = cell
+			}
+			right = cell + w - 1
+		}
+		cell += w
+	}
+	return left, right
 }
 
 // distribute divides total among items. Fixed items take their declared

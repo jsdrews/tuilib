@@ -41,6 +41,20 @@ type Options struct {
 	// the app is pinned to a single theme).
 	ThemeKey key.Binding
 
+	// ThemeEnvVar names an environment variable consulted for the initial
+	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
+	// theme's Name, that theme becomes Themes[0]. Empty string disables
+	// env-var lookup but the user config file is still consulted; see
+	// SkipConfig to disable both.
+	ThemeEnvVar string
+
+	// SkipConfig disables the automatic theme.Resolve call inside app.New.
+	// By default app.New reorders Themes so Themes[0] reflects the user's
+	// $XDG_CONFIG_HOME/tuilib/config.yaml `theme:` field (and ThemeEnvVar,
+	// when set) — set this to true if you've already called theme.Resolve
+	// yourself, or if you want to pin the app to Themes[0] regardless.
+	SkipConfig bool
+
 	// DisableAutoEscPop turns off automatic esc→pop handling. When false
 	// (the default) esc pops the stack whenever depth > 1 and the active
 	// screen is not capturing keys.
@@ -106,14 +120,20 @@ type Model struct {
 	sb statusbar.Model
 }
 
-// New constructs an app shell. The root screen's SetTheme is called with
-// Themes[0] so the root renders in the initial palette immediately.
+// New constructs an app shell. By default it reorders Themes via
+// theme.Resolve so Themes[0] reflects the user's config file (and
+// ThemeEnvVar, when set) — pass SkipConfig=true to opt out. The root
+// screen's SetTheme is then called with the resulting Themes[0] so the
+// root renders in the initial palette immediately.
 func New(opts Options) Model {
 	if opts.Root == nil {
 		panic("app.New: Options.Root is required")
 	}
 	if len(opts.Themes) == 0 {
 		opts.Themes = []theme.Theme{theme.Dark()}
+	}
+	if !opts.SkipConfig {
+		opts.Themes = theme.Resolve(opts.Themes, opts.ThemeEnvVar)
 	}
 	if opts.QuitKey.Keys() == nil {
 		opts.QuitKey = key.NewBinding(

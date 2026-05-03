@@ -25,6 +25,7 @@ import (
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
 	apptabs "github.com/jsdrews/tuilib/examples/app/tabs"
+	dataalert "github.com/jsdrews/tuilib/examples/data/alert"
 	dataconfirm "github.com/jsdrews/tuilib/examples/data/confirm"
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
@@ -49,7 +50,7 @@ var entries = []entry{
 	{"Panes — border + title showcase", "Four panes demonstrating border styles, title positions, and slot-bracket variants.", paneshowcase.New},
 	{"List — filterable cities", "A filterable list.Model as a single-screen app.", datalist.New},
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
-	{"Table — filterable bubbles/table", "bubbles/table composed with filter.Model and pane, filtered inline. Status column uses ansi.CellColor so the selected-row bg stays intact across colored cells.", datatable.New},
+	{"Table — filterable + sortable cities", "table.Model with sticky header, per-column widths, h-scroll for wide tables, [/] to step sort column + s to toggle direction (City + Region sort lexically; Population sorts numerically via a custom Less that parses \"8.3M\"). Status column uses ansi.CellColor so the selected-row bg passes through colored cells.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
 	{"Loading — spinners while fetching", "List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch.", dataloading.New},
 	{"Drilldown — master-detail + push, with async fetches", "Cities list (loads on Init via tea.Tick) + detail list with focus cycling. Enter on either pane \"opens the focused selection\" — left-enter loads the detail (reqID tags drop stale results so hammering enter never races) and shifts focus right; right-enter pushes a child screen describing the attribute. Esc on the child pops back with parent state intact.", datadrilldown.New},
@@ -64,6 +65,7 @@ var entries = []entry{
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
 	{"Confirm — modal yes/no dialog", "Press d on a file to bring up a confirm modal via pkg/confirm; ConfirmedMsg/CancelledMsg flow back as tea.Msg, the parent dismisses and reports the outcome via app.Info.", dataconfirm.New},
+	{"Alert — modal acknowledgement dialog", "A list of mock operations; some succeed (statusbar info), some fail with an error-tinted modal alert via pkg/alert. DismissedMsg flows back as tea.Msg. Contrasts the lightweight statusbar pattern with the modal \"stop and acknowledge\" pattern.", dataalert.New},
 	{"Replace — atomic top-of-stack swap", "Press r on the city list (filter set, cursor moved) to swap in a fresh instance — depth stays at 1, no flicker. Push a city detail, bump the visit counter, then r to reset the counter without re-firing the parent's OnEnter.", appreplace.New},
 }
 
@@ -158,10 +160,11 @@ func entryNames() []string {
 
 func main() {
 	m := app.New(app.Options{
-		Root:     newRoot(),
-		Themes:   theme.Resolve(themecheck.Themes(), "TUILIB_THEME"),
-		Version:  "examples",
-		ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Root:        newRoot(),
+		Themes:      themecheck.Themes(),
+		ThemeEnvVar: "TUILIB_THEME",
+		Version:     "examples",
+		ThemeKey:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	})
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Println(err)
