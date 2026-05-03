@@ -80,6 +80,18 @@ type Column struct {
 // Cells beyond len(Columns) are ignored; missing cells render as empty.
 type Row []string
 
+// KeyedRow pairs a stable identity Key with the row's cells. Pass through
+// SetKeyedRows when the row source is polled so the cursor can re-bind to
+// the same Key after a refresh — when the row at the cursor's Key
+// reappears in the new set the cursor follows it; otherwise it falls back
+// to the clamped previous index. Use SelectedKey to read the current
+// row's identity. KeyedRow is a separate path (not a swap of the Row
+// type) so existing SetRows callers see no change.
+type KeyedRow struct {
+	Key   string
+	Cells []string
+}
+
 // Options configures a new table. Theme.Table() returns this pre-styled —
 // set Title/Columns/Rows/Filterable/Filter on the returned value.
 type Options struct {
@@ -133,6 +145,7 @@ type Options struct {
 type Model struct {
 	cols       []Column
 	rows       []Row
+	rowKeys    []string
 	visible    []Row
 	visibleIdx []int
 	cursor     int
@@ -364,10 +377,51 @@ func (m *Model) SetDimensions(w, h int) {
 }
 
 // SetRows replaces the row set, re-applies the current filter, redraws.
+// Cursor is preserved by visible index — fine for static datasets, but
+// callers polling a live source should prefer SetKeyedRows so the cursor
+// rebinds to the same logical row even when neighbours come and go.
 func (m *Model) SetRows(rows []Row) {
 	m.rows = append([]Row(nil), rows...)
+	m.rowKeys = nil
 	m.rebuildDistinct()
 	m.applyFilter()
+	m.refresh()
+}
+
+// SetKeyedRows replaces the row set with each row carrying a stable Key,
+// then snaps the cursor to whichever row in the new set shares the
+// previously-selected Key. When the previous Key has disappeared (row
+// removed from the source), the cursor falls back to the clamped
+// previous index so the user lands near where they were. The filter and
+// sort state are preserved across the swap. This is the primitive
+// pkg/poll uses to keep the user's place across periodic refreshes.
+func (m *Model) SetKeyedRows(rows []KeyedRow) {
+	prevKey, hadKey := m.SelectedKey()
+	prevCursor := m.cursor
+
+	m.rows = make([]Row, len(rows))
+	m.rowKeys = make([]string, len(rows))
+	for i, r := range rows {
+		m.rows[i] = append(Row(nil), r.Cells...)
+		m.rowKeys[i] = r.Key
+	}
+	m.rebuildDistinct()
+	m.applyFilter()
+
+	if hadKey {
+		for i, src := range m.visibleIdx {
+			if src >= 0 && src < len(m.rowKeys) && m.rowKeys[src] == prevKey {
+				m.cursor = i
+				m.refresh()
+				return
+			}
+		}
+	}
+	if last := len(m.visible) - 1; last >= 0 {
+		m.cursor = max(0, min(prevCursor, last))
+	} else {
+		m.cursor = 0
+	}
 	m.refresh()
 }
 
@@ -437,6 +491,23 @@ func (m Model) SelectedIndex() (int, bool) {
 		return 0, false
 	}
 	return m.visibleIdx[m.cursor], true
+}
+
+// SelectedKey returns the highlighted row's Key when the table was
+// populated via SetKeyedRows. ok is false when no row is selected, or
+// when the rows were set via SetRows (which carries no keys). Callers
+// that drive a polled source should track the selection by Key, not by
+// SelectedIndex, so re-fetches that reorder rows don't shift the
+// selection out from under the user.
+func (m Model) SelectedKey() (string, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.visibleIdx) {
+		return "", false
+	}
+	src := m.visibleIdx[m.cursor]
+	if src < 0 || src >= len(m.rowKeys) {
+		return "", false
+	}
+	return m.rowKeys[src], true
 }
 
 // Cursor returns the current cursor index into the visible (post-filter) set.
