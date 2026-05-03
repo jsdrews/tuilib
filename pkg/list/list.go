@@ -63,6 +63,14 @@ type Options struct {
 	Filter filter.Options
 }
 
+// KeyedItem is a list entry with a stable identity. Pass to SetKeyedItems
+// to preserve the cursor across data swaps even when items are reordered
+// or partially replaced — e.g. polled refreshes of a live data set.
+type KeyedItem struct {
+	Key     string
+	Display string
+}
+
 // Model is the list widget. Embed as a value; mutate via the setters.
 type Model struct {
 	items   []string
@@ -71,7 +79,10 @@ type Model struct {
 	// SelectedIndex so callers with parallel source data can recover the
 	// original (pre-filter) row position from a selection.
 	visibleIdx []int
-	cursor     int
+	// itemKeys parallels items when the list was populated via
+	// SetKeyedItems; nil when items are anonymous strings.
+	itemKeys []string
+	cursor   int
 
 	filter     filter.Model
 	filterable bool
@@ -343,10 +354,58 @@ func (m *Model) SetDimensions(w, h int) {
 }
 
 // SetItems replaces the item set, re-applies the current filter, and redraws.
+// Clears any per-item keys previously set via SetKeyedItems.
 func (m *Model) SetItems(items []string) {
 	m.items = append([]string(nil), items...)
+	m.itemKeys = nil
 	m.applyFilter()
 	m.refresh()
+}
+
+// SetKeyedItems replaces the item set with keyed entries and snaps the cursor
+// to the previously-selected Key after the swap (falling back to the clamped
+// previous cursor index when the key is gone). Use this for polled refreshes
+// of a live data set so the user's selection survives reordering or partial
+// replacement.
+func (m *Model) SetKeyedItems(items []KeyedItem) {
+	prevKey, hadKey := m.SelectedKey()
+	prevCursor := m.cursor
+	m.items = make([]string, len(items))
+	m.itemKeys = make([]string, len(items))
+	for i, it := range items {
+		m.items[i] = it.Display
+		m.itemKeys[i] = it.Key
+	}
+	m.applyFilter()
+	if hadKey {
+		for i, src := range m.visibleIdx {
+			if src >= 0 && src < len(m.itemKeys) && m.itemKeys[src] == prevKey {
+				m.cursor = i
+				m.refresh()
+				return
+			}
+		}
+	}
+	if last := len(m.visible) - 1; last >= 0 {
+		m.cursor = max(0, min(prevCursor, last))
+	} else {
+		m.cursor = 0
+	}
+	m.refresh()
+}
+
+// SelectedKey returns the Key of the currently highlighted item when the list
+// was populated via SetKeyedItems. ok is false when the visible set is empty
+// or when items are anonymous (no keys set).
+func (m Model) SelectedKey() (string, bool) {
+	if m.cursor < 0 || m.cursor >= len(m.visibleIdx) {
+		return "", false
+	}
+	src := m.visibleIdx[m.cursor]
+	if src < 0 || src >= len(m.itemKeys) {
+		return "", false
+	}
+	return m.itemKeys[src], true
 }
 
 // SetCursor moves the cursor (clamped to the visible range) and scrolls to

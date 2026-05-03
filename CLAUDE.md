@@ -64,7 +64,7 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
-   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/tree` all return a
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/tree`, `pkg/inspector` all return a
    bordered, titled render from `View()`. To put a label on a component,
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
@@ -78,7 +78,7 @@ example in `examples/`.
 
 10. **Components expose `Help() []key.Binding`.** Interactive components
     (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `tree`,
-    `form`) return the bindings they currently respond to. Screens compose these into their
+    `inspector`, `form`) return the bindings they currently respond to. Screens compose these into their
     own `Help()` so the hint strip updates as state changes — e.g. the
     focused field of a form, or whether a logview's filter is engaged.
     When state changes the relevant bindings (filter focused vs. blurred,
@@ -235,6 +235,34 @@ example in `examples/`.
     `IsCapturingKeys`, `Help()` composition, and ZStack placement all
     follow rule 20. See `examples/data/alert`.
 
+22. **For auto-refresh, use `pkg/poll` + keyed rows.** When data backing a
+    view changes over time (k8s deployments, Prefect runs, REST endpoints),
+    drive the cadence with `poll.New(poll.Options{Interval: 2*time.Second})`,
+    batch its `Init()` into your screen's Init, and forward every `tea.Msg`
+    to `m.poll.Update(msg)`. When the interval elapses, `Update` returns
+    `poll.RefreshMsg` — your screen matches that and kicks off the fetch
+    (typed result message, then `MarkRefreshed()` + push the data into the
+    component). Pause/Resume/SetInterval/Refresh all return `tea.Cmd`s that
+    handle the rescheduling — bump the cadence in response to a key, don't
+    reach inside.
+
+    Pair the poll with `SetKeyedItems([]list.KeyedItem{Key,Display})` (on
+    `pkg/list`) or `SetKeyedRows([]table.KeyedRow{Key,Cells})` (on
+    `pkg/table`) so the cursor sticks to the same row by Key after the
+    swap, even when the underlying set has reordered or partially
+    changed. Without keys, every refresh would either reset the cursor
+    or drift it onto unrelated rows. `SelectedKey()` is the pre-swap
+    side of the same primitive — read it before refetch, pass it back
+    into the snap. `pkg/inspector` does the same dance internally on
+    `SetFields` (preserves expansion + cursor by row path), so its
+    auto-refresh is just "fetch new fields, call SetFields."
+
+    The `app.Info` / `app.Error` statusbar (rule 18) is the right place
+    for transient refresh feedback ("refreshed 14 deployments"); the
+    statusbar auto-clears so it doesn't accumulate. For a persistent
+    "last refreshed Xs ago" indicator, mutate the component's title via
+    `SetTitle` from a periodic UI tick — see `examples/data/poll`.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -351,6 +379,8 @@ If you genuinely can't use the app shell, here are the row costs:
 | `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `tree.Model` (Searchable=false) | caller-controlled, all body |
 | `tree.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `inspector.Model` (Filterable=false) | caller-controlled, all body |
+| `inspector.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 
 Typical body height:
 - Plain body pane: `m.h - 2`
@@ -415,6 +445,15 @@ path.
   typing `G` into the filter doesn't trigger the jump. Long rows scroll
   horizontally with `←→` / `h` / `l` when `HScrollbar` is enabled (default
   via `theme.List()`).
+- **Keyed items / rows:** `pkg/list` (`SetKeyedItems` + `KeyedItem{Key,
+  Display}` + `SelectedKey`) and `pkg/table` (`SetKeyedRows` +
+  `KeyedRow{Key, Cells}` + `SelectedKey`) are the auto-refresh primitive.
+  When the data backing a list/table changes over time, swap rows via
+  the keyed setter so the cursor snaps to the same Key after the swap;
+  the previous-cursor index is the fallback only when the key is gone.
+  `SetItems`/`SetRows` clear any keys, so reach for the keyed variant
+  consistently across a screen — mixing them resets the keys mid-flight.
+  Pair with `pkg/poll` for the cadence; see `examples/data/poll`.
 - **Table component:** `pkg/table` is the cursor-driven tabular companion
   to `pkg/list`. `Column{Title, Width, Align, Sortable, Less}` declares
   the layout; rows are `[]string` cells. The header pins to the top of
@@ -450,6 +489,54 @@ path.
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
   `lipgloss.Render` so the selected-row background passes through
   unbroken (rule 17). See `examples/data/table` and `theme.Table()`.
+- **Inspector component:** `pkg/inspector` is a two-column label/value
+  viewer for structured records — k8s manifests, REST responses, Prefect
+  run details. `Field{Label, Value, Children}` composes fields by
+  value; nested objects/arrays render below their parent with indent +
+  ▸/▾ expand glyphs. Sibling labels at the same parent auto-align so
+  key:value rows read in a clean column. `inspector.FromMap` /
+  `inspector.FromAny` convert `json.Unmarshal` output
+  (`map[string]any` / `[]any` / scalars) into `[]Field` so REST and
+  kubectl-style payloads land directly without a hand-written
+  converter. Same nav verbs as `pkg/tree` (`g`/`G`, `ctrl+u`/`ctrl+d`,
+  `↑↓`/`j`/`k`, `right`/`l`/space to expand, `left`/`h` to collapse or
+  ascend), same `Filterable` story (`/` searches both Label and Value;
+  `\` toggles filter mode that hides non-matching subtrees while
+  keeping ancestors visible; `n`/`N` step matches). `SetFields` swaps
+  the record while preserving expansion state by row path and pinning
+  the cursor to its previous path when it survives the swap — the
+  primitive that auto-refresh will lean on. Carry
+  `Cursor()`/`Query()` across `SetTheme` rebuilds via
+  `SetCursor`/`SetQuery`. See `examples/data/inspector` and
+  `theme.Inspector()`.
+- **Inline metrics:** `pkg/metrics` is a small set of cell-fitting renderers
+  for the monitoring shape — `Badge(ok, warn, down)` for status-count
+  summaries ("12✓ 3⚠ 1✗"), `Ratio(done, total)` for severity-colored
+  "N/M" indicators ("6/6" green, "3/4" yellow, "0/4" red), `Bar(value,
+  max, width)` for fixed-width progress bars, `Spark(values, width)` for
+  8-step block sparklines that resample to fit. All four return ANSI
+  foreground-only strings via `pkg/ansi.CellColor`, so embedding them in
+  a `pkg/table` cell keeps the selected-row background intact (rule 17).
+  The package is rendering-only — callers own any history buffer (e.g.
+  for `Spark`, append each tick's value and trim to a fixed window). For
+  non-severity colorization (e.g. CPU usage that should always be blue
+  when low and only flush red at saturation), use `BarStyled` /
+  `SparkStyled` with an explicit ANSI palette index. See
+  `examples/data/metrics` and rule 22 (auto-refresh).
+- **Poll component:** `pkg/poll` is a thin interval ticker for screens
+  that auto-refresh remote state. Construct with `poll.New(poll.Options
+  {Interval: d})`, batch `m.poll.Init()` into the screen's Init, and
+  forward every `tea.Msg` to `m.poll.Update`. When the interval elapses
+  the model emits `poll.RefreshMsg` (and re-arms the next tick); your
+  screen matches that and runs the fetch, then calls `MarkRefreshed()`
+  once the data lands so `LastRefresh()` reflects only successful
+  refreshes. `Pause`/`Resume`/`SetInterval`/`Refresh` all return
+  `tea.Cmd`s and bump an internal generation so any in-flight tick from
+  the prior cadence is dropped on arrival — your screen never sees a
+  stale RefreshMsg. Pair with the keyed-row APIs on `pkg/list` /
+  `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor
+  + expansion state survive every swap. See `examples/data/poll` and
+  rule 22.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

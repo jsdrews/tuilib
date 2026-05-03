@@ -25,6 +25,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
+	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -417,6 +418,29 @@ func (t Theme) Logview() logview.Options {
 // passing to tree.New.
 func (t Theme) Tree() tree.Options {
 	return tree.Options{
+		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
+		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
+		ActiveColor:      t.BorderActive,
+		InactiveColor:    t.BorderInactive,
+		ActiveBorder:     lipgloss.NormalBorder(),
+		InactiveBorder:   lipgloss.NormalBorder(),
+		SlotBrackets:     pane.SlotBracketsNone,
+		HScrollbar:       true,
+		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
+		Filter:           t.Filter(),
+	}
+}
+
+// Inspector returns inspector.Options pre-filled with theme colors. Set
+// Title, Fields, Filterable, and InitialDepth on the returned value.
+func (t Theme) Inspector() inspector.Options {
+	return inspector.Options{
+		// Labels use Muted (semantic "secondary text"), not Subtle —
+		// CurrentLineStyle below sets bg=Subtle for the cursor row, and
+		// dimming labels to Subtle too would make them invisible on that
+		// row. Muted is reliably distinct from Subtle across themes.
+		LabelStyle:       lipgloss.NewStyle().Foreground(t.Muted),
+		ValueStyle:       lipgloss.NewStyle().Foreground(t.Current),
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
