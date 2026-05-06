@@ -455,12 +455,26 @@ path.
   consistently across a screen — mixing them resets the keys mid-flight.
   Pair with `pkg/poll` for the cadence; see `examples/data/poll`.
 - **Table component:** `pkg/table` is the cursor-driven tabular companion
-  to `pkg/list`. `Column{Title, Width, Align, Sortable, Less}` declares
-  the layout; rows are `[]string` cells. The header pins to the top of
-  the body (it does not scroll out as the cursor moves down) but scrolls
-  horizontally with the body so column titles stay aligned with their
-  data. Cell truncation is ANSI-aware via `x/ansi.Cut`, so `Width` is
-  the visible cell width. Same nav verbs as list (`g`/`G`, `ctrl+u/d`,
+  to `pkg/list`. `Column{Title, Width, Align, Sortable, Less, Flex,
+  MaxWidth}` declares the layout; rows are `[]string` cells. The
+  header pins to the top of the body (it does not scroll out as the
+  cursor moves down) but scrolls horizontally with the body so column
+  titles stay aligned with their data. Cell truncation is ANSI-aware
+  via `x/ansi.Cut`, so `Width` is the visible cell width. Sizing
+  modes: `Width > 0, Flex == 0` → fixed; `Width == 0, Flex == 0` →
+  content-auto (sized to max of title and any cell value, ANSI
+  stripped, floor 4); `Flex > 0` → column absorbs a share of leftover
+  inner width by Flex weight after every column's base is accounted
+  for (Width acts as a minimum). `MaxWidth` (when > 0) caps any
+  column's effective width — when a flex column hits its cap, the
+  surplus redistributes to remaining uncapped flex columns; when all
+  flex columns are capped, leftover space stays unused on the right
+  edge. Effective widths recompute on
+  `SetRows`/`SetKeyedRows`/`SetColumns`/`SetDimensions`, so flex
+  columns reflow on resize and content-auto re-fits when data swaps.
+  When the table is narrower than the sum of base widths, flex
+  columns don't grow — overflow goes to h-scroll, never to a column
+  reflow surprise. Same nav verbs as list (`g`/`G`, `ctrl+u/d`,
   `↑↓`/`j`/`k`), same `Filterable` story (filter matches
   case-insensitively across all cells, with ANSI stripped before
   matching). Filter input is split on whitespace into AND-ed terms; a
@@ -488,7 +502,15 @@ path.
   `SetSort(col, desc)` the same way you carry `Cursor()`/`Value()`. For
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
   `lipgloss.Render` so the selected-row background passes through
-  unbroken (rule 17). See `examples/data/table` and `theme.Table()`.
+  unbroken (rule 17). Internal separators are configurable via
+  `Options.Borders{Vertical, HeaderRule}` — both fields are pre-styled
+  glyph strings (use `pkg/ansi.CellColor` so the selected-row bg passes
+  through). `Vertical` replaces the inter-column space with `" <glyph> "`;
+  `HeaderRule` repeats its first visible rune as a horizontal rule
+  between header and data rows. `theme.Table()` ships with subdued
+  light-line defaults (`│` and `─` in palette index 240); override per
+  screen for a different glyph or color, or set fields to `""` to
+  disable. See `examples/data/table` and `theme.Table()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by

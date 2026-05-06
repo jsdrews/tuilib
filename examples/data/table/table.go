@@ -2,6 +2,15 @@
 // tabular view with a sticky header. Cells use ansi.CellColor for the
 // status column so the selected-row background passes through unbroken
 // across colored cells.
+//
+// Column sizing modes shown side-by-side:
+//   - City — Flex: 1, MaxWidth: 28. Expands to absorb leftover space
+//     up to a cap so it doesn't grow unboundedly on wide terminals.
+//     Resize and watch the column stretch up to 28 then stop.
+//   - Region — Width: 16, classic fixed width.
+//   - Population — Width: 12, fixed width (right-aligned).
+//   - Status — Width: 0, content-auto. Sizes to the widest cell value
+//     (here "● degraded" with ANSI stripped) plus the title floor.
 package table
 
 import (
@@ -107,16 +116,22 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	opts.Filterable = true
 	opts.Filter.Placeholder = "filter, region:europe, ~^new…"
 	opts.Columns = []table.Column{
-		{Title: "City", Width: 20, Sortable: true},
+		// Flex: 1 — City absorbs leftover space. Width: 20 acts as
+		// the minimum (never shrinks below "San Francisco");
+		// MaxWidth: 28 caps growth so the column doesn't get
+		// unwieldy on wide terminals.
+		{Title: "City", Width: 20, Sortable: true, Flex: 1, MaxWidth: 28},
+		// Fixed.
 		{Title: "Region", Width: 16, Sortable: true},
-		// Population cells are "8.3M" / "20.4M" — sort numerically by
-		// parsing the leading float, not lexically (else "8.3M" sorts
-		// after "20.4M").
+		// Fixed. Population cells are "8.3M" / "20.4M" — sort
+		// numerically by parsing the leading float, not lexically
+		// (else "8.3M" sorts after "20.4M").
 		{Title: "Population", Width: 12, Sortable: true, Less: popLess},
-		// Status sorts by severity (healthy < degraded < down), not by
-		// the leading icon glyph. Press s with Status active to flip
-		// to "errors first".
-		{Title: "Status", Width: 12, Sortable: true, Less: statusLess},
+		// Width: 0 → content-auto. Sizes to max(title, longest cell
+		// with ANSI stripped). Status sorts by severity (healthy <
+		// degraded < down), not by the leading icon glyph. Press s
+		// with Status active to flip to "errors first".
+		{Title: "Status", Sortable: true, Less: statusLess},
 	}
 	opts.Rows = allRows
 	s.tab = table.New(opts)

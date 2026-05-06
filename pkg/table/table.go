@@ -44,6 +44,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -55,8 +56,13 @@ import (
 )
 
 // Column declares one column's title, width (in visible cells), and cell
-// alignment. Width must be > 0; if you pass 0 the column auto-sizes to
-// max(visible(title), 4).
+// alignment. Width sizing modes:
+//   - Width > 0, Flex == 0: fixed width.
+//   - Width == 0, Flex == 0: content-auto — sized to the widest of
+//     title and any cell value (ANSI-aware, floor of 4).
+//   - Flex > 0: column expands to absorb a share of leftover horizontal
+//     space, weighted by Flex. Width (or content-auto when Width==0)
+//     acts as a minimum; MaxWidth (when > 0) caps growth.
 type Column struct {
 	Title string
 	Width int
@@ -74,6 +80,22 @@ type Column struct {
 	// text — fine for plain string columns. Set Less for numeric, date,
 	// or unit-aware columns ("8.3M") that need custom parsing.
 	Less func(a, b string) bool
+	// Flex, when > 0, makes this column absorb a share of leftover
+	// horizontal space after every column's base width is accounted for.
+	// Multiple flex columns split the remainder proportionally
+	// (Flex=1 + Flex=2 → 1:2 split). The base width acts as a minimum:
+	// a flex column never shrinks below it, but it does grow when room
+	// is available. When the table is narrower than the sum of base
+	// widths, flex columns get no expansion (extra space goes to the
+	// pane's horizontal scroll, not column reflow).
+	Flex int
+	// MaxWidth, when > 0, caps the column's effective width — flex
+	// growth never pushes it above this value. When a flex column hits
+	// its cap, the surplus redistributes to the remaining uncapped
+	// flex columns by their weights (iteratively, so chains of caps
+	// are handled). When every flex column is capped, leftover space
+	// stays unused on the right edge of the row.
+	MaxWidth int
 }
 
 // Row is one row of cell strings, positionally aligned to Options.Columns.
@@ -139,11 +161,36 @@ type Options struct {
 	// Filter configures the embedded filter.Model. Ignored when
 	// Filterable=false. Theme.Table() pre-fills this from Theme.Filter().
 	Filter filter.Options
+
+	// Borders configures table-internal separators. Each field is emitted
+	// verbatim, so pre-style with pkg/ansi.CellColor (foreground-only) so
+	// the selected-row background passes through. Empty fields disable
+	// the corresponding separator. Theme.Table() sets sensible defaults.
+	Borders Borders
+}
+
+// Borders controls the two interior separators a table draws — the
+// inter-column glyph and the horizontal rule below the header. Both
+// fields are pre-styled glyph strings; pass them through pkg/ansi.CellColor
+// (foreground-only) so the selected row's background passes through
+// unbroken (rule 17). Set a field to "" to disable it.
+type Borders struct {
+	// Vertical, when non-empty, replaces the single-space inter-column
+	// separator with " <glyph> " (visible width 3). Typical values:
+	// "│" (light), "┃" (heavy), "╎" (dashed). Pre-style the glyph.
+	Vertical string
+	// HeaderRule, when non-empty, draws a horizontal rule between the
+	// header row and the first data row by repeating the field's first
+	// visible rune to the table's full visible width. Typical values:
+	// "─" (light), "═" (double), "·" (dotted). Pre-style the glyph; the
+	// SGR escapes are extracted and re-applied around the repeated rune.
+	HeaderRule string
 }
 
 // Model is the table widget. Embed as a value; mutate via the setters.
 type Model struct {
 	cols       []Column
+	widths     []int // effective per-column visible widths (base + flex share)
 	rows       []Row
 	rowKeys    []string
 	visible    []Row
@@ -170,6 +217,9 @@ type Model struct {
 	selectedStyle lipgloss.Style
 	cellStyle     lipgloss.Style
 	hScrollbar    bool
+
+	colSep     string
+	headerRule string
 }
 
 var keys = struct {
@@ -193,14 +243,9 @@ func New(opts Options) Model {
 		opts.Title = "Table"
 	}
 	cols := append([]Column(nil), opts.Columns...)
-	for i, c := range cols {
-		if c.Width <= 0 {
-			w := ansi.StringWidth(c.Title)
-			if w < 4 {
-				w = 4
-			}
-			cols[i].Width = w
-		}
+	colSep := " "
+	if opts.Borders.Vertical != "" {
+		colSep = " " + opts.Borders.Vertical + " "
 	}
 	m := Model{
 		cols:          cols,
@@ -211,6 +256,8 @@ func New(opts Options) Model {
 		selectedStyle: opts.SelectedStyle,
 		cellStyle:     opts.CellStyle,
 		hScrollbar:    opts.HScrollbar,
+		colSep:        colSep,
+		headerRule:    opts.Borders.HeaderRule,
 	}
 	m.visible = m.rows
 	m.visibleIdx = identityIndex(len(m.rows))
@@ -238,6 +285,7 @@ func New(opts Options) Model {
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
 	})
+	m.recomputeWidths()
 	m.refresh()
 	return m
 }
@@ -373,6 +421,7 @@ func (m *Model) SetDimensions(w, h int) {
 		bodyH = max(0, h-3)
 	}
 	m.body.SetDimensions(w, bodyH)
+	m.recomputeWidths()
 	m.refresh()
 }
 
@@ -384,6 +433,7 @@ func (m *Model) SetRows(rows []Row) {
 	m.rows = append([]Row(nil), rows...)
 	m.rowKeys = nil
 	m.rebuildDistinct()
+	m.recomputeWidths()
 	m.applyFilter()
 	m.refresh()
 }
@@ -406,6 +456,7 @@ func (m *Model) SetKeyedRows(rows []KeyedRow) {
 		m.rowKeys[i] = r.Key
 	}
 	m.rebuildDistinct()
+	m.recomputeWidths()
 	m.applyFilter()
 
 	if hadKey {
@@ -425,20 +476,12 @@ func (m *Model) SetKeyedRows(rows []KeyedRow) {
 	m.refresh()
 }
 
-// SetColumns replaces the column layout. Cell text is preserved; widths
-// re-apply on the next refresh.
+// SetColumns replaces the column layout. Cell text is preserved;
+// effective widths recompute on the next refresh.
 func (m *Model) SetColumns(cols []Column) {
 	m.cols = append([]Column(nil), cols...)
-	for i, c := range m.cols {
-		if c.Width <= 0 {
-			w := ansi.StringWidth(c.Title)
-			if w < 4 {
-				w = 4
-			}
-			m.cols[i].Width = w
-		}
-	}
 	m.rebuildDistinct()
+	m.recomputeWidths()
 	m.refresh()
 }
 
@@ -829,9 +872,124 @@ func (m Model) halfPage() int {
 	return 1
 }
 
+// recomputeWidths fills m.widths with the effective per-column visible
+// width. Each column gets a base width:
+//   - Width > 0           → Width
+//   - Width == 0, no rows → max(visible(Title), 4)
+//   - Width == 0, rows    → max(visible(Title), max cell visible width, 4)
+//
+// Then any leftover horizontal space (body inner width minus base
+// widths and inter-column separators) is distributed across columns
+// with Flex > 0 in proportion to their Flex weights. Flex columns
+// only ever grow — never shrink below their base. If the body is
+// narrower than the sum of bases, no expansion happens; the pane's
+// h-scroll handles overflow.
+func (m *Model) recomputeWidths() {
+	n := len(m.cols)
+	m.widths = make([]int, n)
+	for i, c := range m.cols {
+		if c.Width > 0 {
+			m.widths[i] = c.Width
+			continue
+		}
+		w := ansi.StringWidth(c.Title)
+		for _, r := range m.rows {
+			if i < len(r) {
+				if cw := ansi.StringWidth(ansi.Strip(r[i])); cw > w {
+					w = cw
+				}
+			}
+		}
+		if w < 4 {
+			w = 4
+		}
+		m.widths[i] = w
+	}
+
+	hasFlex := false
+	for _, c := range m.cols {
+		if c.Flex > 0 {
+			hasFlex = true
+			break
+		}
+	}
+	if !hasFlex {
+		return
+	}
+	inner := m.body.VisibleWidth()
+	if inner <= 0 {
+		return
+	}
+	sepW := ansi.StringWidth(m.colSep)
+	used := 0
+	if n > 1 {
+		used = (n - 1) * sepW
+	}
+	for _, w := range m.widths {
+		used += w
+	}
+	leftover := inner - used
+	if leftover <= 0 {
+		return
+	}
+	uncapped := make([]int, 0, n)
+	for i, c := range m.cols {
+		if c.Flex > 0 {
+			uncapped = append(uncapped, i)
+		}
+	}
+	// Iterate: distribute proportionally; if a column would exceed its
+	// MaxWidth, clamp it and remove from the pool; redistribute remaining
+	// leftover among the rest. Terminates because each iteration either
+	// reaches equilibrium (no cap hit) or removes ≥1 column.
+	for len(uncapped) > 0 && leftover > 0 {
+		totalFlex := 0
+		for _, i := range uncapped {
+			totalFlex += m.cols[i].Flex
+		}
+		if totalFlex == 0 {
+			break
+		}
+		nextUncapped := uncapped[:0:0]
+		distributed := 0
+		anyCapped := false
+		for k, i := range uncapped {
+			var share int
+			if k == len(uncapped)-1 {
+				share = leftover - distributed
+			} else {
+				share = leftover * m.cols[i].Flex / totalFlex
+			}
+			if cap := m.cols[i].MaxWidth; cap > 0 && m.widths[i]+share > cap {
+				share = cap - m.widths[i]
+				if share < 0 {
+					share = 0
+				}
+				anyCapped = true
+			} else {
+				nextUncapped = append(nextUncapped, i)
+			}
+			m.widths[i] += share
+			distributed += share
+		}
+		leftover -= distributed
+		if !anyCapped {
+			break
+		}
+		uncapped = nextUncapped
+	}
+}
+
 // dataRows returns the body height available for data rows (the pane's
-// inner viewport minus the one row reserved for the header).
-func (m Model) dataRows() int { return max(0, m.body.VisibleRows()-1) }
+// inner viewport minus the one row reserved for the header, and one
+// additional row when Borders.HeaderRule is set).
+func (m Model) dataRows() int {
+	reserved := 1
+	if m.headerRule != "" {
+		reserved = 2
+	}
+	return max(0, m.body.VisibleRows()-reserved)
+}
 
 // adjustViewStart slides viewStart to keep the cursor on screen within
 // the dataRows() window.
@@ -858,7 +1016,7 @@ func (m *Model) adjustViewStart() {
 
 func (m *Model) refresh() {
 	m.adjustViewStart()
-	header := m.headerStyle.Render(renderRow(m.headerCells(), m.cols))
+	header := m.headerStyle.Render(renderRow(m.headerCells(), m.cols, m.widths, m.colSep))
 
 	dr := m.dataRows()
 	end := m.viewStart + dr
@@ -868,9 +1026,13 @@ func (m *Model) refresh() {
 
 	var b strings.Builder
 	b.WriteString(header)
+	if m.headerRule != "" {
+		b.WriteByte('\n')
+		b.WriteString(buildRule(m.headerRule, ansi.StringWidth(header)))
+	}
 	for i := m.viewStart; i < end; i++ {
 		b.WriteByte('\n')
-		row := renderRow([]string(m.visible[i]), m.cols)
+		row := renderRow([]string(m.visible[i]), m.cols, m.widths, m.colSep)
 		if i == m.cursor {
 			b.WriteString(m.selectedStyle.Render(row))
 		} else {
@@ -1059,19 +1221,26 @@ func (m Model) headerCells() []string {
 	return out
 }
 
-// renderRow lays cells out across cols with one space between columns.
-// Each cell is ANSI-aware truncated/padded to its column width and aligned
-// per column.Align.
-func renderRow(cells []string, cols []Column) string {
+// renderRow lays cells out across cols joined by sep. Each cell is
+// ANSI-aware truncated/padded to widths[i] and aligned per col.Align.
+// widths is the effective width per column (Column.Width plus any flex
+// share); pass it from m.widths so the same row geometry is used by
+// header, data rows, and the header rule. sep is " " by default; with
+// Options.Borders.Vertical set, it becomes " <glyph> ".
+func renderRow(cells []string, cols []Column, widths []int, sep string) string {
 	parts := make([]string, len(cols))
 	for i, col := range cols {
 		cell := ""
 		if i < len(cells) {
 			cell = cells[i]
 		}
-		parts[i] = formatCell(cell, col.Width, col.Align)
+		w := 0
+		if i < len(widths) {
+			w = widths[i]
+		}
+		parts[i] = formatCell(cell, w, col.Align)
 	}
-	return strings.Join(parts, " ")
+	return strings.Join(parts, sep)
 }
 
 // formatCell pads or truncates s to width visible cells, applying align.
@@ -1104,4 +1273,48 @@ func identityIndex(n int) []int {
 		out[i] = i
 	}
 	return out
+}
+
+// buildRule expands a styled glyph string into a horizontal rule of the
+// given visible width. The rule's first non-control rune is the glyph;
+// any leading SGR escapes form the prefix and any trailing bytes form
+// the suffix, so a value like "\x1b[38;5;240m─\x1b[39m" expands to one
+// open SGR + repeated glyph + one close SGR. When the input has no
+// visible rune, returns an empty string.
+func buildRule(styledGlyph string, width int) string {
+	if styledGlyph == "" || width <= 0 {
+		return ""
+	}
+	prefix, glyph, suffix, ok := splitGlyphStyle(styledGlyph)
+	if !ok {
+		return ""
+	}
+	return prefix + strings.Repeat(string(glyph), width) + suffix
+}
+
+// splitGlyphStyle splits a styled-glyph string into its leading SGR
+// prefix, first visible rune, and trailing suffix. CSI SGR sequences
+// (\x1b[...m) before the first visible rune are absorbed into prefix;
+// everything after the rune (including the closing \x1b[39m) is suffix.
+func splitGlyphStyle(s string) (prefix string, glyph rune, suffix string, ok bool) {
+	i := 0
+	for i < len(s) {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			if j >= len(s) {
+				return "", 0, "", false
+			}
+			i = j + 1
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError {
+			return "", 0, "", false
+		}
+		return s[:i], r, s[i+size:], true
+	}
+	return "", 0, "", false
 }
