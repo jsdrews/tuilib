@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/alert"
+	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/filter"
@@ -388,6 +389,10 @@ func (t Theme) Table() table.Options {
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
+		Borders: table.Borders{
+			Vertical:   ansi.CellColor(240, "│"),
+			HeaderRule: ansi.CellColor(240, "─"),
+		},
 	}
 }
 
