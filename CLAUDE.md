@@ -166,6 +166,16 @@ example in `examples/`.
     22 to survive non-ANSI-aware truncation in upstream `runewidth`.)
     See `examples/data/table/table.go` Status column.
 
+    For URL cells, wrap the visible label with `ansi.Hyperlink(url,
+    text)` so shift-click / cmd-click in alacritty/tmux/kitty/iTerm2
+    launches the full URL even when the column truncates the display
+    text. Bare URL strings get cut mid-host on narrow columns and
+    break the launched URL; OSC 8 decouples the underlying link from
+    the visible label, and `x/ansi.Cut` preserves both ends of the
+    OSC envelope across truncation. `ansi.ExtractHyperlink(cell)`
+    pulls the URL back out when the screen needs to handle "open in
+    browser" programmatically rather than via terminal click.
+
 18. **Send transient feedback through `app.Info` / `app.Error` /
     `app.ClearStatus`.** Screens don't touch the statusbar directly — they
     return one of these `tea.Cmd`s from `Update` and the shell paints the

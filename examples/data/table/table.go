@@ -11,6 +11,12 @@
 //   - Population — Width: 12, fixed width (right-aligned).
 //   - Status — Width: 0, content-auto. Sizes to the widest cell value
 //     (here "● degraded" with ANSI stripped) plus the title floor.
+//
+// The Wiki column wraps each city's Wikipedia URL in an OSC 8
+// hyperlink via ansi.Hyperlink. The visible label ("wiki ↗") is short
+// so it never truncates, but even on a column squeezed to "wi" the
+// underlying URL is intact — shift-click in alacritty/tmux/kitty
+// launches the full Wikipedia page in the browser.
 package table
 
 import (
@@ -132,14 +138,36 @@ func (s *Screen) SetTheme(t theme.Theme) {
 		// degraded < down), not by the leading icon glyph. Press s
 		// with Status active to flip to "errors first".
 		{Title: "Status", Sortable: true, Less: statusLess},
+		// OSC 8 hyperlinks — shift-click to launch each city's
+		// Wikipedia page. The visible label is short so the cell
+		// renders cleanly, but the underlying URL is the full
+		// Wikipedia URL; ansi.Cut preserves the OSC envelope across
+		// truncation, so even at narrow widths the launched URL is
+		// the original.
+		{Title: "Wiki", Width: 7},
 	}
-	opts.Rows = allRows
+	opts.Rows = make([]table.Row, len(allRows))
+	for i, r := range allRows {
+		opts.Rows[i] = append(table.Row{}, r...)
+		opts.Rows[i] = append(opts.Rows[i], wikiCell(r[0]))
+	}
 	s.tab = table.New(opts)
 	if value != "" {
 		s.tab.SetValue(value)
 	}
 	s.tab.SetCursor(cursor)
 	s.tab.SetSort(sortCol, sortDesc)
+}
+
+// wikiCell builds an OSC 8 hyperlinked cell pointing at the city's
+// Wikipedia page. Display text is "wiki ↗"; the underlying URL is the
+// full Wikipedia URL. ansi.Hyperlink emits an OSC 8 envelope that
+// x/ansi.Cut preserves across truncation, so the launched URL survives
+// even when the column is squeezed to "wi".
+func wikiCell(city string) string {
+	slug := strings.ReplaceAll(city, " ", "_")
+	url := "https://en.wikipedia.org/wiki/" + slug
+	return ansi.Hyperlink(url, "wiki ↗")
 }
 
 func popLess(a, b string) bool {

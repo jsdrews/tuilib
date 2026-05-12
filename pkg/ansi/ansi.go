@@ -36,3 +36,60 @@ func CellColor(n int, text string) string {
 		return fmt.Sprintf("\x1b[38;5;%dm%s\x1b[39m", n, text)
 	}
 }
+
+// Hyperlink wraps text in an OSC 8 hyperlink escape so terminals that
+// support it (alacritty, tmux, kitty, wezterm, iTerm2) launch url on
+// click. The wrapper is invisible to terminal width calculation and
+// x/ansi.Cut preserves both the open and close sequences across
+// truncation, so a long URL stays attached to its cell even when the
+// visible label is cut to fit a narrow column.
+//
+// Use this in pkg/table cells when you want shift-click / cmd-click to
+// open the full URL regardless of column width. Bare URL text would be
+// truncated mid-string and break the launched URL; the OSC 8 envelope
+// decouples display text from the underlying link.
+func Hyperlink(url, text string) string {
+	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}
+
+// ExtractHyperlink pulls the url and visible text out of a string
+// wrapped by Hyperlink. ok is false when s isn't an OSC 8 envelope, so
+// callers can treat the cell as a bare string in that case. Useful in a
+// screen's Update when "press o to open the focused row's URL" needs
+// the original target — shift-click handles the common case at the
+// terminal level, but programmatic open paths need the URL back.
+func ExtractHyperlink(s string) (url, text string, ok bool) {
+	const open = "\x1b]8;;"
+	const sep = "\x1b\\"
+	const close = "\x1b]8;;\x1b\\"
+	if len(s) < len(open)+len(sep)+len(close) || s[:len(open)] != open {
+		return "", "", false
+	}
+	rest := s[len(open):]
+	i := indexOf(rest, sep)
+	if i < 0 {
+		return "", "", false
+	}
+	url = rest[:i]
+	rest = rest[i+len(sep):]
+	if len(rest) < len(close) || rest[len(rest)-len(close):] != close {
+		return "", "", false
+	}
+	text = rest[:len(rest)-len(close)]
+	return url, text, true
+}
+
+// indexOf is a small substring search local to this file so the package
+// stays dependency-free (no "strings" import for one call).
+func indexOf(haystack, needle string) int {
+	n, m := len(haystack), len(needle)
+	if m == 0 {
+		return 0
+	}
+	for i := 0; i+m <= n; i++ {
+		if haystack[i:i+m] == needle {
+			return i
+		}
+	}
+	return -1
+}
