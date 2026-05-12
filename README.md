@@ -108,7 +108,7 @@ handles its own state in `Update`.
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
 | `pkg/theme` | Single palette struct + per-component `Options` builders. `app.New` resolves the initial theme from `Options.ThemeEnvVar` + the user config file automatically (set `SkipConfig=true` to opt out) |
 | `pkg/config` | YAML user-config at `~/.config/tuilib/config.yaml`. Pure data + I/O; opt-in (library never writes). Today carries `Theme`; expands as components grow user-tunable knobs |
-| `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in table cells (or any context that wraps content in its own SGR with a background); the foreground-only `\x1b[39m` reset preserves the outer background where lipgloss's full `\x1b[0m` would clobber it |
+| `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in table cells (or any context that wraps content in its own SGR with a background); the foreground-only `\x1b[39m` reset preserves the outer background where lipgloss's full `\x1b[0m` would clobber it. `Hyperlink(url, text)` wraps a label in an OSC 8 hyperlink so shift-click in alacritty/tmux/kitty/iTerm2 opens the full URL — and `x/ansi.Cut` preserves the envelope across truncation, so narrow columns don't break the launched URL. `ExtractHyperlink(cell)` pulls the URL back out for programmatic open-in-browser |
 
 > **Components own their pane.** Every interactive component (`pane`,
 > `filter`, `list`, `table`, `input`, `toggle`, `logview`, `tree`) bundles
