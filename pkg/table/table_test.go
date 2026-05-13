@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -308,6 +309,124 @@ func TestMaxWidthBothCappedLeavesUnused(t *testing.T) {
 	if m.widths[0] != 10 || m.widths[1] != 10 {
 		t.Errorf("widths = [%d,%d], want [10,10]", m.widths[0], m.widths[1])
 	}
+}
+
+func TestColumnEdgesDefaultSep(t *testing.T) {
+	// Three 10-wide columns separated by a single space → edges at 0, 11, 22.
+	m := New(Options{
+		Width:         60,
+		Height:        5,
+		Columns:       []Column{{Title: "a", Width: 10}, {Title: "b", Width: 10}, {Title: "c", Width: 10}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	got := m.columnEdges()
+	want := []int{0, 11, 22}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("columnEdges = %v, want %v", got, want)
+	}
+}
+
+func TestColumnEdgesVerticalSep(t *testing.T) {
+	// Vertical sep is " │ " — visible width 3. Edges at 0, 10+3=13, 13+10+3=26.
+	m := New(Options{
+		Width:         60,
+		Height:        5,
+		Columns:       []Column{{Title: "a", Width: 10}, {Title: "b", Width: 10}, {Title: "c", Width: 10}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+		Borders:       Borders{Vertical: "│"},
+	})
+	got := m.columnEdges()
+	want := []int{0, 13, 26}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("columnEdges = %v, want %v", got, want)
+	}
+}
+
+func TestNextColumnEdge(t *testing.T) {
+	m := New(Options{
+		Width:         60,
+		Height:        5,
+		Columns:       []Column{{Title: "a", Width: 10}, {Title: "b", Width: 10}, {Title: "c", Width: 10}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	if got := m.nextColumnEdge(0); got != 11 {
+		t.Errorf("nextColumnEdge(0) = %d, want 11", got)
+	}
+	if got := m.nextColumnEdge(11); got != 22 {
+		t.Errorf("nextColumnEdge(11) = %d, want 22", got)
+	}
+	if got := m.nextColumnEdge(22); got != -1 {
+		t.Errorf("nextColumnEdge(22) = %d, want -1", got)
+	}
+	if got := m.nextColumnEdge(5); got != 11 {
+		t.Errorf("nextColumnEdge(5) = %d, want 11", got)
+	}
+}
+
+func TestPrevColumnEdge(t *testing.T) {
+	m := New(Options{
+		Width:         60,
+		Height:        5,
+		Columns:       []Column{{Title: "a", Width: 10}, {Title: "b", Width: 10}, {Title: "c", Width: 10}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	if got := m.prevColumnEdge(22); got != 11 {
+		t.Errorf("prevColumnEdge(22) = %d, want 11", got)
+	}
+	if got := m.prevColumnEdge(11); got != 0 {
+		t.Errorf("prevColumnEdge(11) = %d, want 0", got)
+	}
+	if got := m.prevColumnEdge(0); got != -1 {
+		t.Errorf("prevColumnEdge(0) = %d, want -1", got)
+	}
+	if got := m.prevColumnEdge(15); got != 11 {
+		t.Errorf("prevColumnEdge(15) = %d, want 11", got)
+	}
+}
+
+func TestColumnStepKeysSnapToBoundaries(t *testing.T) {
+	// Wide enough to need h-scroll. Three 30-wide columns in a 40-wide outer.
+	m := New(Options{
+		Width:         40,
+		Height:        5,
+		Columns:       []Column{{Title: "a", Width: 30}, {Title: "b", Width: 30}, {Title: "c", Width: 30}},
+		Rows:          []Row{{"a1", "b1", "c1"}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	// shift+right should snap to the next column edge (31).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
+	if got := m.body.XOffset(); got != 31 {
+		t.Errorf("after shift+right, XOffset = %d, want 31", got)
+	}
+	// Another shift+right should snap to 62 — but MaxXOffset will clamp it
+	// if the content fits past that.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
+	want := min2(62, m.body.MaxXOffset())
+	if got := m.body.XOffset(); got != want {
+		t.Errorf("after second shift+right, XOffset = %d, want %d", got, want)
+	}
+	// shift+left from here should snap to the previous edge (31).
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftLeft})
+	if got := m.body.XOffset(); got != 31 {
+		t.Errorf("after shift+left, XOffset = %d, want 31", got)
+	}
+	// shift+left again → 0.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftLeft})
+	if got := m.body.XOffset(); got != 0 {
+		t.Errorf("after second shift+left, XOffset = %d, want 0", got)
+	}
+}
+
+func min2(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func TestSetDimensionsRecomputesFlex(t *testing.T) {

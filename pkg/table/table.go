@@ -30,6 +30,11 @@
 // longest common prefix of the remaining candidates — regex terms skip
 // the hint since enumerating regex matches isn't useful.
 //
+// Horizontal nav: ←/→ (or h/l) scroll by HScrollStep cells; 0/home jump
+// to the leftmost edge; $/end jump to the rightmost edge; shift+←/shift+→
+// snap the viewport to the previous / next column boundary so a wide
+// table can be stepped column-by-column instead of cell-by-cell.
+//
 // Sort: set Column.Sortable to opt a column in. Keys are "[" / "]" to step
 // the active sort column among Sortable columns and "s" to toggle
 // direction; the active column gets a ▲ / ▼ marker after its title.
@@ -223,7 +228,7 @@ type Model struct {
 }
 
 var keys = struct {
-	Up, Down, Top, Bottom, HalfUp, HalfDown, Filter, SortPrev, SortNext, SortDir key.Binding
+	Up, Down, Top, Bottom, HalfUp, HalfDown, Filter, SortPrev, SortNext, SortDir, ColPrev, ColNext key.Binding
 }{
 	Up:       key.NewBinding(key.WithKeys("up", "k")),
 	Down:     key.NewBinding(key.WithKeys("down", "j")),
@@ -235,6 +240,8 @@ var keys = struct {
 	SortPrev: key.NewBinding(key.WithKeys("[")),
 	SortNext: key.NewBinding(key.WithKeys("]")),
 	SortDir:  key.NewBinding(key.WithKeys("s")),
+	ColPrev:  key.NewBinding(key.WithKeys("shift+left")),
+	ColNext:  key.NewBinding(key.WithKeys("shift+right")),
 }
 
 // New constructs a table.
@@ -367,6 +374,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.applyFilter()
 			m.refresh()
 		}
+	case key.Matches(km, keys.ColPrev):
+		cur := m.body.XOffset()
+		if e := m.prevColumnEdge(cur); e >= 0 {
+			m.body.SetXOffset(e)
+		} else if cur != 0 {
+			m.body.SetXOffset(0)
+		}
+	case key.Matches(km, keys.ColNext):
+		if e := m.nextColumnEdge(m.body.XOffset()); e >= 0 {
+			m.body.SetXOffset(e)
+		}
 	default:
 		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
@@ -398,7 +416,11 @@ func (m Model) Help() []key.Binding {
 		key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "top/bot")),
 	}
 	if m.hScrollbar {
-		out = append(out, key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")))
+		out = append(out,
+			key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")),
+			key.NewBinding(key.WithKeys("0", "$"), key.WithHelp("0/$", "edges")),
+			key.NewBinding(key.WithKeys("shift+left", "shift+right"), key.WithHelp("⇧←→", "col")),
+		)
 	}
 	if m.hasSortable() {
 		out = append(out,
@@ -870,6 +892,50 @@ func (m Model) halfPage() int {
 		return n
 	}
 	return 1
+}
+
+// columnEdges returns the screen-coordinate left edge of each column,
+// accounting for column widths and the inter-column separator. edge[0]
+// is always 0; edge[k] = sum(widths[0..k-1]) + k*sepW.
+func (m Model) columnEdges() []int {
+	if len(m.widths) == 0 {
+		return nil
+	}
+	sepW := ansi.StringWidth(m.colSep)
+	edges := make([]int, len(m.widths))
+	x := 0
+	for i, w := range m.widths {
+		edges[i] = x
+		x += w + sepW
+	}
+	return edges
+}
+
+// nextColumnEdge returns the smallest column-left-edge strictly greater
+// than x — the snap target for "step right one column". Returns -1 when
+// x is at or past the last column's edge.
+func (m Model) nextColumnEdge(x int) int {
+	for _, e := range m.columnEdges() {
+		if e > x {
+			return e
+		}
+	}
+	return -1
+}
+
+// prevColumnEdge returns the largest column-left-edge strictly less than
+// x — the snap target for "step left one column". Returns -1 when x is
+// already at or before column 0.
+func (m Model) prevColumnEdge(x int) int {
+	best := -1
+	for _, e := range m.columnEdges() {
+		if e < x {
+			best = e
+			continue
+		}
+		break
+	}
+	return best
 }
 
 // recomputeWidths fills m.widths with the effective per-column visible
