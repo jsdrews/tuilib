@@ -91,10 +91,12 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			switch m.String() {
 			case "p":
 				if s.poll.Paused() {
-					return s, s.poll.Resume()
+					cmd := s.poll.Resume()
+					s.refreshTitle()
+					return s, cmd
 				}
 				s.poll.Pause()
-				s.applyRows()
+				s.refreshTitle()
 				return s, nil
 			case "r":
 				return s, s.poll.Refresh()

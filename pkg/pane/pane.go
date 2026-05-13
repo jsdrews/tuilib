@@ -140,12 +140,13 @@ func New(opts Options) Pane {
 func (p Pane) Init() tea.Cmd { return nil }
 
 // Update forwards key/mouse events to the embedded viewport so vertical
-// scroll keys (pgup/pgdn/up/down/mouse wheel) work by default. Left and
-// right arrow keys are intercepted for horizontal scrolling — the
-// content is re-cut to the visible window via ansi.Cut so ANSI styles
-// stay intact across the slice. While loading, spinner.TickMsg events
-// are consumed to advance the spinner; the chained next-tick command is
-// returned so the animation keeps running.
+// scroll keys (pgup/pgdn/up/down/mouse wheel) work by default. Horizontal
+// scroll keys are intercepted: left/h and right/l step by HScrollStep;
+// 0 and home jump to the left edge; $ and end jump to the right edge.
+// The content is re-cut to the visible window via ansi.Cut so ANSI
+// styles stay intact across the slice. While loading, spinner.TickMsg
+// events are consumed to advance the spinner; the chained next-tick
+// command is returned so the animation keeps running.
 func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 	if _, ok := msg.(spinner.TickMsg); ok {
 		if !p.loading {
@@ -164,6 +165,18 @@ func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 		case "right", "l":
 			p.xOffset += HScrollStep
 			p.pushContent()
+			return p, nil
+		case "0", "home":
+			if p.xOffset != 0 {
+				p.xOffset = 0
+				p.pushContent()
+			}
+			return p, nil
+		case "$", "end":
+			if mx := p.MaxXOffset(); p.xOffset != mx {
+				p.xOffset = mx
+				p.pushContent()
+			}
 			return p, nil
 		}
 	}
