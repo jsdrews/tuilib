@@ -12,7 +12,8 @@
 // Features:
 //   - Cursor + scroll across the flat visible-row slice
 //   - Right/l expand or descend into the cursor's children; left/h collapse
-//     or jump to the parent; space toggles the cursor; enter selects
+//     or jump to the parent; space toggles the cursor; enter selects;
+//     E expands every node in the tree, C collapses everything back to root
 //   - "/" focuses an embedded filter (case-insensitive substring against
 //     Label()); matches highlight inline with MatchStyle
 //   - "\" toggles filter mode: when on, only matching nodes (and their
@@ -118,21 +119,24 @@ type row struct {
 }
 
 var keys = struct {
-	Up, Down, Expand, Collapse, Toggle, Enter      key.Binding
-	Search, NextMatch, PrevMatch, Filter, Top, End key.Binding
+	Up, Down, Expand, Collapse, Toggle, Enter             key.Binding
+	Search, NextMatch, PrevMatch, Filter, Top, End        key.Binding
+	ExpandAll, CollapseAll                                key.Binding
 }{
-	Up:        key.NewBinding(key.WithKeys("up", "k")),
-	Down:      key.NewBinding(key.WithKeys("down", "j")),
-	Expand:    key.NewBinding(key.WithKeys("right", "l")),
-	Collapse:  key.NewBinding(key.WithKeys("left", "h")),
-	Toggle:    key.NewBinding(key.WithKeys(" ")),
-	Enter:     key.NewBinding(key.WithKeys("enter")),
-	Search:    key.NewBinding(key.WithKeys("/")),
-	NextMatch: key.NewBinding(key.WithKeys("n")),
-	PrevMatch: key.NewBinding(key.WithKeys("N")),
-	Filter:    key.NewBinding(key.WithKeys("\\")),
-	Top:       key.NewBinding(key.WithKeys("g")),
-	End:       key.NewBinding(key.WithKeys("G")),
+	Up:          key.NewBinding(key.WithKeys("up", "k")),
+	Down:        key.NewBinding(key.WithKeys("down", "j")),
+	Expand:      key.NewBinding(key.WithKeys("right", "l")),
+	Collapse:    key.NewBinding(key.WithKeys("left", "h")),
+	Toggle:      key.NewBinding(key.WithKeys(" ")),
+	Enter:       key.NewBinding(key.WithKeys("enter")),
+	Search:      key.NewBinding(key.WithKeys("/")),
+	NextMatch:   key.NewBinding(key.WithKeys("n")),
+	PrevMatch:   key.NewBinding(key.WithKeys("N")),
+	Filter:      key.NewBinding(key.WithKeys("\\")),
+	Top:         key.NewBinding(key.WithKeys("g")),
+	End:         key.NewBinding(key.WithKeys("G")),
+	ExpandAll:   key.NewBinding(key.WithKeys("E")),
+	CollapseAll: key.NewBinding(key.WithKeys("C")),
 }
 
 // New constructs a tree. Call Update/View from the parent model.
@@ -222,6 +226,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case key.Matches(k, keys.End):
 			m.cursor = max(0, len(m.rows)-1)
 			m.refresh()
+			return m, nil
+		case key.Matches(k, keys.ExpandAll):
+			m.expandAll()
+			return m, nil
+		case key.Matches(k, keys.CollapseAll):
+			m.collapseAll()
 			return m, nil
 		case m.searchable && key.Matches(k, keys.Search):
 			return m, m.filter.Focus()
@@ -374,6 +384,7 @@ func (m Model) Help() []key.Binding {
 		key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "expand")),
 		key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "collapse")),
 		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		key.NewBinding(key.WithKeys("E", "C"), key.WithHelp("E/C", "expand/collapse all")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "select")),
 	}
 	if m.searchable {
@@ -446,6 +457,41 @@ func (m *Model) collapseOrAscend() {
 			return
 		}
 	}
+}
+
+// expandAll marks every non-leaf node in the tree as expanded. Walks from
+// the root using the same path scheme as preExpand so paths stay stable
+// across collapse/expand cycles.
+func (m *Model) expandAll() {
+	if m.root == nil {
+		return
+	}
+	m.markExpanded(m.root, "0")
+	m.refresh()
+}
+
+func (m *Model) markExpanded(n Node, path string) {
+	children := n.Children()
+	if len(children) == 0 {
+		return
+	}
+	m.expanded[path] = true
+	for i, c := range children {
+		m.markExpanded(c, fmt.Sprintf("%s/%d", path, i))
+	}
+}
+
+// collapseAll clears every expand mark, leaving only the root visible.
+// Cursor snaps to 0 since deeper rows are no longer in the visible set.
+func (m *Model) collapseAll() {
+	if len(m.expanded) == 0 {
+		m.cursor = 0
+		m.refresh()
+		return
+	}
+	m.expanded = map[string]bool{}
+	m.cursor = 0
+	m.refresh()
 }
 
 func (m *Model) toggleCursor() {

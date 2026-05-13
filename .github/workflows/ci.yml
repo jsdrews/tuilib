@@ -1,8 +1,10 @@
 # GitHub Actions CI for tuilib.
 #
 # On every push / PR: build, vet, test.
-# On push to master (typically a merged PR): auto-tag the commit with the
-# next semver:
+# On push to main (typically a merged PR): auto-tag the commit with the
+# next semver and publish a GitHub release whose notes are generated from
+# the PRs merged since the previous tag (grouped by label per
+# .github/release.yml):
 #   - patch bump if the commit message (which includes the PR title and,
 #     for default merge commits, the source branch name) matches
 #     /\b(bug|bugfix|fix)\b/i
@@ -14,7 +16,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -34,15 +36,16 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Tag next version
+      - name: Tag and release
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           git config user.email "github-actions@github.com"
@@ -70,3 +73,6 @@ jobs:
           echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
           git tag -a "$NEXT" -m "Release $NEXT"
           git push origin "$NEXT"
+          gh release create "$NEXT" \
+            --title "$NEXT" \
+            --generate-notes
