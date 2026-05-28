@@ -172,6 +172,90 @@ type Options struct {
 	// the selected-row background passes through. Empty fields disable
 	// the corresponding separator. Theme.Table() sets sensible defaults.
 	Borders Borders
+
+	// Keys is the table's keymap. Leave zero to use DefaultKeys; set
+	// individual bindings to override (others fall back to defaults via
+	// fillDefaults). theme.Table() pre-populates this.
+	Keys Keys
+}
+
+// Keys is the table's keymap. Each binding carries both its dispatch
+// keys (WithKeys) and its help label (WithHelp) — Update and Help()
+// read from the same struct, so a custom binding propagates everywhere.
+// The embedded pane.Keys covers horizontal scroll; mutate fields on
+// Pane to override h-scroll without touching the rest.
+type Keys struct {
+	Up, Down                 key.Binding
+	Top, Bottom              key.Binding
+	HalfUp, HalfDown         key.Binding
+	Filter                   key.Binding
+	SortPrev, SortNext       key.Binding
+	SortDir                  key.Binding
+	ColPrev, ColNext         key.Binding
+	Pane                     pane.Keys
+}
+
+// DefaultKeys returns the table's stock keymap.
+func DefaultKeys() Keys {
+	return Keys{
+		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
+		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
+		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		SortPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "sort col-")),
+		SortNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "sort col+")),
+		SortDir:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort dir")),
+		ColPrev:  key.NewBinding(key.WithKeys("shift+left"), key.WithHelp("⇧←", "col-")),
+		ColNext:  key.NewBinding(key.WithKeys("shift+right"), key.WithHelp("⇧→", "col+")),
+		Pane:     pane.DefaultKeys(),
+	}
+}
+
+// fillDefaults fills any zero-valued binding in k with its DefaultKeys()
+// counterpart, so partial overrides on Options.Keys work without
+// restating every field.
+func (k *Keys) fillDefaults() {
+	d := DefaultKeys()
+	if len(k.Up.Keys()) == 0 {
+		k.Up = d.Up
+	}
+	if len(k.Down.Keys()) == 0 {
+		k.Down = d.Down
+	}
+	if len(k.Top.Keys()) == 0 {
+		k.Top = d.Top
+	}
+	if len(k.Bottom.Keys()) == 0 {
+		k.Bottom = d.Bottom
+	}
+	if len(k.HalfUp.Keys()) == 0 {
+		k.HalfUp = d.HalfUp
+	}
+	if len(k.HalfDown.Keys()) == 0 {
+		k.HalfDown = d.HalfDown
+	}
+	if len(k.Filter.Keys()) == 0 {
+		k.Filter = d.Filter
+	}
+	if len(k.SortPrev.Keys()) == 0 {
+		k.SortPrev = d.SortPrev
+	}
+	if len(k.SortNext.Keys()) == 0 {
+		k.SortNext = d.SortNext
+	}
+	if len(k.SortDir.Keys()) == 0 {
+		k.SortDir = d.SortDir
+	}
+	if len(k.ColPrev.Keys()) == 0 {
+		k.ColPrev = d.ColPrev
+	}
+	if len(k.ColNext.Keys()) == 0 {
+		k.ColNext = d.ColNext
+	}
+	k.Pane.FillDefaults()
 }
 
 // Borders controls the two interior separators a table draws — the
@@ -225,23 +309,8 @@ type Model struct {
 
 	colSep     string
 	headerRule string
-}
 
-var keys = struct {
-	Up, Down, Top, Bottom, HalfUp, HalfDown, Filter, SortPrev, SortNext, SortDir, ColPrev, ColNext key.Binding
-}{
-	Up:       key.NewBinding(key.WithKeys("up", "k")),
-	Down:     key.NewBinding(key.WithKeys("down", "j")),
-	Top:      key.NewBinding(key.WithKeys("g")),
-	Bottom:   key.NewBinding(key.WithKeys("G")),
-	HalfUp:   key.NewBinding(key.WithKeys("ctrl+u")),
-	HalfDown: key.NewBinding(key.WithKeys("ctrl+d")),
-	Filter:   key.NewBinding(key.WithKeys("/")),
-	SortPrev: key.NewBinding(key.WithKeys("[")),
-	SortNext: key.NewBinding(key.WithKeys("]")),
-	SortDir:  key.NewBinding(key.WithKeys("s")),
-	ColPrev:  key.NewBinding(key.WithKeys("shift+left")),
-	ColNext:  key.NewBinding(key.WithKeys("shift+right")),
+	keys Keys
 }
 
 // New constructs a table.
@@ -249,6 +318,7 @@ func New(opts Options) Model {
 	if opts.Title == "" {
 		opts.Title = "Table"
 	}
+	opts.Keys.fillDefaults()
 	cols := append([]Column(nil), opts.Columns...)
 	colSep := " "
 	if opts.Borders.Vertical != "" {
@@ -265,6 +335,7 @@ func New(opts Options) Model {
 		hScrollbar:    opts.HScrollbar,
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
+		keys:          opts.Keys,
 	}
 	m.visible = m.rows
 	m.visibleIdx = identityIndex(len(m.rows))
@@ -291,6 +362,7 @@ func New(opts Options) Model {
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
+		Keys:           opts.Keys.Pane,
 	})
 	m.recomputeWidths()
 	m.refresh()
@@ -327,61 +399,61 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	switch {
-	case m.filterable && key.Matches(km, keys.Filter):
+	case m.filterable && key.Matches(km, m.keys.Filter):
 		return m, m.filter.Focus()
-	case key.Matches(km, keys.Up):
+	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.refresh()
 		}
-	case key.Matches(km, keys.Down):
+	case key.Matches(km, m.keys.Down):
 		if m.cursor < len(m.visible)-1 {
 			m.cursor++
 			m.refresh()
 		}
-	case key.Matches(km, keys.Top):
+	case key.Matches(km, m.keys.Top):
 		if m.cursor != 0 && len(m.visible) > 0 {
 			m.cursor = 0
 			m.refresh()
 		}
-	case key.Matches(km, keys.Bottom):
+	case key.Matches(km, m.keys.Bottom):
 		if last := len(m.visible) - 1; last >= 0 && m.cursor != last {
 			m.cursor = last
 			m.refresh()
 		}
-	case key.Matches(km, keys.HalfUp):
+	case key.Matches(km, m.keys.HalfUp):
 		if m.cursor > 0 {
 			m.cursor = max(0, m.cursor-m.halfPage())
 			m.refresh()
 		}
-	case key.Matches(km, keys.HalfDown):
+	case key.Matches(km, m.keys.HalfDown):
 		if last := len(m.visible) - 1; last >= 0 && m.cursor < last {
 			m.cursor = min(last, m.cursor+m.halfPage())
 			m.refresh()
 		}
-	case key.Matches(km, keys.SortPrev):
+	case key.Matches(km, m.keys.SortPrev):
 		if m.stepSortColumn(-1) {
 			m.applyFilter()
 			m.refresh()
 		}
-	case key.Matches(km, keys.SortNext):
+	case key.Matches(km, m.keys.SortNext):
 		if m.stepSortColumn(+1) {
 			m.applyFilter()
 			m.refresh()
 		}
-	case key.Matches(km, keys.SortDir):
+	case key.Matches(km, m.keys.SortDir):
 		if m.toggleSortDir() {
 			m.applyFilter()
 			m.refresh()
 		}
-	case key.Matches(km, keys.ColPrev):
+	case key.Matches(km, m.keys.ColPrev):
 		cur := m.body.XOffset()
 		if e := m.prevColumnEdge(cur); e >= 0 {
 			m.body.SetXOffset(e)
 		} else if cur != 0 {
 			m.body.SetXOffset(0)
 		}
-	case key.Matches(km, keys.ColNext):
+	case key.Matches(km, m.keys.ColNext):
 		if e := m.nextColumnEdge(m.body.XOffset()); e >= 0 {
 			m.body.SetXOffset(e)
 		}
@@ -411,25 +483,19 @@ func (m Model) Help() []key.Binding {
 		return out
 	}
 	out := []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("ctrl+u", "ctrl+d"), key.WithHelp("^u/^d", "½ page")),
-		key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "top/bot")),
+		m.keys.Up, m.keys.Down,
+		m.keys.HalfUp, m.keys.HalfDown,
+		m.keys.Top, m.keys.Bottom,
 	}
 	if m.hScrollbar {
-		out = append(out,
-			key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")),
-			key.NewBinding(key.WithKeys("0", "$"), key.WithHelp("0/$", "edges")),
-			key.NewBinding(key.WithKeys("shift+left", "shift+right"), key.WithHelp("⇧←→", "col")),
-		)
+		out = append(out, m.body.HelpBindings()...)
+		out = append(out, m.keys.ColPrev, m.keys.ColNext)
 	}
 	if m.hasSortable() {
-		out = append(out,
-			key.NewBinding(key.WithKeys("[", "]"), key.WithHelp("[]", "sort col")),
-			key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort dir")),
-		)
+		out = append(out, m.keys.SortPrev, m.keys.SortNext, m.keys.SortDir)
 	}
 	if m.filterable {
-		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")))
+		out = append(out, m.keys.Filter)
 	}
 	return out
 }

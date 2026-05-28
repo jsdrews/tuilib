@@ -41,6 +41,18 @@ type Options struct {
 	// the app is pinned to a single theme).
 	ThemeKey key.Binding
 
+	// HelpKey toggles the expanded help panel. The panel appears as a
+	// multi-row strip above the statusbar showing every binding the
+	// active screen currently exposes via Help() — useful when the
+	// inline hints don't all fit in one row. Defaults to "?". Set to an
+	// empty binding (key.NewBinding()) to disable the panel.
+	HelpKey key.Binding
+
+	// HelpMaxRows caps how many rows the expanded help panel may grow
+	// to. Defaults to 6. The panel uses only as many rows as needed to
+	// fit every binding at the current width, up to this cap.
+	HelpMaxRows int
+
 	// ThemeEnvVar names an environment variable consulted for the initial
 	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
 	// theme's Name, that theme becomes Themes[0]. Empty string disables
@@ -113,11 +125,17 @@ type Model struct {
 
 	stack screen.Stack
 
-	quitKey, themeKey key.Binding
-	autoEscPop        bool
+	quitKey, themeKey, helpKey key.Binding
+	helpMaxRows                int
+	autoEscPop                 bool
 
 	bc breadcrumb.Model
 	sb statusbar.Model
+
+	help         help.Model
+	helpExpanded bool
+	helpOverflow bool
+	helpConsumed int
 }
 
 // New constructs an app shell. By default it reorders Themes via
@@ -141,18 +159,29 @@ func New(opts Options) Model {
 			key.WithHelp("q", "quit"),
 		)
 	}
+	if opts.HelpKey.Keys() == nil {
+		opts.HelpKey = key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
+		)
+	}
+	if opts.HelpMaxRows <= 0 {
+		opts.HelpMaxRows = 6
+	}
 
 	t := opts.Themes[0]
 	opts.Root.SetTheme(t)
 
 	m := Model{
-		themes:     opts.Themes,
-		themeIdx:   0,
-		version:    opts.Version,
-		stack:      screen.NewStack(opts.Root),
-		quitKey:    opts.QuitKey,
-		themeKey:   opts.ThemeKey,
-		autoEscPop: !opts.DisableAutoEscPop,
+		themes:      opts.Themes,
+		themeIdx:    0,
+		version:     opts.Version,
+		stack:       screen.NewStack(opts.Root),
+		quitKey:     opts.QuitKey,
+		themeKey:    opts.ThemeKey,
+		helpKey:     opts.HelpKey,
+		helpMaxRows: opts.HelpMaxRows,
+		autoEscPop:  !opts.DisableAutoEscPop,
 	}
 	m.apply()
 	return m
@@ -177,13 +206,29 @@ func (m *Model) apply() {
 	bcOpts.Crumbs = m.stack.Crumbs()
 	m.bc = breadcrumb.New(bcOpts)
 
-	h := help.New(t.Help())
+	m.help = help.New(t.Help())
 	if cur := m.stack.Current(); cur != nil {
-		h.SetBindings(cur.Help())
+		m.help.SetBindings(cur.Help())
 	}
 
+	// Budget the statusbar's left slot: reserve room for the right slot
+	// (version), the left/right padding (each style adds Padding(0,1)),
+	// and the optional middle message slot. When the calculation goes
+	// negative, fall through to the full ShortView and let the statusbar
+	// MaxWidth-clip it visually. The expanded panel continues from where
+	// the footer ran out, so we track consumed to use as its startIdx.
+	m.help.SetExpanded(m.helpExpanded)
+	short, consumed, overflow := m.helpStrip()
+	if !overflow && m.helpExpanded {
+		m.helpExpanded = false
+		m.help.SetExpanded(false)
+		short, consumed, overflow = m.helpStrip()
+	}
+	m.helpOverflow = overflow
+	m.helpConsumed = consumed
+
 	prevMsg, prevKind := m.sb.Message()
-	sbOpts := t.Statusbar(h.ShortView(), m.version)
+	sbOpts := t.Statusbar(short, m.version)
 	sbOpts.Width = m.w
 	m.sb = statusbar.New(sbOpts)
 	switch prevKind {
@@ -192,6 +237,35 @@ func (m *Model) apply() {
 	case statusbar.MessageError:
 		m.sb.SetError(prevMsg)
 	}
+}
+
+// shortViewBudget returns the visible width available to the statusbar's
+// left slot. Reserves room for the right slot (version string + the
+// left+right Padding(0,1) the bar adds around each slot) so the inline
+// help line can detect overflow before the bar truncates it visually.
+func (m Model) shortViewBudget() int {
+	const slotPadding = 2 // left+right padding around the left slot
+	right := 0
+	if m.version != "" {
+		right = len(m.version) + 2 // matching padding around right slot
+	}
+	b := m.w - right - slotPadding
+	if b < 0 {
+		return 0
+	}
+	return b
+}
+
+// helpStrip renders the inline help line against the statusbar's left
+// slot budget and reports how many bindings landed on it. When the
+// budget is non-positive, falls back to the full ShortView with no
+// overflow reporting.
+func (m Model) helpStrip() (line string, consumed int, overflow bool) {
+	budget := m.shortViewBudget()
+	if budget <= 0 {
+		return m.help.ShortView(), m.help.Count(), false
+	}
+	return m.help.ShortViewBudget(budget)
 }
 
 // Update handles resize, global keys, and forwards everything else to the
@@ -245,6 +319,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.apply()
 				return m, nil
 			}
+			if m.helpKey.Keys() != nil && key.Matches(msg, m.helpKey) && m.helpOverflow {
+				m.helpExpanded = !m.helpExpanded
+				m.apply()
+				return m, nil
+			}
 			if m.autoEscPop && msg.String() == "esc" && m.stack.Depth() > 1 {
 				var cmd tea.Cmd
 				m.stack, cmd = m.stack.Update(screen.PopMsg{Result: nil})
@@ -276,18 +355,27 @@ func (m Model) View() string {
 		body = layout.RenderFunc(func(w, h int) string { return "" })
 	}
 
-	root := layout.VStack(
+	items := []layout.Item{
 		layout.Fixed(1, layout.RenderFunc(func(w, _ int) string {
 			m.bc.SetWidth(w)
 			return m.bc.View()
 		})),
 		layout.Flex(1, body),
-		layout.Fixed(1, layout.RenderFunc(func(w, _ int) string {
-			m.sb.SetWidth(w)
-			return m.sb.View()
-		})),
-	)
-	return root.Render(m.w, m.h)
+	}
+	if m.helpExpanded {
+		if rows := m.help.ExpandedRows(m.w, m.helpConsumed, m.helpMaxRows); rows > 0 {
+			h := m.help
+			startIdx := m.helpConsumed
+			items = append(items, layout.Fixed(rows, layout.RenderFunc(func(w, _ int) string {
+				return h.ExpandedView(w, rows, startIdx)
+			})))
+		}
+	}
+	items = append(items, layout.Fixed(1, layout.RenderFunc(func(w, _ int) string {
+		m.sb.SetWidth(w)
+		return m.sb.View()
+	})))
+	return layout.VStack(items...).Render(m.w, m.h)
 }
 
 // Theme exposes the app's current palette for screens that need it outside

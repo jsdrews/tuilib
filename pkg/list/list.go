@@ -61,6 +61,68 @@ type Options struct {
 
 	// Filter configures the embedded filter. Ignored when Filterable=false.
 	Filter filter.Options
+
+	// Keys is the list's keymap. Leave zero to use DefaultKeys; set
+	// individual bindings to override (others fall back to defaults via
+	// fillDefaults). theme.List() pre-populates this.
+	Keys Keys
+}
+
+// Keys is the list's keymap. Each binding carries both its dispatch keys
+// (WithKeys) and its help label (WithHelp) — Update and Help() read from
+// the same struct, so a custom binding propagates everywhere. The embedded
+// pane.Keys covers horizontal scroll; mutate fields on Pane to override
+// h-scroll without touching the rest.
+type Keys struct {
+	Up, Down         key.Binding
+	Top, Bottom      key.Binding
+	HalfUp, HalfDown key.Binding
+	Filter           key.Binding
+	Pane             pane.Keys
+}
+
+// DefaultKeys returns the list's stock keymap. Mutate the returned value
+// to override individual actions.
+func DefaultKeys() Keys {
+	return Keys{
+		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
+		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
+		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Pane:     pane.DefaultKeys(),
+	}
+}
+
+// fillDefaults fills any zero-valued binding in k with its DefaultKeys()
+// counterpart, so partial overrides on Options.Keys work without restating
+// every field.
+func (k *Keys) fillDefaults() {
+	d := DefaultKeys()
+	if len(k.Up.Keys()) == 0 {
+		k.Up = d.Up
+	}
+	if len(k.Down.Keys()) == 0 {
+		k.Down = d.Down
+	}
+	if len(k.Top.Keys()) == 0 {
+		k.Top = d.Top
+	}
+	if len(k.Bottom.Keys()) == 0 {
+		k.Bottom = d.Bottom
+	}
+	if len(k.HalfUp.Keys()) == 0 {
+		k.HalfUp = d.HalfUp
+	}
+	if len(k.HalfDown.Keys()) == 0 {
+		k.HalfDown = d.HalfDown
+	}
+	if len(k.Filter.Keys()) == 0 {
+		k.Filter = d.Filter
+	}
+	k.Pane.FillDefaults()
 }
 
 // KeyedItem is a list entry with a stable identity. Pass to SetKeyedItems
@@ -90,18 +152,8 @@ type Model struct {
 	body          pane.Pane
 	selectedStyle lipgloss.Style
 	hScrollbar    bool
-}
 
-var keys = struct {
-	Up, Down, Top, Bottom, HalfUp, HalfDown, Filter key.Binding
-}{
-	Up:       key.NewBinding(key.WithKeys("up", "k")),
-	Down:     key.NewBinding(key.WithKeys("down", "j")),
-	Top:      key.NewBinding(key.WithKeys("g")),
-	Bottom:   key.NewBinding(key.WithKeys("G")),
-	HalfUp:   key.NewBinding(key.WithKeys("ctrl+u")),
-	HalfDown: key.NewBinding(key.WithKeys("ctrl+d")),
-	Filter:   key.NewBinding(key.WithKeys("/")),
+	keys Keys
 }
 
 // New constructs a list. Call Update/View from the parent model.
@@ -109,11 +161,13 @@ func New(opts Options) Model {
 	if opts.Title == "" {
 		opts.Title = "List"
 	}
+	opts.Keys.fillDefaults()
 	m := Model{
 		items:         append([]string(nil), opts.Items...),
 		filterable:    opts.Filterable,
 		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
 		hScrollbar:    opts.HScrollbar,
+		keys:          opts.Keys,
 	}
 	m.visible = m.items
 	m.visibleIdx = identityIndex(len(m.items))
@@ -139,6 +193,7 @@ func New(opts Options) Model {
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
+		Keys:           opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -226,34 +281,34 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	switch {
-	case m.filterable && key.Matches(km, keys.Filter):
+	case m.filterable && key.Matches(km, m.keys.Filter):
 		return m, m.filter.Focus()
-	case key.Matches(km, keys.Up):
+	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
 			m.refresh()
 		}
-	case key.Matches(km, keys.Down):
+	case key.Matches(km, m.keys.Down):
 		if m.cursor < len(m.visible)-1 {
 			m.cursor++
 			m.refresh()
 		}
-	case key.Matches(km, keys.Top):
+	case key.Matches(km, m.keys.Top):
 		if m.cursor != 0 && len(m.visible) > 0 {
 			m.cursor = 0
 			m.refresh()
 		}
-	case key.Matches(km, keys.Bottom):
+	case key.Matches(km, m.keys.Bottom):
 		if last := len(m.visible) - 1; last >= 0 && m.cursor != last {
 			m.cursor = last
 			m.refresh()
 		}
-	case key.Matches(km, keys.HalfUp):
+	case key.Matches(km, m.keys.HalfUp):
 		if m.cursor > 0 {
 			m.cursor = max(0, m.cursor-m.halfPage())
 			m.refresh()
 		}
-	case key.Matches(km, keys.HalfDown):
+	case key.Matches(km, m.keys.HalfDown):
 		if last := len(m.visible) - 1; last >= 0 && m.cursor < last {
 			m.cursor = min(last, m.cursor+m.halfPage())
 			m.refresh()
@@ -312,22 +367,22 @@ func (m Model) Items() []string { return m.items }
 func (m Model) Filtering() bool { return m.filterable && m.filter.Focused() }
 
 // Help returns the keys this list responds to. While the embedded filter
-// is focused it returns the filter's keys; otherwise ↑↓ (always) plus "/"
-// when filterable.
+// is focused it returns the filter's keys; otherwise the configured
+// nav/scroll/filter bindings from m.keys.
 func (m Model) Help() []key.Binding {
 	if m.filterable && m.filter.Focused() {
 		return m.filter.Help()
 	}
 	out := []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("ctrl+u", "ctrl+d"), key.WithHelp("^u/^d", "½ page")),
-		key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "top/bot")),
+		m.keys.Up, m.keys.Down,
+		m.keys.HalfUp, m.keys.HalfDown,
+		m.keys.Top, m.keys.Bottom,
 	}
 	if m.hScrollbar {
-		out = append(out, key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")))
+		out = append(out, m.body.HelpBindings()...)
 	}
 	if m.filterable {
-		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")))
+		out = append(out, m.keys.Filter)
 	}
 	return out
 }

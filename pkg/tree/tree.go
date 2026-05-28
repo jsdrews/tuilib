@@ -11,9 +11,11 @@
 //
 // Features:
 //   - Cursor + scroll across the flat visible-row slice
-//   - Right/l expand or descend into the cursor's children; left/h collapse
-//     or jump to the parent; space toggles the cursor; enter selects;
-//     E expands every node in the tree, C collapses everything back to root
+//   - Space toggles the cursor's expand state, descending into children
+//     when expanded; enter selects; E expands every node in the tree,
+//     C collapses everything back to root. Arrow keys and hjkl follow the
+//     library-wide scroll convention (rule 23) and are reserved for
+//     vertical/horizontal scroll — they do not expand/collapse.
 //   - "/" focuses an embedded filter (case-insensitive substring against
 //     Label()); matches highlight inline with MatchStyle
 //   - "\" toggles filter mode: when on, only matching nodes (and their
@@ -87,6 +89,61 @@ type Options struct {
 
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
+
+	// Keys overrides the default keymap. Fields left zero fall back to
+	// DefaultKeys(). theme.Tree() pre-populates this; mutate Keys.X
+	// in-place to override individual actions.
+	Keys Keys
+}
+
+// Keys is the tree's keymap. Each binding carries both its dispatch
+// keys (WithKeys) and its help label (WithHelp). Update and Help() read
+// from the same struct, so custom bindings propagate to the hint strip
+// automatically. The embedded pane.Keys covers horizontal scroll.
+type Keys struct {
+	Up, Down                       key.Binding
+	Top, Bottom                    key.Binding
+	Toggle, Enter                  key.Binding
+	ExpandAll, CollapseAll         key.Binding
+	Search, NextMatch, PrevMatch   key.Binding
+	Filter                         key.Binding
+	Pane                           pane.Keys
+}
+
+// DefaultKeys returns the tree's stock keymap.
+func DefaultKeys() Keys {
+	return Keys{
+		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:         key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:      key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		Enter:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "select")),
+		ExpandAll:   key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "expand all")),
+		CollapseAll: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "collapse all")),
+		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		NextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
+		PrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
+		Filter:      key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, "filter mode")),
+		Pane:        pane.DefaultKeys(),
+	}
+}
+
+func (k *Keys) fillDefaults() {
+	d := DefaultKeys()
+	if len(k.Up.Keys()) == 0          { k.Up = d.Up }
+	if len(k.Down.Keys()) == 0        { k.Down = d.Down }
+	if len(k.Top.Keys()) == 0         { k.Top = d.Top }
+	if len(k.Bottom.Keys()) == 0      { k.Bottom = d.Bottom }
+	if len(k.Toggle.Keys()) == 0      { k.Toggle = d.Toggle }
+	if len(k.Enter.Keys()) == 0       { k.Enter = d.Enter }
+	if len(k.ExpandAll.Keys()) == 0   { k.ExpandAll = d.ExpandAll }
+	if len(k.CollapseAll.Keys()) == 0 { k.CollapseAll = d.CollapseAll }
+	if len(k.Search.Keys()) == 0      { k.Search = d.Search }
+	if len(k.NextMatch.Keys()) == 0   { k.NextMatch = d.NextMatch }
+	if len(k.PrevMatch.Keys()) == 0   { k.PrevMatch = d.PrevMatch }
+	if len(k.Filter.Keys()) == 0      { k.Filter = d.Filter }
+	k.Pane.FillDefaults()
 }
 
 // Model is the tree widget. Embed by value; mutate via the setters.
@@ -103,6 +160,8 @@ type Model struct {
 	matchStyle       lipgloss.Style
 	currentLineStyle lipgloss.Style
 
+	keys Keys
+
 	query      string // lower-cased
 	matchRows  []int  // indices into rows that contain a match
 	matchIdx   int    // -1 when no current match
@@ -118,38 +177,19 @@ type row struct {
 	expanded bool
 }
 
-var keys = struct {
-	Up, Down, Expand, Collapse, Toggle, Enter             key.Binding
-	Search, NextMatch, PrevMatch, Filter, Top, End        key.Binding
-	ExpandAll, CollapseAll                                key.Binding
-}{
-	Up:          key.NewBinding(key.WithKeys("up", "k")),
-	Down:        key.NewBinding(key.WithKeys("down", "j")),
-	Expand:      key.NewBinding(key.WithKeys("right", "l")),
-	Collapse:    key.NewBinding(key.WithKeys("left", "h")),
-	Toggle:      key.NewBinding(key.WithKeys(" ")),
-	Enter:       key.NewBinding(key.WithKeys("enter")),
-	Search:      key.NewBinding(key.WithKeys("/")),
-	NextMatch:   key.NewBinding(key.WithKeys("n")),
-	PrevMatch:   key.NewBinding(key.WithKeys("N")),
-	Filter:      key.NewBinding(key.WithKeys("\\")),
-	Top:         key.NewBinding(key.WithKeys("g")),
-	End:         key.NewBinding(key.WithKeys("G")),
-	ExpandAll:   key.NewBinding(key.WithKeys("E")),
-	CollapseAll: key.NewBinding(key.WithKeys("C")),
-}
-
 // New constructs a tree. Call Update/View from the parent model.
 func New(opts Options) Model {
 	if opts.Title == "" {
 		opts.Title = "tree"
 	}
+	opts.Keys.fillDefaults()
 	m := Model{
 		root:             opts.Root,
 		expanded:         map[string]bool{},
 		searchable:       opts.Searchable,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
+		keys:             opts.Keys,
 		matchIdx:         -1,
 	}
 
@@ -174,6 +214,7 @@ func New(opts Options) Model {
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
+		Keys:           opts.Keys.Pane,
 	})
 
 	if opts.Root != nil {
@@ -198,50 +239,44 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch {
-		case key.Matches(k, keys.Up):
+		case key.Matches(k, m.keys.Up):
 			if m.cursor > 0 {
 				m.cursor--
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.Down):
+		case key.Matches(k, m.keys.Down):
 			if m.cursor < len(m.rows)-1 {
 				m.cursor++
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.Expand):
-			m.expandOrDescend()
-			return m, nil
-		case key.Matches(k, keys.Collapse):
-			m.collapseOrAscend()
-			return m, nil
-		case key.Matches(k, keys.Toggle):
+		case key.Matches(k, m.keys.Toggle):
 			m.toggleCursor()
 			return m, nil
-		case key.Matches(k, keys.Top):
+		case key.Matches(k, m.keys.Top):
 			m.cursor = 0
 			m.refresh()
 			return m, nil
-		case key.Matches(k, keys.End):
+		case key.Matches(k, m.keys.Bottom):
 			m.cursor = max(0, len(m.rows)-1)
 			m.refresh()
 			return m, nil
-		case key.Matches(k, keys.ExpandAll):
+		case key.Matches(k, m.keys.ExpandAll):
 			m.expandAll()
 			return m, nil
-		case key.Matches(k, keys.CollapseAll):
+		case key.Matches(k, m.keys.CollapseAll):
 			m.collapseAll()
 			return m, nil
-		case m.searchable && key.Matches(k, keys.Search):
+		case m.searchable && key.Matches(k, m.keys.Search):
 			return m, m.filter.Focus()
-		case m.searchable && key.Matches(k, keys.NextMatch):
+		case m.searchable && key.Matches(k, m.keys.NextMatch):
 			m.jumpMatch(+1)
 			return m, nil
-		case m.searchable && key.Matches(k, keys.PrevMatch):
+		case m.searchable && key.Matches(k, m.keys.PrevMatch):
 			m.jumpMatch(-1)
 			return m, nil
-		case m.searchable && key.Matches(k, keys.Filter):
+		case m.searchable && key.Matches(k, m.keys.Filter):
 			m.filterMode = !m.filterMode
 			m.refresh()
 			return m, nil
@@ -373,32 +408,35 @@ func (m *Model) SetLoadingLabel(s string) { m.body.SetLoadingLabel(s) }
 // SetSpinnerStyle updates the lipgloss style applied to the spinner glyph.
 func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }
 
-// Help returns the keys this tree responds to. While the embedded filter
-// is focused, returns the filter's keys.
+// Help returns the keys this tree responds to. Each entry comes from
+// m.keys (the same bindings Update dispatches against), so custom
+// keymaps propagate to the hint strip automatically. While the embedded
+// filter is focused, returns the filter's keys.
 func (m Model) Help() []key.Binding {
 	if m.searchable && m.filter.Focused() {
 		return m.filter.Help()
 	}
 	out := []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "expand")),
-		key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "collapse")),
-		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-		key.NewBinding(key.WithKeys("E", "C"), key.WithHelp("E/C", "expand/collapse all")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "select")),
+		m.keys.Up, m.keys.Down,
+		m.keys.Top, m.keys.Bottom,
+		m.keys.Toggle,
+		m.keys.ExpandAll, m.keys.CollapseAll,
+		m.keys.Enter,
 	}
+	out = append(out, m.body.HelpBindings()...)
 	if m.searchable {
-		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")))
+		out = append(out, m.keys.Search)
 		if m.query != "" {
-			out = append(out,
-				key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
-				key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
-			)
+			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
+			// Filter-mode binding's help label flips with state.
 			label := "filter"
 			if m.filterMode {
 				label = "show all"
 			}
-			out = append(out, key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, label)))
+			out = append(out, key.NewBinding(
+				key.WithKeys(m.keys.Filter.Keys()...),
+				key.WithHelp(`\`, label),
+			))
 		}
 	}
 	return out
@@ -416,46 +454,6 @@ func (m *Model) preExpand(n Node, path string, depth, want int) {
 	m.expanded[path] = true
 	for i, c := range n.Children() {
 		m.preExpand(c, fmt.Sprintf("%s/%d", path, i), depth+1, want)
-	}
-}
-
-func (m *Model) expandOrDescend() {
-	if m.cursor >= len(m.rows) {
-		return
-	}
-	r := m.rows[m.cursor]
-	if r.isLeaf {
-		return
-	}
-	if !r.expanded {
-		m.expanded[r.path] = true
-		m.refresh()
-		return
-	}
-	// Already expanded — step into the first child.
-	if m.cursor+1 < len(m.rows) && m.rows[m.cursor+1].depth > r.depth {
-		m.cursor++
-		m.refresh()
-	}
-}
-
-func (m *Model) collapseOrAscend() {
-	if m.cursor >= len(m.rows) {
-		return
-	}
-	r := m.rows[m.cursor]
-	if !r.isLeaf && r.expanded {
-		delete(m.expanded, r.path)
-		m.refresh()
-		return
-	}
-	// Jump to parent: walk back to first row with smaller depth.
-	for i := m.cursor - 1; i >= 0; i-- {
-		if m.rows[i].depth < r.depth {
-			m.cursor = i
-			m.refresh()
-			return
-		}
 	}
 }
 

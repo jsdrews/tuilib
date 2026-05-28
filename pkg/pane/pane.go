@@ -10,12 +10,45 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
+
+// Keys is the pane's keymap for horizontal scroll. Each binding carries
+// both its dispatch keys (WithKeys) and its help label (WithHelp);
+// embedding components surface these in their own Help() so the hint
+// strip stays honest when callers override defaults.
+type Keys struct {
+	Left, Right key.Binding
+	LeftEdge    key.Binding
+	RightEdge   key.Binding
+}
+
+// DefaultKeys returns the pane's stock h-scroll keymap.
+func DefaultKeys() Keys {
+	return Keys{
+		Left:      key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←/h", "scroll left")),
+		Right:     key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→/l", "scroll right")),
+		LeftEdge:  key.NewBinding(key.WithKeys("0", "home"), key.WithHelp("0/home", "start")),
+		RightEdge: key.NewBinding(key.WithKeys("$", "end"), key.WithHelp("$/end", "end")),
+	}
+}
+
+// FillDefaults fills any zero-valued binding in k with its DefaultKeys()
+// counterpart. Exported so embedders (list/table/tree/inspector/logview)
+// can call it on their nested pane.Keys field without re-implementing
+// the merge.
+func (k *Keys) FillDefaults() {
+	d := DefaultKeys()
+	if len(k.Left.Keys()) == 0      { k.Left = d.Left }
+	if len(k.Right.Keys()) == 0     { k.Right = d.Right }
+	if len(k.LeftEdge.Keys()) == 0  { k.LeftEdge = d.LeftEdge }
+	if len(k.RightEdge.Keys()) == 0 { k.RightEdge = d.RightEdge }
+}
 
 // HScrollStep is how many cells left/right scroll the pane horizontally.
 const HScrollStep = 4
@@ -61,6 +94,8 @@ type Pane struct {
 	activeBorder   lipgloss.Border
 	inactiveBorder lipgloss.Border
 	slotBrackets   SlotBracketStyle
+
+	keys Keys
 }
 
 // Options configures a new Pane. Zero-value fields fall back to defaults.
@@ -97,6 +132,12 @@ type Options struct {
 	// LoadingLabel is rendered next to the spinner while loading. Use it
 	// to give the user context — e.g. "loading cities…" or "fetching".
 	LoadingLabel string
+
+	// Keys overrides the pane's h-scroll keymap. Fields left zero fall
+	// back to DefaultKeys(); embedders typically forward their own Keys
+	// here so the user-facing override surface stays one struct per
+	// component.
+	Keys Keys
 }
 
 // New constructs a Pane. SetContent must be called separately to populate it.
@@ -118,6 +159,7 @@ func New(opts Options) Pane {
 		frames = *opts.Spinner
 	}
 	sp := spinner.New(spinner.WithSpinner(frames), spinner.WithStyle(opts.SpinnerStyle))
+	opts.Keys.FillDefaults()
 
 	p := Pane{
 		viewport:       viewport.New(0, 0),
@@ -132,6 +174,7 @@ func New(opts Options) Pane {
 		activeBorder:   opts.ActiveBorder,
 		inactiveBorder: opts.InactiveBorder,
 		slotBrackets:   opts.SlotBrackets,
+		keys:           opts.Keys,
 	}
 	p.SetDimensions(opts.Width, opts.Height)
 	return p
@@ -156,23 +199,23 @@ func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 		p.spinner, cmd = p.spinner.Update(msg)
 		return p, cmd
 	}
-	if k, ok := msg.(tea.KeyMsg); ok {
-		switch k.String() {
-		case "left", "h":
+	if km, ok := msg.(tea.KeyMsg); ok {
+		switch {
+		case key.Matches(km, p.keys.Left):
 			p.xOffset -= HScrollStep
 			p.pushContent()
 			return p, nil
-		case "right", "l":
+		case key.Matches(km, p.keys.Right):
 			p.xOffset += HScrollStep
 			p.pushContent()
 			return p, nil
-		case "0", "home":
+		case key.Matches(km, p.keys.LeftEdge):
 			if p.xOffset != 0 {
 				p.xOffset = 0
 				p.pushContent()
 			}
 			return p, nil
-		case "$", "end":
+		case key.Matches(km, p.keys.RightEdge):
 			if mx := p.MaxXOffset(); p.xOffset != mx {
 				p.xOffset = mx
 				p.pushContent()
@@ -317,6 +360,18 @@ func (p *Pane) SetDimensions(width, height int) {
 
 // XOffset returns the current horizontal scroll column.
 func (p Pane) XOffset() int { return p.xOffset }
+
+// Keys returns the pane's h-scroll keymap. Embedding components include
+// these in their own Help() so the hint strip surfaces h-scroll keys
+// honestly (and reflects any caller overrides).
+func (p Pane) Keys() Keys { return p.keys }
+
+// HelpBindings returns the bindings to display in a component's hint
+// strip — just the four pane keys (left/right move + edge jumps). The
+// embedder appends these to its own Help() slice.
+func (p Pane) HelpBindings() []key.Binding {
+	return []key.Binding{p.keys.Left, p.keys.Right, p.keys.LeftEdge, p.keys.RightEdge}
+}
 
 // MaxXOffset returns the largest meaningful horizontal scroll column —
 // 0 when content fits in the inner width.
