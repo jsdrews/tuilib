@@ -58,9 +58,10 @@ example in `examples/`.
 
 8. **Interaction should be menu-driven.** Prefer lists + enter over letter
    shortcuts for per-screen actions (`d` delete, `r` run, etc.). Reserve
-   single-letter keys for app-wide affordances (`q`, `t`, `/`, `esc`).
-   This keeps `Help()` honest and avoids shortcut collisions across
-   screens.
+   single-letter keys for app-wide affordances (`q`, `t`, `/`, `?`,
+   `esc`). `?` toggles the app shell's expanded help panel (see the help
+   entry under "Where to learn more"). This keeps `Help()` honest and
+   avoids shortcut collisions across screens.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
@@ -273,6 +274,47 @@ example in `examples/`.
     "last refreshed Xs ago" indicator, mutate the component's title via
     `SetTitle` from a periodic UI tick — see `examples/data/poll`.
 
+23. **Reserve arrows + hjkl for scroll, library-wide.** Every component
+    that scrolls in a given axis uses the same bindings on that axis,
+    and arrow keys are aliases for hjkl (not separate verbs):
+
+    - Vertical: `↑`/`k` up, `↓`/`j` down, `g`/`G` top/bottom,
+      `ctrl+u`/`ctrl+d` half-page.
+    - Horizontal: `←`/`h` left, `→`/`l` right, `0`/`home` to the start,
+      `$`/`end` to the end. `pkg/table` additionally uses `shift+←` /
+      `shift+→` to snap to the previous/next column edge.
+
+    The pane (`pkg/pane`) owns the horizontal axis for every component
+    that embeds it (`list`, `table`, `logview`, `tree`, `inspector`,
+    `filter`, `input`); the cursor-owning component intercepts only the
+    vertical keys and lets horizontal keys fall through. So no
+    component-specific verb is allowed to consume an arrow or hjkl key.
+    In particular: `pkg/tree` and `pkg/inspector` do **not** bind
+    `←/→/h/l` to expand/collapse — use `space` to toggle the cursor row
+    and `E`/`C` to expand/collapse all. Drilling into a child is two
+    keystrokes (`space` then `↓`/`j`), which keeps the scroll convention
+    consistent across the library.
+
+24. **Override component keybindings via `Options.Keys`.** Every
+    interactive component (`list`, `table`, `logview`, `tree`,
+    `inspector`) exposes a `Keys` struct as `Options.Keys` plus a
+    `DefaultKeys()` builder. Each binding carries both `WithKeys(...)`
+    (dispatch) and `WithHelp(label, desc)` (hint text) so `Update` and
+    `Help()` read from the same source — a custom binding propagates to
+    the hint strip without restating anything. `theme.<Component>()`
+    pre-populates `Options.Keys` with `DefaultKeys()`, so users who
+    don't care get the stock bindings for free; users who do override
+    individual fields on the returned options before passing to `New`,
+    and any zero-valued bindings fall back to defaults via an internal
+    `fillDefaults` field-by-field merge. Horizontal scroll lives on the
+    embedded `pane.Keys` field at `Options.Keys.Pane` — mutate it to
+    rebind `←/h/→/l/0/$` without touching the rest. Per-screen tweaks
+    (one app's vim-only users get `dd` for delete) belong here; future
+    user-level config will route through the same struct via
+    `pkg/config`. Don't add a parallel package-level `var keys` — every
+    binding the component dispatches against must live in its `Keys`
+    struct.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -429,6 +471,21 @@ path.
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
   (not `pkg/theme`) when they grow their own user-tunable defaults.
+- **Help footer + expanded panel:** the statusbar's left slot renders the
+  active screen's `Help()` bindings as `key desc  •  key desc  •  …`. When
+  they don't all fit, the line is truncated and a `? help` affordance is
+  appended. Pressing `?` (configurable via `app.Options.HelpKey`) flips
+  on a multi-row panel above the statusbar that continues the strip —
+  same format, same separator, starting from the first binding that
+  didn't fit. The affordance flips to `? close` while expanded. Panel
+  height is capped by `app.Options.HelpMaxRows` (default 6) and only
+  grows as far as the remaining bindings need. When the window resizes
+  or the active screen changes such that everything fits inline again,
+  the panel auto-collapses and `?` becomes inert — the affordance is the
+  source of truth for whether the key does anything. Screens contribute
+  by returning the right bindings from `Help()` (rule 10); nothing in
+  the screen needs to know about the panel itself. See `pkg/help` for
+  the renderer and `pkg/app` for the wiring.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
@@ -531,8 +588,9 @@ path.
   (`map[string]any` / `[]any` / scalars) into `[]Field` so REST and
   kubectl-style payloads land directly without a hand-written
   converter. Same nav verbs as `pkg/tree` (`g`/`G`, `ctrl+u`/`ctrl+d`,
-  `↑↓`/`j`/`k`, `right`/`l`/space to expand, `left`/`h` to collapse or
-  ascend), same `Filterable` story (`/` searches both Label and Value;
+  `↑↓`/`j`/`k`, `space` to toggle the cursor row, `E`/`C` to
+  expand/collapse all — arrows + hjkl are reserved for scroll per
+  rule 23), same `Filterable` story (`/` searches both Label and Value;
   `\` toggles filter mode that hides non-matching subtrees while
   keeping ancestors visible; `n`/`N` step matches). `SetFields` swaps
   the record while preserving expansion state by row path and pinning

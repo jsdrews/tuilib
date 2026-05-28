@@ -91,6 +91,62 @@ type Options struct {
 
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
+
+	// Keys is the logview's keymap. Leave zero to use DefaultKeys; set
+	// individual bindings to override (others fall back to defaults via
+	// fillDefaults). theme.Logview() pre-populates this.
+	Keys Keys
+}
+
+// Keys is the logview's keymap. Each binding carries both its dispatch
+// keys (WithKeys) and its help label (WithHelp) — Update and Help() read
+// from the same struct, so a custom binding propagates everywhere. The
+// embedded pane.Keys covers horizontal scroll; mutate fields on Pane to
+// override h-scroll without touching the rest.
+type Keys struct {
+	Search, NextMatch, PrevMatch key.Binding
+	Top, Bottom                  key.Binding
+	Filter                       key.Binding
+	Pane                         pane.Keys
+}
+
+// DefaultKeys returns the logview's stock keymap.
+func DefaultKeys() Keys {
+	return Keys{
+		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		NextMatch: key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
+		PrevMatch: key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
+		Top:       key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		Filter:    key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, "filter mode")),
+		Pane:      pane.DefaultKeys(),
+	}
+}
+
+// fillDefaults fills any zero-valued binding in k with its DefaultKeys()
+// counterpart, so partial overrides on Options.Keys work without
+// restating every field.
+func (k *Keys) fillDefaults() {
+	d := DefaultKeys()
+	if len(k.Search.Keys()) == 0 {
+		k.Search = d.Search
+	}
+	if len(k.NextMatch.Keys()) == 0 {
+		k.NextMatch = d.NextMatch
+	}
+	if len(k.PrevMatch.Keys()) == 0 {
+		k.PrevMatch = d.PrevMatch
+	}
+	if len(k.Top.Keys()) == 0 {
+		k.Top = d.Top
+	}
+	if len(k.Bottom.Keys()) == 0 {
+		k.Bottom = d.Bottom
+	}
+	if len(k.Filter.Keys()) == 0 {
+		k.Filter = d.Filter
+	}
+	k.Pane.FillDefaults()
 }
 
 // Model is the logview widget. Embed by value; mutate via the setters.
@@ -111,22 +167,13 @@ type Model struct {
 
 	filterMode bool  // when true and query != "", only matching lines render
 	visibleIdx []int // line indices that match (sorted); valid only while query != ""
+
+	keys Keys
 }
 
 type matchPos struct {
 	line       int
 	start, end int // byte offsets inside the line
-}
-
-var keys = struct {
-	Search, NextMatch, PrevMatch, Top, Bottom, Filter key.Binding
-}{
-	Search:    key.NewBinding(key.WithKeys("/")),
-	NextMatch: key.NewBinding(key.WithKeys("n")),
-	PrevMatch: key.NewBinding(key.WithKeys("N")),
-	Top:       key.NewBinding(key.WithKeys("g")),
-	Bottom:    key.NewBinding(key.WithKeys("G")),
-	Filter:    key.NewBinding(key.WithKeys("\\")),
 }
 
 // New constructs a logview. Call Update/View from the parent model; push
@@ -138,6 +185,7 @@ func New(opts Options) Model {
 	if opts.MaxLines == 0 {
 		opts.MaxLines = DefaultMaxLines
 	}
+	opts.Keys.fillDefaults()
 
 	m := Model{
 		maxLines:         opts.MaxLines,
@@ -147,6 +195,7 @@ func New(opts Options) Model {
 		currentLineStyle: opts.CurrentLineStyle,
 		matchIdx:         -1,
 		filterMode:       opts.FilterMode,
+		keys:             opts.Keys,
 	}
 
 	bodyH := opts.Height
@@ -170,6 +219,7 @@ func New(opts Options) Model {
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
+		Keys:           opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -191,25 +241,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch {
-		case m.searchable && key.Matches(k, keys.Search):
+		case m.searchable && key.Matches(k, m.keys.Search):
 			return m, m.filter.Focus()
-		case key.Matches(k, keys.NextMatch):
+		case key.Matches(k, m.keys.NextMatch):
 			m.jumpMatch(+1)
 			return m, nil
-		case key.Matches(k, keys.PrevMatch):
+		case key.Matches(k, m.keys.PrevMatch):
 			m.jumpMatch(-1)
 			return m, nil
-		case key.Matches(k, keys.Top):
+		case key.Matches(k, m.keys.Top):
 			m.body.GotoTop()
 			m.follow = false
 			m.refreshStatus()
 			return m, nil
-		case key.Matches(k, keys.Bottom):
+		case key.Matches(k, m.keys.Bottom):
 			m.body.GotoBottom()
 			m.follow = true
 			m.refreshStatus()
 			return m, nil
-		case m.searchable && key.Matches(k, keys.Filter):
+		case m.searchable && key.Matches(k, m.keys.Filter):
 			m.filterMode = !m.filterMode
 			m.refresh()
 			if m.matchIdx >= 0 {
@@ -393,23 +443,24 @@ func (m Model) Help() []key.Binding {
 	}
 	out := []key.Binding{
 		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "scroll")),
-		key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "h-scroll")),
 		key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup/pgdn", "page")),
-		key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
-		key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		m.keys.Top, m.keys.Bottom,
 	}
+	out = append(out, m.body.HelpBindings()...)
 	if m.searchable {
-		out = append(out, key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")))
+		out = append(out, m.keys.Search)
 		if m.query != "" {
-			out = append(out,
-				key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
-				key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
-			)
-			label := "filter"
+			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
+			// Filter-mode label flips based on state; mutate a copy of the
+			// keymap entry rather than fabricating a fresh binding so the
+			// dispatch key still flows from m.keys.
+			label := "filter mode"
 			if m.filterMode {
 				label = "show all"
 			}
-			out = append(out, key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, label)))
+			fk := m.keys.Filter
+			fk.SetHelp(fk.Help().Key, label)
+			out = append(out, fk)
 		}
 	}
 	return out

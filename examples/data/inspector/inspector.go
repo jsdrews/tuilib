@@ -40,7 +40,9 @@ const samplePodJSON = `{
     },
     "annotations": {
       "prometheus.io/scrape": "true",
-      "prometheus.io/port": "9090"
+      "prometheus.io/port": "9090",
+      "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"v1\",\"kind\":\"Pod\",\"metadata\":{\"name\":\"api-gateway-7d8b6c9f44-x7p2k\",\"namespace\":\"production\",\"labels\":{\"app\":\"api-gateway\",\"version\":\"1.4.2\",\"tier\":\"frontend\"}},\"spec\":{\"serviceAccountName\":\"api-gateway\",\"restartPolicy\":\"Always\",\"terminationGracePeriodSeconds\":30}}",
+      "checksum/config": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08-rollout-2026-04-29T10:14:33Z-by-deploy-bot@example.com"
     }
   },
   "spec": {
@@ -48,10 +50,15 @@ const samplePodJSON = `{
     "containers": [
       {
         "name": "gateway",
-        "image": "registry.example.com/api-gateway:1.4.2",
+        "image": "registry.example.com/platform/api-gateway@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "command": ["/usr/local/bin/gateway", "--config=/etc/gateway/config.yaml", "--log-level=info", "--upstream-timeout=30s", "--metrics-addr=0.0.0.0:9090", "--tracing-endpoint=https://otel-collector.observability.svc.cluster.local:4317"],
         "ports": [
           {"containerPort": 8080, "protocol": "TCP"},
           {"containerPort": 9090, "protocol": "TCP", "name": "metrics"}
+        ],
+        "env": [
+          {"name": "DATABASE_URL", "value": "postgres://gateway-user:REDACTED@postgres-primary.production.svc.cluster.local:5432/gateway?sslmode=require&pool_max_conns=25&statement_cache_capacity=512"},
+          {"name": "FEATURE_FLAGS", "value": "rate-limit-v2,circuit-breaker,distributed-tracing,request-coalescing,async-egress,websocket-upgrade,grpc-passthrough,zstd-compression"}
         ],
         "resources": {
           "requests": {"cpu": "100m", "memory": "256Mi"},

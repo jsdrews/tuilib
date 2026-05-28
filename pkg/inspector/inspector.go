@@ -12,8 +12,10 @@
 // filter mode, which hides non-matching subtrees while keeping ancestors
 // visible so the path stays readable. Same nav verbs as pkg/tree:
 // up/down/j/k per row, g/G top/bottom, ctrl+u/ctrl+d half-page,
-// right/l/space to expand or descend, left/h to collapse or jump to
-// parent.
+// space to toggle the cursor row, E/C to expand/collapse all. Arrow
+// keys and hjkl follow the library-wide scroll convention (rule 23)
+// and are reserved for vertical/horizontal scroll — they do not
+// expand/collapse.
 //
 // Use FromAny / FromMap to convert json-unmarshal output (or any
 // map[string]any / []any soup) into Fields without writing per-shape
@@ -90,6 +92,69 @@ type Options struct {
 
 	// Filter configures the embedded filter. Ignored when Filterable=false.
 	Filter filter.Options
+
+	// Keys overrides the default keymap. Any field left as the zero
+	// key.Binding falls back to the corresponding DefaultKeys() value, so
+	// callers can override a single action without restating the rest.
+	// theme.Inspector() pre-populates this with DefaultKeys().
+	Keys Keys
+}
+
+// Keys is the inspector's keymap. Each binding carries both its dispatch
+// keys (WithKeys) and its help label (WithHelp) — Update and Help() read
+// from the same struct, so a custom binding propagates everywhere. The
+// embedded pane.Keys covers horizontal scroll; mutate fields on Pane to
+// override h-scroll without touching the rest.
+type Keys struct {
+	Up, Down                       key.Binding
+	Top, Bottom                    key.Binding
+	HalfUp, HalfDown               key.Binding
+	Toggle, ExpandAll, CollapseAll key.Binding
+	Search, NextMatch, PrevMatch   key.Binding
+	Filter                         key.Binding
+	Pane                           pane.Keys
+}
+
+// DefaultKeys returns the inspector's stock keymap. Mutate the returned
+// value to override individual actions.
+func DefaultKeys() Keys {
+	return Keys{
+		Up:          key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:        key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:         key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:      key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		HalfUp:      key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
+		HalfDown:    key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
+		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		ExpandAll:   key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "expand all")),
+		CollapseAll: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "collapse all")),
+		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		NextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
+		PrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
+		Filter:      key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, "filter mode")),
+		Pane:        pane.DefaultKeys(),
+	}
+}
+
+// fillDefaults fills any zero-valued binding in k with its DefaultKeys()
+// counterpart, so partial overrides on Options.Keys work without restating
+// every field.
+func (k *Keys) fillDefaults() {
+	d := DefaultKeys()
+	if len(k.Up.Keys()) == 0          { k.Up = d.Up }
+	if len(k.Down.Keys()) == 0        { k.Down = d.Down }
+	if len(k.Top.Keys()) == 0         { k.Top = d.Top }
+	if len(k.Bottom.Keys()) == 0      { k.Bottom = d.Bottom }
+	if len(k.HalfUp.Keys()) == 0      { k.HalfUp = d.HalfUp }
+	if len(k.HalfDown.Keys()) == 0    { k.HalfDown = d.HalfDown }
+	if len(k.Toggle.Keys()) == 0      { k.Toggle = d.Toggle }
+	if len(k.ExpandAll.Keys()) == 0   { k.ExpandAll = d.ExpandAll }
+	if len(k.CollapseAll.Keys()) == 0 { k.CollapseAll = d.CollapseAll }
+	if len(k.Search.Keys()) == 0      { k.Search = d.Search }
+	if len(k.NextMatch.Keys()) == 0   { k.NextMatch = d.NextMatch }
+	if len(k.PrevMatch.Keys()) == 0   { k.PrevMatch = d.PrevMatch }
+	if len(k.Filter.Keys()) == 0      { k.Filter = d.Filter }
+	k.Pane.FillDefaults()
 }
 
 // Model is the inspector widget. Embed by value; mutate via the setters.
@@ -107,6 +172,8 @@ type Model struct {
 	valueStyle       lipgloss.Style
 	matchStyle       lipgloss.Style
 	currentLineStyle lipgloss.Style
+
+	keys Keys
 
 	query      string
 	matchRows  []int
@@ -126,33 +193,12 @@ type row struct {
 	labelW int
 }
 
-var keys = struct {
-	Up, Down, Top, End, HalfUp, HalfDown,
-	Expand, Collapse, Toggle, ExpandAll, CollapseAll,
-	Search, NextMatch, PrevMatch, Filter key.Binding
-}{
-	Up:          key.NewBinding(key.WithKeys("up", "k")),
-	Down:        key.NewBinding(key.WithKeys("down", "j")),
-	Top:         key.NewBinding(key.WithKeys("g")),
-	End:         key.NewBinding(key.WithKeys("G")),
-	HalfUp:      key.NewBinding(key.WithKeys("ctrl+u")),
-	HalfDown:    key.NewBinding(key.WithKeys("ctrl+d")),
-	Expand:      key.NewBinding(key.WithKeys("right", "l")),
-	Collapse:    key.NewBinding(key.WithKeys("left", "h")),
-	Toggle:      key.NewBinding(key.WithKeys(" ")),
-	ExpandAll:   key.NewBinding(key.WithKeys("E")),
-	CollapseAll: key.NewBinding(key.WithKeys("C")),
-	Search:      key.NewBinding(key.WithKeys("/")),
-	NextMatch:   key.NewBinding(key.WithKeys("n")),
-	PrevMatch:   key.NewBinding(key.WithKeys("N")),
-	Filter:      key.NewBinding(key.WithKeys("\\")),
-}
-
 // New constructs an inspector. Call Update/View from the parent model.
 func New(opts Options) Model {
 	if opts.Title == "" {
 		opts.Title = "details"
 	}
+	opts.Keys.fillDefaults()
 	m := Model{
 		fields:           append([]Field(nil), opts.Fields...),
 		expanded:         map[string]bool{},
@@ -161,6 +207,7 @@ func New(opts Options) Model {
 		valueStyle:       opts.ValueStyle,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
+		keys:             opts.Keys,
 		matchIdx:         -1,
 	}
 
@@ -185,6 +232,7 @@ func New(opts Options) Model {
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
 		LoadingLabel:   opts.LoadingLabel,
+		Keys:           opts.Keys.Pane,
 	})
 
 	m.preExpand(m.fields, "", 0, opts.InitialDepth)
@@ -207,62 +255,56 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch {
-		case key.Matches(k, keys.Up):
+		case key.Matches(k, m.keys.Up):
 			if m.cursor > 0 {
 				m.cursor--
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.Down):
+		case key.Matches(k, m.keys.Down):
 			if m.cursor < len(m.rows)-1 {
 				m.cursor++
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.Top):
+		case key.Matches(k, m.keys.Top):
 			m.cursor = 0
 			m.refresh()
 			return m, nil
-		case key.Matches(k, keys.End):
+		case key.Matches(k, m.keys.Bottom):
 			m.cursor = max(0, len(m.rows)-1)
 			m.refresh()
 			return m, nil
-		case key.Matches(k, keys.HalfUp):
+		case key.Matches(k, m.keys.HalfUp):
 			if m.cursor > 0 {
 				m.cursor = max(0, m.cursor-m.halfPage())
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.HalfDown):
+		case key.Matches(k, m.keys.HalfDown):
 			if last := len(m.rows) - 1; last >= 0 && m.cursor < last {
 				m.cursor = min(last, m.cursor+m.halfPage())
 				m.refresh()
 			}
 			return m, nil
-		case key.Matches(k, keys.Expand):
-			m.expandOrDescend()
-			return m, nil
-		case key.Matches(k, keys.Collapse):
-			m.collapseOrAscend()
-			return m, nil
-		case key.Matches(k, keys.Toggle):
+		case key.Matches(k, m.keys.Toggle):
 			m.toggleCursor()
 			return m, nil
-		case key.Matches(k, keys.ExpandAll):
+		case key.Matches(k, m.keys.ExpandAll):
 			m.ExpandAll()
 			return m, nil
-		case key.Matches(k, keys.CollapseAll):
+		case key.Matches(k, m.keys.CollapseAll):
 			m.CollapseAll()
 			return m, nil
-		case m.filterable && key.Matches(k, keys.Search):
+		case m.filterable && key.Matches(k, m.keys.Search):
 			return m, m.filter.Focus()
-		case m.filterable && key.Matches(k, keys.NextMatch):
+		case m.filterable && key.Matches(k, m.keys.NextMatch):
 			m.jumpMatch(+1)
 			return m, nil
-		case m.filterable && key.Matches(k, keys.PrevMatch):
+		case m.filterable && key.Matches(k, m.keys.PrevMatch):
 			m.jumpMatch(-1)
 			return m, nil
-		case m.filterable && key.Matches(k, keys.Filter):
+		case m.filterable && key.Matches(k, m.keys.Filter):
 			m.filterMode = !m.filterMode
 			m.refresh()
 			return m, nil
@@ -281,26 +323,25 @@ func (m Model) View() string {
 	return m.body.View()
 }
 
-// Help returns the keys this inspector responds to.
+// Help returns the keys this inspector responds to. Each entry comes
+// straight from m.keys (the same bindings Update dispatches against), so
+// custom keymaps propagate to the hint strip automatically.
 func (m Model) Help() []key.Binding {
 	if m.filterable && m.filter.Focused() {
 		return m.filter.Help()
 	}
 	out := []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("ctrl+u", "ctrl+d"), key.WithHelp("^u/^d", "½ page")),
-		key.NewBinding(key.WithKeys("g", "G"), key.WithHelp("g/G", "top/bot")),
-		key.NewBinding(key.WithKeys("right", "space"), key.WithHelp("→/sp", "expand")),
-		key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "collapse")),
-		key.NewBinding(key.WithKeys("E", "C"), key.WithHelp("E/C", "exp/coll all")),
+		m.keys.Up, m.keys.Down,
+		m.keys.HalfUp, m.keys.HalfDown,
+		m.keys.Top, m.keys.Bottom,
+		m.keys.Toggle,
+		m.keys.ExpandAll, m.keys.CollapseAll,
 	}
+	out = append(out, m.body.HelpBindings()...)
 	if m.filterable {
-		out = append(out,
-			key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-			key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, "filter mode")),
-		)
+		out = append(out, m.keys.Search, m.keys.Filter)
 		if m.query != "" {
-			out = append(out, key.NewBinding(key.WithKeys("n", "N"), key.WithHelp("n/N", "next/prev match")))
+			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
 		}
 	}
 	return out
@@ -567,44 +608,6 @@ func (m *Model) jumpMatch(direction int) {
 	m.refresh()
 }
 
-func (m *Model) expandOrDescend() {
-	if m.cursor < 0 || m.cursor >= len(m.rows) {
-		return
-	}
-	r := m.rows[m.cursor]
-	if r.isLeaf {
-		return
-	}
-	if !m.expanded[r.path] {
-		m.expanded[r.path] = true
-		m.refresh()
-		return
-	}
-	if m.cursor+1 < len(m.rows) && m.rows[m.cursor+1].depth > r.depth {
-		m.cursor++
-		m.refresh()
-	}
-}
-
-func (m *Model) collapseOrAscend() {
-	if m.cursor < 0 || m.cursor >= len(m.rows) {
-		return
-	}
-	r := m.rows[m.cursor]
-	if !r.isLeaf && m.expanded[r.path] {
-		m.expanded[r.path] = false
-		m.refresh()
-		return
-	}
-	for i := m.cursor - 1; i >= 0; i-- {
-		if m.rows[i].depth < r.depth {
-			m.cursor = i
-			m.refresh()
-			return
-		}
-	}
-}
-
 func (m *Model) toggleCursor() {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
 		return
@@ -654,26 +657,36 @@ func (m *Model) draw() {
 		end = len(m.rows)
 	}
 
-	innerW := max(0, m.body.Width()-2-pane.ScrollbarWidth)
-	var b strings.Builder
+	// Render each visible row at its natural width — no truncation here. The
+	// pane's pushContent re-cuts every line to the visible window via
+	// ansi.Cut on every scroll tick, so passing the full content lets the
+	// horizontal scrollbar work (otherwise maxLineW = innerW and MaxXOffset
+	// stays at 0).
+	innerW := m.body.VisibleWidth()
+	lines := make([]string, end-start)
+	maxW := innerW
 	for i := start; i < end; i++ {
-		if i > start {
-			b.WriteByte('\n')
+		line := m.renderRow(m.rows[i])
+		if w := ansi.StringWidth(line); w > maxW {
+			maxW = w
 		}
-		line := m.renderRow(m.rows[i], innerW)
-		if i == m.cursor {
-			line = m.currentLineStyle.Render(padToWidth(line, innerW))
-		}
-		b.WriteString(line)
+		lines[i-start] = line
 	}
-	m.body.SetContent(b.String())
+	// Apply the cursor highlight last, padded to maxW so the background bar
+	// spans the whole visible band rather than ending at the cursor row's
+	// natural text width.
+	if cur := m.cursor - start; cur >= 0 && cur < len(lines) {
+		lines[cur] = m.currentLineStyle.Render(padToWidth(lines[cur], maxW))
+	}
+	m.body.SetContent(strings.Join(lines, "\n"))
 	m.body.SetVirtualScroll(len(m.rows), visible, start)
 	m.body.SetBottomRight(fmt.Sprintf("%d / %d", m.cursor+1, len(m.rows)))
 }
 
 // renderRow lays out one row: indent + glyph + label + (": " + value).
-// Label and value are highlighted when a query is active.
-func (m Model) renderRow(r row, innerW int) string {
+// Label and value are highlighted when a query is active. Rows are returned
+// at their natural width; the pane handles horizontal truncation on scroll.
+func (m Model) renderRow(r row) string {
 	indent := strings.Repeat("  ", r.depth)
 	glyph := "  "
 	if !r.isLeaf {
@@ -693,11 +706,6 @@ func (m Model) renderRow(r row, innerW int) string {
 	rendered := indent + glyph + m.labelStyle.Render(labelPadded)
 	if value != "" {
 		rendered += ": " + m.valueStyle.Render(value)
-	}
-	if innerW > 0 {
-		if w := ansi.StringWidth(rendered); w > innerW {
-			rendered = ansi.Cut(rendered, 0, innerW)
-		}
 	}
 	return rendered
 }

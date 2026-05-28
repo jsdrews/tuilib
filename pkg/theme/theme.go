@@ -309,6 +309,7 @@ func (t Theme) List() list.Options {
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
+		Keys:           list.DefaultKeys(),
 	}
 }
 
@@ -393,6 +394,7 @@ func (t Theme) Table() table.Options {
 			Vertical:   ansi.CellColor(240, "│"),
 			HeaderRule: ansi.CellColor(240, "─"),
 		},
+		Keys: table.DefaultKeys(),
 	}
 }
 
@@ -413,6 +415,7 @@ func (t Theme) Logview() logview.Options {
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
+		Keys:             logview.DefaultKeys(),
 	}
 }
 
@@ -433,6 +436,7 @@ func (t Theme) Tree() tree.Options {
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
+		Keys:             tree.DefaultKeys(),
 	}
 }
 
@@ -456,6 +460,7 @@ func (t Theme) Inspector() inspector.Options {
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
+		Keys:             inspector.DefaultKeys(),
 	}
 }
 
