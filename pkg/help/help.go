@@ -62,6 +62,12 @@ type Options struct {
 	// ShortSeparator is placed between bindings in ShortView. Defaults to
 	// "  •  ".
 	ShortSeparator string
+	// Minimal collapses the footer to just the "? help" / "? close"
+	// affordance regardless of how many bindings the model holds — the
+	// inline strip is hidden and pressing the help key is the only way
+	// to see hints. When expanded, every binding flows into the panel
+	// rows. Set via SetMinimal at runtime.
+	Minimal bool
 }
 
 // Model renders the help strip + expanded panel + bordered overlay. Call
@@ -81,6 +87,7 @@ type Model struct {
 	shortSep            string
 
 	expanded bool
+	minimal  bool
 }
 
 // New constructs a help overlay.
@@ -112,6 +119,7 @@ func New(opts Options) Model {
 		borderColor: opts.BorderColor,
 		spacer:      opts.ColumnSpacer,
 		shortSep:    opts.ShortSeparator,
+		minimal:     opts.Minimal,
 	}
 }
 
@@ -157,6 +165,9 @@ func (m Model) ShortViewBudget(width int) (line string, consumed int, overflow b
 	}
 	if width <= 0 {
 		return m.ShortView(), len(m.bindings), false
+	}
+	if m.minimal {
+		return m.minimalRow(width)
 	}
 	if m.expanded {
 		return m.gridRow0(width)
@@ -204,6 +215,22 @@ func (m Model) ShortViewBudget(width int) (line string, consumed int, overflow b
 	return line, consumed, overflow
 }
 
+// minimalRow renders the footer in minimal mode: just the affordance
+// pair ("? help" when collapsed, "? close" when expanded), padded to
+// width so the statusbar's background fills the full slot. Overflow is
+// true whenever there are any bindings, so the app shell keeps the help
+// key live as the only path to the panel.
+func (m Model) minimalRow(width int) (line string, consumed int, overflow bool) {
+	spacer := m.descStyle.Render(" ")
+	label := "help"
+	if m.expanded {
+		label = "close"
+	}
+	cell := m.keyStyle.Render("?") + spacer + m.descStyle.Render(label)
+	line = m.fillToWidth(cell, width)
+	return line, 0, len(m.bindings) > 0
+}
+
 // gridRow0 renders row 0 of the unified grid: bindings 0..row0Count-1
 // followed by the affordance cell, all sized to per-column widths from
 // planGridFull. Returns line padded to width so any background color
@@ -243,6 +270,12 @@ func (m Model) Expanded() bool { return m.expanded }
 // SetExpanded controls whether the model is in the expanded state.
 // Use ToggleExpanded for the keyboard-driven flip.
 func (m *Model) SetExpanded(b bool) { m.expanded = b }
+
+// SetMinimal flips minimal-footer mode at runtime. See Options.Minimal.
+func (m *Model) SetMinimal(b bool) { m.minimal = b }
+
+// Minimal reports whether the footer is in minimal mode.
+func (m Model) Minimal() bool { return m.minimal }
 
 // ToggleExpanded flips the expanded state and reports the new value.
 func (m *Model) ToggleExpanded() bool {
@@ -376,6 +409,9 @@ func (m Model) planGridFull(width int) (cols int, keyW, descW []int, row0Count i
 		row0BindingCount := try - 1
 		if row0BindingCount > n {
 			row0BindingCount = n
+		}
+		if m.minimal {
+			row0BindingCount = 0
 		}
 		for c := 0; c < row0BindingCount; c++ {
 			b := m.bindings[c]
