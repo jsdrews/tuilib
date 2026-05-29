@@ -110,6 +110,8 @@ type Keys struct {
 	Top, Bottom                    key.Binding
 	HalfUp, HalfDown               key.Binding
 	Toggle, ExpandAll, CollapseAll key.Binding
+	NextSibling, PrevSibling       key.Binding
+	NextLeaf, PrevLeaf             key.Binding
 	Search, NextMatch, PrevMatch   key.Binding
 	Filter                         key.Binding
 	Pane                           pane.Keys
@@ -128,6 +130,10 @@ func DefaultKeys() Keys {
 		Toggle:      key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
 		ExpandAll:   key.NewBinding(key.WithKeys("E"), key.WithHelp("E", "expand all")),
 		CollapseAll: key.NewBinding(key.WithKeys("C"), key.WithHelp("C", "collapse all")),
+		NextSibling: key.NewBinding(key.WithKeys("}"), key.WithHelp("}", "next sibling")),
+		PrevSibling: key.NewBinding(key.WithKeys("{"), key.WithHelp("{", "prev sibling")),
+		NextLeaf:    key.NewBinding(key.WithKeys("J"), key.WithHelp("J", "next leaf")),
+		PrevLeaf:    key.NewBinding(key.WithKeys("K"), key.WithHelp("K", "prev leaf")),
 		Search:      key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
 		NextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
 		PrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
@@ -150,6 +156,10 @@ func (k *Keys) fillDefaults() {
 	if len(k.Toggle.Keys()) == 0      { k.Toggle = d.Toggle }
 	if len(k.ExpandAll.Keys()) == 0   { k.ExpandAll = d.ExpandAll }
 	if len(k.CollapseAll.Keys()) == 0 { k.CollapseAll = d.CollapseAll }
+	if len(k.NextSibling.Keys()) == 0 { k.NextSibling = d.NextSibling }
+	if len(k.PrevSibling.Keys()) == 0 { k.PrevSibling = d.PrevSibling }
+	if len(k.NextLeaf.Keys()) == 0    { k.NextLeaf = d.NextLeaf }
+	if len(k.PrevLeaf.Keys()) == 0    { k.PrevLeaf = d.PrevLeaf }
 	if len(k.Search.Keys()) == 0      { k.Search = d.Search }
 	if len(k.NextMatch.Keys()) == 0   { k.NextMatch = d.NextMatch }
 	if len(k.PrevMatch.Keys()) == 0   { k.PrevMatch = d.PrevMatch }
@@ -296,6 +306,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		case key.Matches(k, m.keys.CollapseAll):
 			m.CollapseAll()
 			return m, nil
+		case key.Matches(k, m.keys.NextSibling):
+			m.jumpSibling(+1)
+			return m, nil
+		case key.Matches(k, m.keys.PrevSibling):
+			m.jumpSibling(-1)
+			return m, nil
+		case key.Matches(k, m.keys.NextLeaf):
+			m.jumpLeaf(+1)
+			return m, nil
+		case key.Matches(k, m.keys.PrevLeaf):
+			m.jumpLeaf(-1)
+			return m, nil
 		case m.filterable && key.Matches(k, m.keys.Search):
 			return m, m.filter.Focus()
 		case m.filterable && key.Matches(k, m.keys.NextMatch):
@@ -336,6 +358,8 @@ func (m Model) Help() []key.Binding {
 		m.keys.Top, m.keys.Bottom,
 		m.keys.Toggle,
 		m.keys.ExpandAll, m.keys.CollapseAll,
+		m.keys.NextSibling, m.keys.PrevSibling,
+		m.keys.NextLeaf, m.keys.PrevLeaf,
 	}
 	out = append(out, m.body.HelpBindings()...)
 	if m.filterable {
@@ -606,6 +630,42 @@ func (m *Model) jumpMatch(direction int) {
 	m.matchIdx = (m.matchIdx + direction + len(m.matchRows)) % len(m.matchRows)
 	m.cursor = m.matchRows[m.matchIdx]
 	m.refresh()
+}
+
+// jumpSibling moves the cursor to the next (step=+1) or previous
+// (step=-1) visible row at the same depth as the current cursor row.
+// Cousins under sibling parents count as same-depth neighbors — the
+// useful skip-past-expanded-children semantics rather than strict
+// same-parent. No-op when no such row exists on the requested side.
+func (m *Model) jumpSibling(step int) {
+	if len(m.rows) == 0 {
+		return
+	}
+	d := m.rows[m.cursor].depth
+	for i := m.cursor + step; i >= 0 && i < len(m.rows); i += step {
+		if m.rows[i].depth == d {
+			m.cursor = i
+			m.refresh()
+			return
+		}
+	}
+}
+
+// jumpLeaf moves the cursor to the next (step=+1) or previous (step=-1)
+// visible leaf row (a field with no Children). Collapsed parents are
+// not leaves — their hidden subtree still has content, so jumpLeaf
+// skips past them. No-op when no such row exists on the requested side.
+func (m *Model) jumpLeaf(step int) {
+	if len(m.rows) == 0 {
+		return
+	}
+	for i := m.cursor + step; i >= 0 && i < len(m.rows); i += step {
+		if m.rows[i].isLeaf {
+			m.cursor = i
+			m.refresh()
+			return
+		}
+	}
 }
 
 func (m *Model) toggleCursor() {
