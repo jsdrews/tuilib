@@ -53,6 +53,15 @@ type Options struct {
 	// fit every binding at the current width, up to this cap.
 	HelpMaxRows int
 
+	// HelpVerbose restores the legacy footer behavior: bindings are
+	// tight-packed inline in the statusbar's left slot until they
+	// overflow. The default (zero value) is minimal mode — the footer
+	// shows only the "? help" affordance and pressing HelpKey opens the
+	// expanded panel with every binding. Minimal cuts clutter on screens
+	// with many bindings (a deep component composition can easily
+	// produce 15+) at the cost of inline discoverability.
+	HelpVerbose bool
+
 	// ThemeEnvVar names an environment variable consulted for the initial
 	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
 	// theme's Name, that theme becomes Themes[0]. Empty string disables
@@ -127,6 +136,7 @@ type Model struct {
 
 	quitKey, themeKey, helpKey key.Binding
 	helpMaxRows                int
+	helpMinimal                bool
 	autoEscPop                 bool
 
 	bc breadcrumb.Model
@@ -180,6 +190,7 @@ func New(opts Options) Model {
 		themeKey:    opts.ThemeKey,
 		helpKey:     opts.HelpKey,
 		helpMaxRows: opts.HelpMaxRows,
+		helpMinimal: !opts.HelpVerbose,
 		autoEscPop:  !opts.DisableAutoEscPop,
 	}
 	m.apply()
@@ -205,7 +216,9 @@ func (m *Model) apply() {
 	bcOpts.Crumbs = m.stack.Crumbs()
 	m.bc = breadcrumb.New(bcOpts)
 
-	m.help = help.New(t.Help())
+	helpOpts := t.Help()
+	helpOpts.Minimal = m.helpMinimal
+	m.help = help.New(helpOpts)
 	if cur := m.stack.Current(); cur != nil {
 		m.help.SetBindings(cur.Help())
 	}
