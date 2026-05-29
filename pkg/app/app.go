@@ -135,7 +135,6 @@ type Model struct {
 	help         help.Model
 	helpExpanded bool
 	helpOverflow bool
-	helpConsumed int
 }
 
 // New constructs an app shell. By default it reorders Themes via
@@ -211,21 +210,19 @@ func (m *Model) apply() {
 		m.help.SetBindings(cur.Help())
 	}
 
-	// Budget the statusbar's left slot: reserve room for the right slot
-	// (version), the left/right padding (each style adds Padding(0,1)),
-	// and the optional middle message slot. When the calculation goes
-	// negative, fall through to the full ShortView and let the statusbar
-	// MaxWidth-clip it visually. The expanded panel continues from where
-	// the footer ran out, so we track consumed to use as its startIdx.
-	m.help.SetExpanded(m.helpExpanded)
-	short, consumed, overflow := m.helpStrip()
-	if !overflow && m.helpExpanded {
-		m.helpExpanded = false
-		m.help.SetExpanded(false)
-		short, consumed, overflow = m.helpStrip()
-	}
+	// Probe the inline (collapsed) flow first to detect overflow: that's
+	// the source of truth for whether ? should toggle anything. If the
+	// inline flow has no overflow, the panel has nothing to show and we
+	// auto-collapse (also covers theme swaps and screen changes that
+	// shrink the binding set).
+	m.help.SetExpanded(false)
+	_, _, overflow := m.helpStrip()
 	m.helpOverflow = overflow
-	m.helpConsumed = consumed
+	if !overflow {
+		m.helpExpanded = false
+	}
+	m.help.SetExpanded(m.helpExpanded)
+	short, _, _ := m.helpStrip()
 
 	prevMsg, prevKind := m.sb.Message()
 	sbOpts := t.Statusbar(short, m.version)
@@ -363,11 +360,18 @@ func (m Model) View() string {
 		layout.Flex(1, body),
 	}
 	if m.helpExpanded {
-		if rows := m.help.ExpandedRows(m.w, m.helpConsumed, m.helpMaxRows); rows > 0 {
+		budget := m.shortViewBudget()
+		if rows := m.help.ExpandedRows(budget, m.helpMaxRows); rows > 0 {
 			h := m.help
-			startIdx := m.helpConsumed
+			// Match the statusbar's left-slot Padding(0,1) so panel
+			// columns align with the footer's row 0.
+			leftPad := 1
 			items = append(items, layout.Fixed(rows, layout.RenderFunc(func(w, _ int) string {
-				return h.ExpandedView(w, rows, startIdx)
+				rightPad := w - leftPad - budget
+				if rightPad < 0 {
+					rightPad = 0
+				}
+				return h.PadLines(h.ExpandedView(budget, rows), leftPad, rightPad)
 			})))
 		}
 	}

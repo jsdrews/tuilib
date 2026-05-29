@@ -475,17 +475,21 @@ path.
   active screen's `Help()` bindings as `key desc  •  key desc  •  …`. When
   they don't all fit, the line is truncated and a `? help` affordance is
   appended. Pressing `?` (configurable via `app.Options.HelpKey`) flips
-  on a multi-row panel above the statusbar that continues the strip —
-  same format, same separator, starting from the first binding that
-  didn't fit. The affordance flips to `? close` while expanded. Panel
-  height is capped by `app.Options.HelpMaxRows` (default 6) and only
-  grows as far as the remaining bindings need. When the window resizes
-  or the active screen changes such that everything fits inline again,
-  the panel auto-collapses and `?` becomes inert — the affordance is the
-  source of truth for whether the key does anything. Screens contribute
-  by returning the right bindings from `Help()` (rule 10); nothing in
-  the screen needs to know about the panel itself. See `pkg/help` for
-  the renderer and `pkg/app` for the wiring.
+  on a multi-row panel above the statusbar that picks up at the first
+  binding that didn't fit and lays the remainder out as a row-major
+  grid: columns are separated by the same `  •  ` as the footer, and
+  per-column key/desc widths are picked so labels align vertically across
+  rows. The grid maximizes columns-per-row for the current width, so
+  wider terminals get fewer panel rows. The affordance flips to
+  `? close` while expanded. Panel height is capped by
+  `app.Options.HelpMaxRows` (default 6) and only grows as far as the
+  remaining bindings need. When the window resizes or the active screen
+  changes such that everything fits inline again, the panel
+  auto-collapses and `?` becomes inert — the affordance is the source of
+  truth for whether the key does anything. Screens contribute by
+  returning the right bindings from `Help()` (rule 10); nothing in the
+  screen needs to know about the panel itself. See `pkg/help` for the
+  renderer and `pkg/app` for the wiring.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
