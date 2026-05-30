@@ -169,10 +169,11 @@ func (k *Keys) fillDefaults() {
 
 // Model is the inspector widget. Embed by value; mutate via the setters.
 type Model struct {
-	fields   []Field
-	expanded map[string]bool
-	rows     []row
-	cursor   int
+	fields       []Field
+	expanded     map[string]bool
+	rows         []row
+	cursor       int
+	initialDepth int
 
 	body       pane.Pane
 	filter     filter.Model
@@ -219,6 +220,7 @@ func New(opts Options) Model {
 		currentLineStyle: opts.CurrentLineStyle,
 		keys:             opts.Keys,
 		matchIdx:         -1,
+		initialDepth:     opts.InitialDepth,
 	}
 
 	bodyH := opts.Height
@@ -245,7 +247,7 @@ func New(opts Options) Model {
 		Keys:           opts.Keys.Pane,
 	})
 
-	m.preExpand(m.fields, "", 0, opts.InitialDepth)
+	m.preExpand(m.fields, "", 0, m.initialDepth)
 	m.refresh()
 	return m
 }
@@ -385,10 +387,14 @@ func (m *Model) SetDimensions(w, h int) {
 // SetFields replaces the record. Expansion state is preserved by row
 // path so refreshing a polled record doesn't collapse what the user had
 // open; cursor falls back to the nearest valid row when its path
-// disappears from the new fields.
+// disappears from the new fields. Options.InitialDepth is re-applied
+// against the new field set so an inspector populated asynchronously
+// (empty at construction, SetFields after a fetch) lands at the same
+// pre-expansion the static-Fields path gets in New.
 func (m *Model) SetFields(fs []Field) {
 	prevPath := m.cursorPath()
 	m.fields = append([]Field(nil), fs...)
+	m.preExpand(m.fields, "", 0, m.initialDepth)
 	m.refresh()
 	if prevPath != "" {
 		for i, r := range m.rows {
