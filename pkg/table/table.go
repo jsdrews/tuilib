@@ -119,6 +119,27 @@ type KeyedRow struct {
 	Cells []string
 }
 
+// ViewportChangedMsg is emitted by the table whenever the visible slice of
+// rows changes — scroll, resize, filter, sort, or a row-set swap. Parents
+// can match this in their own Update to lazy-load off-screen data for the
+// currently visible window (fetch details for FirstVisible..LastVisible,
+// prefetch adjacent pages, etc). Indices are into the post-filter, post-
+// sort visible slice, so they map directly to the rows the user sees. The
+// message is only emitted once the viewport is real (dimensions applied,
+// visible rows non-empty); a SetRows call that lands before the first
+// WindowSizeMsg produces no msg until the next refresh sees a valid
+// viewport. Consecutive duplicate viewports are elided.
+type ViewportChangedMsg struct {
+	// FirstVisible is the index of the topmost row currently on screen.
+	FirstVisible int
+	// LastVisible is the index of the bottommost row currently on screen
+	// (inclusive). Equal to FirstVisible when only one row fits.
+	LastVisible int
+	// TotalRows is len(visible) at the time of emission — the size of the
+	// filtered/sorted set, not the raw row count.
+	TotalRows int
+}
+
 // Options configures a new table. Theme.Table() returns this pre-styled —
 // set Title/Columns/Rows/Filterable/Filter on the returned value.
 type Options struct {
@@ -311,6 +332,16 @@ type Model struct {
 	headerRule string
 
 	keys Keys
+
+	// Viewport tracking for ViewportChangedMsg. vpFirst/Last/Total start at
+	// -1 sentinels so the first real viewport always registers as a change.
+	// vpPending is set by noteViewport when the tuple changes and cleared
+	// by flushViewport, which every Update return path batches into its
+	// tea.Cmd.
+	vpFirst   int
+	vpLast    int
+	vpTotal   int
+	vpPending bool
 }
 
 // New constructs a table.
@@ -336,6 +367,9 @@ func New(opts Options) Model {
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
 		keys:          opts.Keys,
+		vpFirst:       -1,
+		vpLast:        -1,
+		vpTotal:       -1,
 	}
 	m.visible = m.rows
 	m.visibleIdx = identityIndex(len(m.rows))
@@ -375,11 +409,11 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update consumes cursor + filter keys; non-key messages flow to the body
 // pane so spinner ticks reach the loading-state animation.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	var cmd tea.Cmd
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
-		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushViewport())
 	}
 	if m.filterable && m.filter.Focused() {
 		// Intercept tab before forwarding so the textinput doesn't insert a
@@ -389,18 +423,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.completeFilterTerm() {
 				m.applyFilter()
 				m.refresh()
-				return m, nil
+				return m, m.flushViewport()
 			}
 		}
-		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
 		m.applyFilter()
 		m.refresh()
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushViewport())
 	}
 	switch {
 	case m.filterable && key.Matches(km, m.keys.Filter):
-		return m, m.filter.Focus()
+		return m, tea.Batch(m.filter.Focus(), m.flushViewport())
 	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -458,11 +491,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.body.SetXOffset(e)
 		}
 	default:
-		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushViewport())
 	}
-	return m, nil
+	return m, m.flushViewport()
 }
 
 // View stacks filter (if filterable) and the body pane.
@@ -1112,6 +1144,58 @@ func (m *Model) recomputeWidths() {
 	}
 }
 
+// viewport returns the current visible window into the filtered/sorted
+// row slice. valid=false when the viewport isn't real yet — no dimensions
+// applied, or no rows in view — so callers can skip emission until a
+// meaningful window exists.
+func (m Model) viewport() (first, last, total int, valid bool) {
+	dr := m.dataRows()
+	if dr <= 0 || len(m.visible) == 0 {
+		return 0, 0, 0, false
+	}
+	first = m.viewStart
+	last = first + dr - 1
+	if last >= len(m.visible) {
+		last = len(m.visible) - 1
+	}
+	total = len(m.visible)
+	return first, last, total, true
+}
+
+// noteViewport samples the current viewport and, if it differs from the
+// last emitted tuple, marks a ViewportChangedMsg for the next flush. It
+// no-ops when the viewport isn't valid yet, so an early SetRows before
+// the first WindowSizeMsg produces no msg — the message only fires once
+// the viewport is real.
+func (m *Model) noteViewport() {
+	first, last, total, valid := m.viewport()
+	if !valid {
+		return
+	}
+	if first == m.vpFirst && last == m.vpLast && total == m.vpTotal {
+		return
+	}
+	m.vpFirst, m.vpLast, m.vpTotal = first, last, total
+	m.vpPending = true
+}
+
+// flushViewport returns a tea.Cmd carrying the pending ViewportChangedMsg
+// and clears the pending flag, or nil when nothing has changed since the
+// last emission. Every Update return path batches this so the message
+// reaches the parent one tick after the state change that produced it.
+func (m *Model) flushViewport() tea.Cmd {
+	if !m.vpPending {
+		return nil
+	}
+	m.vpPending = false
+	msg := ViewportChangedMsg{
+		FirstVisible: m.vpFirst,
+		LastVisible:  m.vpLast,
+		TotalRows:    m.vpTotal,
+	}
+	return func() tea.Msg { return msg }
+}
+
 // dataRows returns the body height available for data rows (the pane's
 // inner viewport minus the one row reserved for the header, and one
 // additional row when Borders.HeaderRule is set).
@@ -1187,6 +1271,8 @@ func (m *Model) refresh() {
 	} else {
 		m.body.SetBottomRight("")
 	}
+
+	m.noteViewport()
 }
 
 // rebuildDistinct populates m.distinct[i] with the sorted unique
