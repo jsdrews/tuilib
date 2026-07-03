@@ -446,3 +446,136 @@ func TestSetDimensionsRecomputesFlex(t *testing.T) {
 		t.Errorf("flex width after resize = %d, want > %d", m.widths[1], w0)
 	}
 }
+
+// drainViewportMsg runs cmd and returns the first ViewportChangedMsg it
+// produces, or nil if none. Handles both single msgs and tea.BatchMsg by
+// invoking each sub-cmd in turn.
+func drainViewportMsg(cmd tea.Cmd) *ViewportChangedMsg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if vp, ok := msg.(ViewportChangedMsg); ok {
+		return &vp
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if vp := drainViewportMsg(sub); vp != nil {
+				return vp
+			}
+		}
+	}
+	return nil
+}
+
+func newViewportTable(rows int, height int) Model {
+	rr := make([]Row, rows)
+	for i := range rr {
+		rr[i] = Row{"x"}
+	}
+	return New(Options{
+		Width:         20,
+		Height:        height,
+		Columns:       []Column{{Title: "a", Width: 4}},
+		Rows:          rr,
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+}
+
+func TestViewportChangedFiresOnInit(t *testing.T) {
+	m := newViewportTable(20, 8)
+	if m.dataRows() <= 0 {
+		t.Skip("no dataRows in test environment")
+	}
+	if !m.vpPending {
+		t.Fatal("expected viewport pending after New")
+	}
+	// First Update flushes the pending viewport as a msg.
+	_, cmd := m.Update(struct{}{})
+	vp := drainViewportMsg(cmd)
+	if vp == nil {
+		t.Fatal("expected ViewportChangedMsg on first Update, got none")
+	}
+	if vp.FirstVisible != 0 {
+		t.Errorf("FirstVisible = %d, want 0", vp.FirstVisible)
+	}
+	if vp.TotalRows != 20 {
+		t.Errorf("TotalRows = %d, want 20", vp.TotalRows)
+	}
+	if vp.LastVisible < vp.FirstVisible {
+		t.Errorf("LastVisible=%d < FirstVisible=%d", vp.LastVisible, vp.FirstVisible)
+	}
+}
+
+func TestViewportChangedNoRepeatOnUnchangedViewport(t *testing.T) {
+	m := newViewportTable(20, 8)
+	if m.dataRows() <= 0 {
+		t.Skip("no dataRows in test environment")
+	}
+	m, _ = m.Update(struct{}{}) // drain initial
+	// Second Update with no state change should not re-emit.
+	_, cmd := m.Update(struct{}{})
+	if vp := drainViewportMsg(cmd); vp != nil {
+		t.Errorf("unexpected re-emit: %+v", vp)
+	}
+}
+
+func TestViewportChangedOnScroll(t *testing.T) {
+	m := newViewportTable(50, 8)
+	if m.dataRows() <= 0 {
+		t.Skip("no dataRows in test environment")
+	}
+	m, _ = m.Update(struct{}{}) // drain initial
+	// Jump to bottom guarantees a viewport shift on any pane height.
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
+	vp := drainViewportMsg(cmd)
+	if vp == nil {
+		t.Fatal("expected ViewportChangedMsg after G, got none")
+	}
+	if vp.FirstVisible == 0 {
+		t.Errorf("FirstVisible unchanged after scroll: %d", vp.FirstVisible)
+	}
+	if vp.LastVisible != vp.TotalRows-1 {
+		t.Errorf("LastVisible=%d, want TotalRows-1=%d", vp.LastVisible, vp.TotalRows-1)
+	}
+}
+
+func TestViewportChangedOnSetRows(t *testing.T) {
+	m := newViewportTable(20, 8)
+	if m.dataRows() <= 0 {
+		t.Skip("no dataRows in test environment")
+	}
+	m, _ = m.Update(struct{}{}) // drain initial
+	// SetRows changes total; the next Update should carry the msg.
+	m.SetRows([]Row{{"a"}, {"b"}, {"c"}})
+	_, cmd := m.Update(struct{}{})
+	vp := drainViewportMsg(cmd)
+	if vp == nil {
+		t.Fatal("expected ViewportChangedMsg after SetRows, got none")
+	}
+	if vp.TotalRows != 3 {
+		t.Errorf("TotalRows = %d, want 3", vp.TotalRows)
+	}
+}
+
+func TestViewportChangedSuppressedUntilDimensionsApplied(t *testing.T) {
+	// Height 0 → dataRows == 0 → viewport not real → no emission.
+	m := newViewportTable(20, 0)
+	if m.vpPending {
+		t.Errorf("viewport should not be pending when dataRows==0")
+	}
+	_, cmd := m.Update(struct{}{})
+	if vp := drainViewportMsg(cmd); vp != nil {
+		t.Errorf("unexpected emit with zero dataRows: %+v", vp)
+	}
+	// Applying dimensions makes the viewport real → next Update carries msg.
+	m.SetDimensions(20, 8)
+	if m.dataRows() <= 0 {
+		t.Skip("no dataRows even after SetDimensions in test environment")
+	}
+	_, cmd = m.Update(struct{}{})
+	if vp := drainViewportMsg(cmd); vp == nil {
+		t.Fatal("expected ViewportChangedMsg after SetDimensions, got none")
+	}
+}
