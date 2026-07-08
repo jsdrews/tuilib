@@ -47,6 +47,32 @@ type Node interface {
 	Children() []Node
 }
 
+// SelectedChangedMsg is emitted by the tree when the cursor lands on a
+// different node than the last emit — after cursor movement, SetRoot
+// swaps that change the focused node, expand/collapse ops that shift the
+// cursor, or on the initial view. Parents subscribe to it to drive
+// "detail on hover" patterns: refetch a parameterized detail source
+// keyed on the focused node's path. Dedup is on the path (label-based,
+// same identity scheme SetRoot uses to preserve expand state); an
+// identical-structure SetRoot doesn't re-emit. Empty=true fires only as
+// a transition (had focus → no focus) — an initially-empty tree never
+// emits.
+type SelectedChangedMsg struct {
+	// Path is the label-based path from root to the focused node. Nil
+	// when Empty is true. Uses the same path scheme as SetRoot's
+	// expand-state preservation — sibling labels with a duplicate-
+	// suffix ("Pod", "Pod:2") are included in the array.
+	Path []string
+	// Label is the focused node's own label — Path[len(Path)-1] for
+	// convenience. Empty when Empty is true.
+	Label string
+	// Depth is 0 for the root, 1 for its children, etc. Zero when Empty.
+	Depth int
+	// Empty is true when no node is focused. Path / Label / Depth are
+	// zero-valued.
+	Empty bool
+}
+
 // Options configures a new tree. Zero-value fields fall back to defaults.
 type Options struct {
 	Width, Height int
@@ -176,6 +202,15 @@ type Model struct {
 	matchRows  []int  // indices into rows that contain a match
 	matchIdx   int    // -1 when no current match
 	filterMode bool   // when true and query != "", non-matching subtrees are hidden
+
+	// Focus tracking for SelectedChangedMsg. focusInit flips true after
+	// the first emit so an initially-empty tree doesn't send an Empty
+	// message before any nodes exist. focusPath holds the last emitted
+	// path for dedup; a nil slice with focusInit=true means the last
+	// emit was Empty.
+	focusInit    bool
+	focusPath    []string
+	focusPending bool
 }
 
 // row is one rendered line in the flattened view.
@@ -264,7 +299,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
 		m.applyQuery()
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch {
@@ -273,60 +308,60 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.cursor--
 				m.refresh()
 			}
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.Down):
 			if m.cursor < len(m.rows)-1 {
 				m.cursor++
 				m.refresh()
 			}
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.Toggle):
 			m.toggleCursor()
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.Top):
 			m.cursor = 0
 			m.refresh()
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.Bottom):
 			m.cursor = max(0, len(m.rows)-1)
 			m.refresh()
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.ExpandAll):
 			m.expandAll()
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.CollapseAll):
 			m.collapseAll()
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.NextSibling):
 			m.jumpSibling(+1)
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.PrevSibling):
 			m.jumpSibling(-1)
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.NextLeaf):
 			m.jumpLeaf(+1)
-			return m, nil
+			return m, m.flushMsgs()
 		case key.Matches(k, m.keys.PrevLeaf):
 			m.jumpLeaf(-1)
-			return m, nil
+			return m, m.flushMsgs()
 		case m.searchable && key.Matches(k, m.keys.Search):
-			return m, m.filter.Focus()
+			return m, tea.Batch(m.filter.Focus(), m.flushMsgs())
 		case m.searchable && key.Matches(k, m.keys.NextMatch):
 			m.jumpMatch(+1)
-			return m, nil
+			return m, m.flushMsgs()
 		case m.searchable && key.Matches(k, m.keys.PrevMatch):
 			m.jumpMatch(-1)
-			return m, nil
+			return m, m.flushMsgs()
 		case m.searchable && key.Matches(k, m.keys.Filter):
 			m.filterMode = !m.filterMode
 			m.refresh()
-			return m, nil
+			return m, m.flushMsgs()
 		}
 	}
 
 	var cmd tea.Cmd
 	m.body, cmd = m.body.Update(msg)
-	return m, cmd
+	return m, tea.Batch(cmd, m.flushMsgs())
 }
 
 // View stacks the filter (when searchable) above the body pane.
@@ -735,6 +770,70 @@ func (m *Model) refresh() {
 	m.body.SetContent(m.renderContent())
 	m.body.EnsureVisible(m.cursor)
 	m.refreshStatus()
+	m.noteFocus()
+}
+
+// noteFocus samples the current focused node's path and, if it differs
+// from the last-emitted path, marks a SelectedChangedMsg for the next
+// flush. Empty rows are only reported once we've previously emitted a
+// non-empty focus — an initially-empty tree skips the msg so parents
+// don't get an Empty ping before any nodes exist.
+func (m *Model) noteFocus() {
+	empty := len(m.rows) == 0 || m.cursor < 0 || m.cursor >= len(m.rows)
+	if empty {
+		if !m.focusInit || m.focusPath == nil {
+			return
+		}
+		m.focusPath = nil
+		m.focusPending = true
+		return
+	}
+	path := splitPath(m.rows[m.cursor].path)
+	if m.focusInit && stringSliceEqual(m.focusPath, path) {
+		return
+	}
+	m.focusPath = path
+	m.focusPending = true
+}
+
+// flushMsgs returns a tea.Cmd carrying the pending SelectedChangedMsg
+// (or nil when nothing has changed) and clears the pending flag.
+func (m *Model) flushMsgs() tea.Cmd {
+	if !m.focusPending {
+		return nil
+	}
+	m.focusPending = false
+	m.focusInit = true
+	if m.focusPath == nil {
+		return func() tea.Msg { return SelectedChangedMsg{Empty: true} }
+	}
+	path := append([]string(nil), m.focusPath...)
+	label := path[len(path)-1]
+	depth := len(path) - 1
+	return func() tea.Msg {
+		return SelectedChangedMsg{Path: path, Label: label, Depth: depth}
+	}
+}
+
+// splitPath breaks the "/"-separated internal path string into segments,
+// each containing the label (or "label:N" for duplicate siblings).
+func splitPath(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "/")
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Model) collectMatchPaths(n Node, path string, out map[string]bool) bool {

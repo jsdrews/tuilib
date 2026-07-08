@@ -133,6 +133,28 @@ type KeyedItem struct {
 	Display string
 }
 
+// SelectedChangedMsg is emitted by the list when the cursor lands on a
+// different item than the last time we emitted — after cursor movement,
+// after a SetItems / filter operation that changes which item is under
+// the cursor, or on the initial view. Parents subscribe to it to drive
+// "detail on hover" patterns: refetch a parameterized detail source
+// keyed on the focused item. Dedup is on (index, item) so a SetItems
+// swap that lands the same content under the cursor doesn't re-emit; a
+// swap that changes the content does. Empty=true fires only as a
+// transition (had focus → no focus) — an initially-empty list never
+// emits.
+type SelectedChangedMsg struct {
+	// Index is the cursor's position in the post-filter visible slice.
+	// Zero when Empty is true.
+	Index int
+	// Item is the currently focused item's string value. Empty when
+	// Empty is true.
+	Item string
+	// Empty is true when no item is focused (empty visible set or
+	// cursor out of range). Index / Item are zero-valued.
+	Empty bool
+}
+
 // Model is the list widget. Embed as a value; mutate via the setters.
 type Model struct {
 	items   []string
@@ -154,6 +176,16 @@ type Model struct {
 	hScrollbar    bool
 
 	keys Keys
+
+	// Focus tracking for SelectedChangedMsg. focusInit flips true after
+	// the first emit so an initially-empty list doesn't send an Empty
+	// message before any items exist. focusIdx / -Item hold the last
+	// emitted (index, value) for dedup; focusIdx == -1 means the last
+	// emit was Empty.
+	focusInit    bool
+	focusIdx     int
+	focusItem    string
+	focusPending bool
 }
 
 // New constructs a list. Call Update/View from the parent model.
@@ -168,6 +200,7 @@ func New(opts Options) Model {
 		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
 		hScrollbar:    opts.HScrollbar,
 		keys:          opts.Keys,
+		focusIdx:      -1,
 	}
 	m.visible = m.items
 	m.visibleIdx = identityIndex(len(m.items))
@@ -258,6 +291,50 @@ func (m *Model) refresh() {
 	if m.filterable {
 		m.body.SetBottomLeft(fmt.Sprintf("%d / %d", len(m.visible), len(m.items)))
 	}
+	m.noteFocus()
+}
+
+// noteFocus samples the current focused item and, if it differs from the
+// last emitted (index, item) tuple, marks a SelectedChangedMsg for the
+// next flush. An empty visible slice is only reported once we've
+// previously emitted a non-empty focus — an initially-empty list skips
+// the msg so parents don't get an Empty ping before any items exist.
+func (m *Model) noteFocus() {
+	empty := len(m.visible) == 0 || m.cursor < 0 || m.cursor >= len(m.visible)
+	if empty {
+		if !m.focusInit || m.focusIdx == -1 {
+			return
+		}
+		m.focusIdx = -1
+		m.focusItem = ""
+		m.focusPending = true
+		return
+	}
+	item := m.visible[m.cursor]
+	if m.focusInit && m.focusIdx == m.cursor && m.focusItem == item {
+		return
+	}
+	m.focusIdx = m.cursor
+	m.focusItem = item
+	m.focusPending = true
+}
+
+// flushMsgs returns a tea.Cmd carrying the pending SelectedChangedMsg
+// (or nil when nothing has changed) and clears the pending flag. Every
+// Update return path batches this into its returned cmd.
+func (m *Model) flushMsgs() tea.Cmd {
+	if !m.focusPending {
+		return nil
+	}
+	m.focusPending = false
+	m.focusInit = true
+	if m.focusIdx < 0 {
+		return func() tea.Msg { return SelectedChangedMsg{Empty: true} }
+	}
+	idx, item := m.focusIdx, m.focusItem
+	return func() tea.Msg {
+		return SelectedChangedMsg{Index: idx, Item: item}
+	}
 }
 
 // Init satisfies tea.Model — nothing to kick off.
@@ -271,18 +348,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !ok {
 		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	if m.filterable && m.filter.Focused() {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
 		m.applyFilter()
 		m.refresh()
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	switch {
 	case m.filterable && key.Matches(km, m.keys.Filter):
-		return m, m.filter.Focus()
+		return m, tea.Batch(m.filter.Focus(), m.flushMsgs())
 	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -316,9 +393,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	default:
 		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
-	return m, nil
+	return m, m.flushMsgs()
 }
 
 // View stacks filter (if filterable) and the body pane.
