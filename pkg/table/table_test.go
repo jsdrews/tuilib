@@ -579,3 +579,312 @@ func TestViewportChangedSuppressedUntilDimensionsApplied(t *testing.T) {
 		t.Fatal("expected ViewportChangedMsg after SetDimensions, got none")
 	}
 }
+
+// drainRowFocusedMsg pulls the first RowFocusedMsg out of a Cmd (single
+// or batched), mirroring drainViewportMsg.
+func drainRowFocusedMsg(cmd tea.Cmd) *RowFocusedMsg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if rf, ok := msg.(RowFocusedMsg); ok {
+		return &rf
+	}
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if rf := drainRowFocusedMsg(sub); rf != nil {
+				return rf
+			}
+		}
+	}
+	return nil
+}
+
+func newFocusTable(rows []Row) Model {
+	return New(Options{
+		Width:         20,
+		Height:        8,
+		Columns:       []Column{{Title: "name", Width: 6}, {Title: "value", Width: 6}},
+		Rows:          rows,
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+}
+
+func TestRowFocusedFiresOnInit(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}, {"b", "2"}, {"c", "3"}})
+	_, cmd := m.Update(struct{}{})
+	rf := drainRowFocusedMsg(cmd)
+	if rf == nil {
+		t.Fatal("expected RowFocusedMsg on first Update, got none")
+	}
+	if rf.Empty {
+		t.Errorf("Empty=true on non-empty init")
+	}
+	if rf.Row != 0 {
+		t.Errorf("Row = %d, want 0", rf.Row)
+	}
+	if len(rf.Cells) != 2 || rf.Cells[0] != "a" || rf.Cells[1] != "1" {
+		t.Errorf("Cells = %v, want [a 1]", rf.Cells)
+	}
+	if len(rf.Columns) != 2 || rf.Columns[0] != "name" || rf.Columns[1] != "value" {
+		t.Errorf("Columns = %v, want [name value]", rf.Columns)
+	}
+}
+
+func TestRowFocusedNoRepeatOnUnchanged(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}, {"b", "2"}})
+	m, _ = m.Update(struct{}{}) // drain init
+	_, cmd := m.Update(struct{}{})
+	if rf := drainRowFocusedMsg(cmd); rf != nil {
+		t.Errorf("unexpected re-emit: %+v", rf)
+	}
+}
+
+func TestRowFocusedOnCursorMove(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}, {"b", "2"}, {"c", "3"}})
+	m, _ = m.Update(struct{}{}) // drain init
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	rf := drainRowFocusedMsg(cmd)
+	if rf == nil {
+		t.Fatal("expected RowFocusedMsg after cursor down, got none")
+	}
+	if rf.Row != 1 || rf.Cells[0] != "b" {
+		t.Errorf("focused = row %d %v, want row 1 [b 2]", rf.Row, rf.Cells)
+	}
+}
+
+func TestRowFocusedOnSetRowsChangesContent(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}, {"b", "2"}})
+	m, _ = m.Update(struct{}{}) // drain init (row 0 = "a")
+	// SetRows with different content at row 0 should re-emit.
+	m.SetRows([]Row{{"z", "9"}, {"b", "2"}})
+	_, cmd := m.Update(struct{}{})
+	rf := drainRowFocusedMsg(cmd)
+	if rf == nil {
+		t.Fatal("expected RowFocusedMsg after SetRows changing focused row")
+	}
+	if rf.Cells[0] != "z" {
+		t.Errorf("Cells[0] = %q, want z", rf.Cells[0])
+	}
+}
+
+func TestRowFocusedNoRepeatWhenSetRowsKeepsSameContent(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}, {"b", "2"}})
+	m, _ = m.Update(struct{}{}) // drain init
+	// SetRows with same cells at row 0 should NOT re-emit focus.
+	m.SetRows([]Row{{"a", "1"}, {"b", "2"}})
+	_, cmd := m.Update(struct{}{})
+	if rf := drainRowFocusedMsg(cmd); rf != nil {
+		t.Errorf("unexpected re-emit when focused row unchanged: %+v", rf)
+	}
+}
+
+func TestRowFocusedEmitsEmptyOnTransitionToNoRows(t *testing.T) {
+	m := newFocusTable([]Row{{"a", "1"}})
+	m, _ = m.Update(struct{}{}) // drain init
+	m.SetRows(nil)
+	_, cmd := m.Update(struct{}{})
+	rf := drainRowFocusedMsg(cmd)
+	if rf == nil {
+		t.Fatal("expected RowFocusedMsg{Empty:true} after SetRows(nil)")
+	}
+	if !rf.Empty {
+		t.Errorf("Empty = %v, want true; msg = %+v", rf.Empty, rf)
+	}
+	if rf.Cells != nil || rf.Columns != nil {
+		t.Errorf("Cells/Columns should be nil on Empty, got %v / %v", rf.Cells, rf.Columns)
+	}
+}
+
+func TestRowFocusedSuppressedOnEmptyInit(t *testing.T) {
+	// A table constructed with no rows shouldn't emit an initial Empty
+	// message — subscribers only care about transitions.
+	m := newFocusTable(nil)
+	_, cmd := m.Update(struct{}{})
+	if rf := drainRowFocusedMsg(cmd); rf != nil {
+		t.Errorf("unexpected initial emit for empty table: %+v", rf)
+	}
+}
+
+func TestHiddenColumnNotRendered(t *testing.T) {
+	m := New(Options{
+		Width:  40,
+		Height: 6,
+		Columns: []Column{
+			{Title: "Name", Width: 8},
+			{Title: "Namespace", Width: 12, Hidden: true},
+			{Title: "Status", Width: 8},
+		},
+		Rows:          []Row{{"nginx", "default", "Running"}},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	view := m.View()
+	if strings.Contains(view, "Namespace") {
+		t.Errorf("hidden column title 'Namespace' rendered: %q", view)
+	}
+	if strings.Contains(view, "default") {
+		t.Errorf("hidden column cell 'default' rendered: %q", view)
+	}
+	if !strings.Contains(view, "nginx") {
+		t.Errorf("visible cell 'nginx' missing: %q", view)
+	}
+	if !strings.Contains(view, "Running") {
+		t.Errorf("visible cell 'Running' missing: %q", view)
+	}
+}
+
+func TestHiddenColumnWidthIsZero(t *testing.T) {
+	m := New(Options{
+		Width:  40,
+		Height: 5,
+		Columns: []Column{
+			{Title: "A", Width: 10},
+			{Title: "B", Width: 10, Hidden: true},
+			{Title: "C", Width: 10},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	if m.widths[1] != 0 {
+		t.Errorf("hidden column width = %d, want 0", m.widths[1])
+	}
+	if m.widths[0] != 10 || m.widths[2] != 10 {
+		t.Errorf("visible widths = [%d, _, %d], want [10, _, 10]", m.widths[0], m.widths[2])
+	}
+}
+
+func TestHiddenColumnParticipatesInFilter(t *testing.T) {
+	// key:value scoped to a hidden column should still match — the
+	// canonical downstream use case (filter pods by hidden namespace).
+	m := New(Options{
+		Width:      40,
+		Height:     10,
+		Filterable: true,
+		Columns: []Column{
+			{Title: "Name", Width: 8},
+			{Title: "Namespace", Width: 12, Hidden: true},
+		},
+		Rows: []Row{
+			{"nginx", "default"},
+			{"redis", "cache"},
+			{"api", "default"},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	m.SetValue("namespace:default")
+	if len(m.visible) != 2 {
+		t.Fatalf("visible count = %d, want 2 (namespace:default should hit 2 rows)", len(m.visible))
+	}
+	if m.visible[0][0] != "nginx" || m.visible[1][0] != "api" {
+		t.Errorf("filter result = %v, want [nginx api]", m.visible)
+	}
+}
+
+func TestHiddenColumnBareFilterMatchesHiddenCell(t *testing.T) {
+	// A bare term (no key:) still scans every cell in the row including
+	// hidden ones, so "cache" filters down to the redis row via the
+	// hidden Namespace column.
+	m := New(Options{
+		Width:      40,
+		Height:     10,
+		Filterable: true,
+		Columns: []Column{
+			{Title: "Name", Width: 8},
+			{Title: "Namespace", Width: 12, Hidden: true},
+		},
+		Rows: []Row{
+			{"nginx", "default"},
+			{"redis", "cache"},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	m.SetValue("cache")
+	if len(m.visible) != 1 || m.visible[0][0] != "redis" {
+		t.Errorf("bare 'cache' filter = %v, want [redis, cache]", m.visible)
+	}
+}
+
+func TestHiddenColumnAppearsInRowFocusedMsg(t *testing.T) {
+	m := New(Options{
+		Width:  40,
+		Height: 8,
+		Columns: []Column{
+			{Title: "Name", Width: 8},
+			{Title: "Namespace", Width: 12, Hidden: true},
+		},
+		Rows: []Row{
+			{"nginx", "default"},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	_, cmd := m.Update(struct{}{})
+	rf := drainRowFocusedMsg(cmd)
+	if rf == nil {
+		t.Fatal("expected RowFocusedMsg on init")
+	}
+	if len(rf.Cells) != 2 || rf.Cells[1] != "default" {
+		t.Errorf("Cells = %v, want hidden namespace 'default' at [1]", rf.Cells)
+	}
+	if len(rf.Columns) != 2 || rf.Columns[1] != "Namespace" {
+		t.Errorf("Columns = %v, want hidden 'Namespace' at [1]", rf.Columns)
+	}
+}
+
+func TestHiddenColumnFlexDistributionIgnoresHidden(t *testing.T) {
+	// Two visible columns + one hidden flex column. Hidden shouldn't
+	// consume any horizontal space; the visible flex should grow into
+	// the full leftover.
+	m := New(Options{
+		Width:  40,
+		Height: 5,
+		Columns: []Column{
+			{Title: "fixed", Width: 10},
+			{Title: "hidden-flex", Flex: 5, Hidden: true},
+			{Title: "flex", Flex: 1},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	inner := m.body.VisibleWidth()
+	if inner <= 0 {
+		t.Skip("no inner width in test environment")
+	}
+	if m.widths[1] != 0 {
+		t.Errorf("hidden flex width = %d, want 0", m.widths[1])
+	}
+	// The visible flex should have absorbed all leftover after the fixed
+	// column + one separator (only visible columns count towards seps).
+	want := inner - 10 - 1
+	if m.widths[2] != want {
+		t.Errorf("visible flex width = %d, want %d (inner=%d, hidden ignored)", m.widths[2], want, inner)
+	}
+}
+
+func TestHiddenColumnEdgesSkipHidden(t *testing.T) {
+	// columnEdges drives shift+left/right snapping — hidden columns
+	// shouldn't appear in the snap targets.
+	m := New(Options{
+		Width:  60,
+		Height: 5,
+		Columns: []Column{
+			{Title: "a", Width: 10},
+			{Title: "b", Width: 10, Hidden: true},
+			{Title: "c", Width: 10},
+		},
+		HeaderStyle:   lipgloss.NewStyle(),
+		SelectedStyle: lipgloss.NewStyle(),
+	})
+	edges := m.columnEdges()
+	// Only two visible columns: edges at 0 and 11 (10 + 1 sep).
+	if len(edges) != 2 {
+		t.Fatalf("columnEdges = %v, want 2 entries (hidden skipped)", edges)
+	}
+	if edges[0] != 0 || edges[1] != 11 {
+		t.Errorf("edges = %v, want [0 11]", edges)
+	}
+}

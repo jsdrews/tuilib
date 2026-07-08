@@ -228,10 +228,29 @@ func New(opts Options) Model {
 	})
 
 	if opts.Root != nil {
-		m.preExpand(opts.Root, "0", 0, opts.InitialDepth)
+		m.preExpand(opts.Root, rootPath(opts.Root), 0, opts.InitialDepth)
 	}
 	m.refresh()
 	return m
+}
+
+// rootPath returns the identifier for the root node. Label-based so
+// SetRoot can preserve state across a full-tree swap; unique within the
+// tree because every other path is prefixed with root.Label() + "/".
+func rootPath(n Node) string { return n.Label() }
+
+// childPath composes a child path from its parent path, the child's label,
+// and its 1-indexed occurrence count among earlier siblings sharing that
+// label. First occurrence: parent/label; subsequent: parent/label:N.
+// Making paths stable across sibling reordering by keying on Label is the
+// point — an index-based scheme would invalidate every deeper path on any
+// reorder. The occurrence suffix keeps paths unique when two siblings
+// share a label.
+func childPath(parent, label string, occurrence int) string {
+	if occurrence <= 1 {
+		return parent + "/" + label
+	}
+	return fmt.Sprintf("%s/%s:%d", parent, label, occurrence)
 }
 
 // Init satisfies tea.Model.
@@ -369,16 +388,92 @@ func (m *Model) SetQuery(s string) {
 	m.applyQuery()
 }
 
-// SetRoot replaces the underlying tree, resets the expand state to
-// InitialDepth=1 (root expanded), and rebuilds.
+// SetRoot swaps the underlying tree in place, preserving as much user
+// state as possible so periodic polling doesn't clobber the view under
+// the user. Behavior:
+//
+//   - Expand/collapse state is keyed on label-based paths (see childPath).
+//     Any surviving path stays expanded; new nodes appear collapsed
+//     (unless a prior generation of the map had them expanded); paths
+//     that disappeared are pruned from the expanded map.
+//   - Cursor pins to the same node (by path) when it survives. When the
+//     previous node is gone, cursor walks up its ancestors until a
+//     surviving path is found; failing that, cursor snaps to 0.
+//   - Nil root clears expand state and cursor.
+//
+// This is the auto-refresh primitive: fetch new tree, call SetRoot, done.
 func (m *Model) SetRoot(n Node) {
-	m.root = n
-	m.expanded = map[string]bool{}
-	if n != nil {
-		m.preExpand(n, "0", 0, 1)
+	var prevPath string
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		prevPath = m.rows[m.cursor].path
 	}
-	m.cursor = 0
+	m.root = n
+	if n == nil {
+		m.expanded = map[string]bool{}
+		m.cursor = 0
+		m.refresh()
+		return
+	}
 	m.refresh()
+	m.pruneExpanded()
+	m.restoreCursor(prevPath)
+	m.refresh()
+}
+
+// collectAllPaths walks the tree unconditionally (ignoring expand state)
+// and populates out with every reachable path. Used to garbage-collect
+// stale entries from m.expanded on SetRoot.
+func (m *Model) collectAllPaths(n Node, path string, out map[string]bool) {
+	out[path] = true
+	seen := map[string]int{}
+	for _, c := range n.Children() {
+		label := c.Label()
+		seen[label]++
+		m.collectAllPaths(c, childPath(path, label, seen[label]), out)
+	}
+}
+
+// pruneExpanded drops entries from m.expanded whose paths no longer
+// resolve in the current tree, so a long-running Model that swaps roots
+// many times doesn't leak memory into the map.
+func (m *Model) pruneExpanded() {
+	if m.root == nil {
+		m.expanded = map[string]bool{}
+		return
+	}
+	reachable := map[string]bool{}
+	m.collectAllPaths(m.root, rootPath(m.root), reachable)
+	for k := range m.expanded {
+		if !reachable[k] {
+			delete(m.expanded, k)
+		}
+	}
+}
+
+// restoreCursor tries to point the cursor at the row whose path matches
+// prev, then walks ancestors until it finds a surviving row, then falls
+// back to 0.
+func (m *Model) restoreCursor(prev string) {
+	if prev == "" || len(m.rows) == 0 {
+		m.cursor = 0
+		return
+	}
+	idx := make(map[string]int, len(m.rows))
+	for i, r := range m.rows {
+		idx[r.path] = i
+	}
+	for {
+		if i, ok := idx[prev]; ok {
+			m.cursor = i
+			return
+		}
+		slash := strings.LastIndex(prev, "/")
+		if slash < 0 {
+			m.cursor = 0
+			return
+		}
+		prev = prev[:slash]
+	}
 }
 
 // SetDimensions resizes the tree in place.
@@ -472,12 +567,16 @@ func (m *Model) preExpand(n Node, path string, depth, want int) {
 	if depth >= want {
 		return
 	}
-	if len(n.Children()) == 0 {
+	kids := n.Children()
+	if len(kids) == 0 {
 		return
 	}
 	m.expanded[path] = true
-	for i, c := range n.Children() {
-		m.preExpand(c, fmt.Sprintf("%s/%d", path, i), depth+1, want)
+	seen := map[string]int{}
+	for _, c := range kids {
+		label := c.Label()
+		seen[label]++
+		m.preExpand(c, childPath(path, label, seen[label]), depth+1, want)
 	}
 }
 
@@ -488,18 +587,21 @@ func (m *Model) expandAll() {
 	if m.root == nil {
 		return
 	}
-	m.markExpanded(m.root, "0")
+	m.markExpanded(m.root, rootPath(m.root))
 	m.refresh()
 }
 
 func (m *Model) markExpanded(n Node, path string) {
-	children := n.Children()
-	if len(children) == 0 {
+	kids := n.Children()
+	if len(kids) == 0 {
 		return
 	}
 	m.expanded[path] = true
-	for i, c := range children {
-		m.markExpanded(c, fmt.Sprintf("%s/%d", path, i))
+	seen := map[string]int{}
+	for _, c := range kids {
+		label := c.Label()
+		seen[label]++
+		m.markExpanded(c, childPath(path, label, seen[label]))
 	}
 }
 
@@ -604,9 +706,9 @@ func (m *Model) refresh() {
 	if m.root != nil {
 		matchSet := map[string]bool{}
 		if m.filterMode && m.query != "" {
-			m.collectMatchPaths(m.root, "0", matchSet)
+			m.collectMatchPaths(m.root, rootPath(m.root), matchSet)
 		}
-		m.flatten(m.root, "0", 0, matchSet)
+		m.flatten(m.root, rootPath(m.root), 0, matchSet)
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
@@ -637,9 +739,11 @@ func (m *Model) refresh() {
 
 func (m *Model) collectMatchPaths(n Node, path string, out map[string]bool) bool {
 	hit := strings.Contains(strings.ToLower(n.Label()), m.query)
-	for i, c := range n.Children() {
-		childPath := fmt.Sprintf("%s/%d", path, i)
-		if m.collectMatchPaths(c, childPath, out) {
+	seen := map[string]int{}
+	for _, c := range n.Children() {
+		label := c.Label()
+		seen[label]++
+		if m.collectMatchPaths(c, childPath(path, label, seen[label]), out) {
 			hit = true
 		}
 	}
@@ -673,8 +777,11 @@ func (m *Model) flatten(n Node, path string, depth int, matchSet map[string]bool
 	if !exp {
 		return
 	}
-	for i, c := range kids {
-		m.flatten(c, fmt.Sprintf("%s/%d", path, i), depth+1, matchSet)
+	seen := map[string]int{}
+	for _, c := range kids {
+		label := c.Label()
+		seen[label]++
+		m.flatten(c, childPath(path, label, seen[label]), depth+1, matchSet)
 	}
 }
 

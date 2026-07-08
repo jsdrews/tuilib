@@ -9,8 +9,10 @@
 #     for default merge commits, the source branch name) matches
 #     /\b(bug|bugfix|fix)\b/i
 #   - minor bump otherwise
-#   - starts at 0.1.0 if no tags exist
-# Tags are plain semver (no "v" prefix).
+#   - starts at v0.1.0 if no tags exist
+# Tags are emitted as vX.Y.Z (Go's module system requires the "v" prefix
+# for `go get`). Pre-existing bare-semver tags are still considered when
+# computing the next version.
 
 name: CI
 
@@ -51,13 +53,17 @@ jobs:
           git config user.email "github-actions@github.com"
           git config user.name "github-actions"
           git fetch --tags --force
-          LATEST=$(git tag -l '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          # Consider both v-prefixed and legacy bare-semver tags when
+          # picking the previous version. --sort=-v:refname ignores a
+          # leading 'v', so the comparison is apples-to-apples.
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
           if [ -z "$LATEST" ]; then
-            NEXT="0.1.0"
+            NEXT="v0.1.0"
             BUMP="initial"
           else
-            MAJOR=${LATEST%%.*}
-            REST=${LATEST#*.}
+            VERSION=${LATEST#v}
+            MAJOR=${VERSION%%.*}
+            REST=${VERSION#*.}
             MINOR=${REST%%.*}
             PATCH=${REST#*.}
             if echo "$COMMIT_MSG" | grep -Eiq '\b(bug|bugfix|fix)\b'; then
@@ -68,7 +74,7 @@ jobs:
               PATCH=0
               BUMP="minor"
             fi
-            NEXT="${MAJOR}.${MINOR}.${PATCH}"
+            NEXT="v${MAJOR}.${MINOR}.${PATCH}"
           fi
           echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
           git tag -a "$NEXT" -m "Release $NEXT"
