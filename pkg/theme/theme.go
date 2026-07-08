@@ -32,6 +32,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/table"
+	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
@@ -416,6 +417,27 @@ func (t Theme) Logview() logview.Options {
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             logview.DefaultKeys(),
+	}
+}
+
+// TextView returns textview.Options pre-filled from the theme — match
+// highlight in Accent (bold + reverse), current-line background in
+// Subtle, border colors matching pane, and the embedded filter using
+// theme.Filter(). Set Width, Height, Title, Content, Wrap, and
+// Searchable on the returned value before passing to textview.New.
+func (t Theme) TextView() textview.Options {
+	return textview.Options{
+		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
+		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
+		ActiveColor:      t.BorderActive,
+		InactiveColor:    t.BorderInactive,
+		ActiveBorder:     lipgloss.NormalBorder(),
+		InactiveBorder:   lipgloss.NormalBorder(),
+		SlotBrackets:     pane.SlotBracketsNone,
+		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
+		Filter:           t.Filter(),
+		Keys:             textview.DefaultKeys(),
+		Wrap:             true,
 	}
 }
 

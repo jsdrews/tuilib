@@ -47,6 +47,18 @@ type Tab struct {
 	Body screen.Screen
 }
 
+// StripPos controls whether the tab strip renders above or below the body.
+type StripPos int
+
+const (
+	// StripTop places the tab strip on the first row (default).
+	StripTop StripPos = iota
+	// StripBottom places the tab strip on the last row instead. Useful for
+	// dashboard shapes where the primary content is above the fold and tab
+	// switching is a secondary affordance the user reaches for less often.
+	StripBottom
+)
+
 // Options configures a tab pane. Theme is used to derive default styles;
 // override any of the Style/Separator fields to deviate from the palette.
 type Options struct {
@@ -66,6 +78,11 @@ type Options struct {
 	// DisableNumberKeys turns off the 1–9 jump-to-tab shortcut. By default
 	// "1" through "9" map to tabs[0]..tabs[8] (when at least 2 tabs exist).
 	DisableNumberKeys bool
+
+	// StripPos controls whether the strip renders on the first row
+	// (StripTop, default) or the last row (StripBottom). See the StripPos
+	// constants.
+	StripPos StripPos
 
 	// ActiveStyle styles the active tab label (with surrounding spaces).
 	ActiveStyle *lipgloss.Style
@@ -95,6 +112,7 @@ type Model struct {
 	prevKey    key.Binding
 	nextKey    key.Binding
 	numberKeys bool
+	stripPos   StripPos
 
 	t theme.Theme
 }
@@ -131,6 +149,7 @@ func New(opts Options) Model {
 		prevKey:    opts.PrevKey,
 		nextKey:    opts.NextKey,
 		numberKeys: !opts.DisableNumberKeys,
+		stripPos:   opts.StripPos,
 		t:          opts.Theme,
 	}
 	m.applyStyles(opts)
@@ -258,8 +277,8 @@ func (m Model) switchTo(i int) (Model, tea.Cmd) {
 // SetDimensions stores the available rect; renderStrip and the body share it.
 func (m *Model) SetDimensions(w, h int) { m.w, m.h = w, h }
 
-// View renders the tab strip on the first row and the active body's layout
-// in the remaining rows.
+// View renders the tab strip (on the first or last row per StripPos) and
+// the active body's layout in the remaining rows.
 func (m Model) View() string {
 	strip := m.renderStrip(m.w)
 	bodyH := m.h - 1
@@ -269,6 +288,9 @@ func (m Model) View() string {
 	body := m.tabs[m.active].Body.Layout().Render(m.w, bodyH)
 	if bodyH == 0 {
 		return strip
+	}
+	if m.stripPos == StripBottom {
+		return body + "\n" + strip
 	}
 	return strip + "\n" + body
 }

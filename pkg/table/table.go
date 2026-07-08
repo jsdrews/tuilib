@@ -101,6 +101,18 @@ type Column struct {
 	// are handled). When every flex column is capped, leftover space
 	// stays unused on the right edge of the row.
 	MaxWidth int
+	// Hidden, when true, keeps the column in the data model but omits it
+	// from rendering + width computation entirely. Hidden columns still:
+	//   - Participate in filter matching (bare terms scan every cell,
+	//     key:value scoped terms resolve Title against hidden columns
+	//     too — e.g. "namespace:default" filters a table that has a
+	//     hidden Namespace column).
+	//   - Appear in SelectedRow / RowFocusedMsg.Cells / Columns so
+	//     parents can capture identity fields for drilldown (e.g. bind
+	//     ${selection.Namespace}) without giving up screen real estate.
+	// Rows must still have one cell per declared column — hidden columns
+	// don't change the row shape, they just hide their slot from view.
+	Hidden bool
 }
 
 // Row is one row of cell strings, positionally aligned to Options.Columns.
@@ -117,6 +129,30 @@ type Row []string
 type KeyedRow struct {
 	Key   string
 	Cells []string
+}
+
+// RowFocusedMsg is emitted by the table when the cursor lands on a
+// different row than the last time we emitted — after cursor movement,
+// after a filter/sort/SetRows swap that changes which row is under the
+// cursor, or on the initial view. Parents subscribe to it to drive
+// "detail on hover" patterns: refetch a parameterized detail source
+// keyed on the focused row's cells. Dedup is on (row index, cells) so a
+// SetRows swap that lands the same content under the cursor doesn't
+// re-emit; a swap that changes the content does. Empty=true fires only
+// as a transition (had focus → no focus) — an empty table never emits
+// as its first message.
+type RowFocusedMsg struct {
+	// Row is the cursor's index in the post-filter, post-sort visible
+	// slice. Zero when Empty is true.
+	Row int
+	// Cells is the focused row's values in column order. Nil when Empty.
+	Cells []string
+	// Columns is the parallel column titles so subscribers can look up
+	// cells by name without hardcoding index. Nil when Empty.
+	Columns []string
+	// Empty is true when no row is currently focused (empty visible set
+	// or cursor out of range). Row / Cells / Columns are zero-valued.
+	Empty bool
 }
 
 // ViewportChangedMsg is emitted by the table whenever the visible slice of
@@ -342,6 +378,15 @@ type Model struct {
 	vpLast    int
 	vpTotal   int
 	vpPending bool
+
+	// Focus tracking for RowFocusedMsg. focusInit flips true after the
+	// first emit so we don't send an initial Empty msg for tables that
+	// start empty. focusIdx/-Cells hold the last-emitted (row, cells) for
+	// dedup; -1 means the last emit was Empty.
+	focusInit    bool
+	focusIdx     int
+	focusCells   []string
+	focusPending bool
 }
 
 // New constructs a table.
@@ -370,6 +415,7 @@ func New(opts Options) Model {
 		vpFirst:       -1,
 		vpLast:        -1,
 		vpTotal:       -1,
+		focusIdx:      -1,
 	}
 	m.visible = m.rows
 	m.visibleIdx = identityIndex(len(m.rows))
@@ -413,7 +459,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		m.body, cmd = m.body.Update(msg)
-		return m, tea.Batch(cmd, m.flushViewport())
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	if m.filterable && m.filter.Focused() {
 		// Intercept tab before forwarding so the textinput doesn't insert a
@@ -423,17 +469,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.completeFilterTerm() {
 				m.applyFilter()
 				m.refresh()
-				return m, m.flushViewport()
+				return m, m.flushMsgs()
 			}
 		}
 		m.filter, cmd = m.filter.Update(msg)
 		m.applyFilter()
 		m.refresh()
-		return m, tea.Batch(cmd, m.flushViewport())
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	switch {
 	case m.filterable && key.Matches(km, m.keys.Filter):
-		return m, tea.Batch(m.filter.Focus(), m.flushViewport())
+		return m, tea.Batch(m.filter.Focus(), m.flushMsgs())
 	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -492,9 +538,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 	default:
 		m.body, cmd = m.body.Update(msg)
-		return m, tea.Batch(cmd, m.flushViewport())
+		return m, tea.Batch(cmd, m.flushMsgs())
 	}
-	return m, m.flushViewport()
+	return m, m.flushMsgs()
 }
 
 // View stacks filter (if filterable) and the body pane.
@@ -992,18 +1038,22 @@ func (m Model) halfPage() int {
 	return 1
 }
 
-// columnEdges returns the screen-coordinate left edge of each column,
-// accounting for column widths and the inter-column separator. edge[0]
-// is always 0; edge[k] = sum(widths[0..k-1]) + k*sepW.
+// columnEdges returns the screen-coordinate left edge of each visible
+// column, accounting for widths and the inter-column separator. Hidden
+// columns don't appear on screen so they're excluded — column-snap
+// navigation steps between visible columns only.
 func (m Model) columnEdges() []int {
 	if len(m.widths) == 0 {
 		return nil
 	}
 	sepW := ansi.StringWidth(m.colSep)
-	edges := make([]int, len(m.widths))
+	edges := make([]int, 0, len(m.widths))
 	x := 0
 	for i, w := range m.widths {
-		edges[i] = x
+		if m.cols[i].Hidden {
+			continue
+		}
+		edges = append(edges, x)
 		x += w + sepW
 	}
 	return edges
@@ -1051,7 +1101,13 @@ func (m Model) prevColumnEdge(x int) int {
 func (m *Model) recomputeWidths() {
 	n := len(m.cols)
 	m.widths = make([]int, n)
+	visibleN := 0
 	for i, c := range m.cols {
+		if c.Hidden {
+			m.widths[i] = 0
+			continue
+		}
+		visibleN++
 		if c.Width > 0 {
 			m.widths[i] = c.Width
 			continue
@@ -1072,7 +1128,7 @@ func (m *Model) recomputeWidths() {
 
 	hasFlex := false
 	for _, c := range m.cols {
-		if c.Flex > 0 {
+		if !c.Hidden && c.Flex > 0 {
 			hasFlex = true
 			break
 		}
@@ -1086,8 +1142,8 @@ func (m *Model) recomputeWidths() {
 	}
 	sepW := ansi.StringWidth(m.colSep)
 	used := 0
-	if n > 1 {
-		used = (n - 1) * sepW
+	if visibleN > 1 {
+		used = (visibleN - 1) * sepW
 	}
 	for _, w := range m.widths {
 		used += w
@@ -1098,7 +1154,7 @@ func (m *Model) recomputeWidths() {
 	}
 	uncapped := make([]int, 0, n)
 	for i, c := range m.cols {
-		if c.Flex > 0 {
+		if !c.Hidden && c.Flex > 0 {
 			uncapped = append(uncapped, i)
 		}
 	}
@@ -1196,6 +1252,76 @@ func (m *Model) flushViewport() tea.Cmd {
 	return func() tea.Msg { return msg }
 }
 
+// rowCellsEqual is a length + element string equality for the last-
+// emitted cells slice; used by noteFocus to dedup a SetRows that lands
+// the same content under the cursor.
+func rowCellsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// noteFocus samples the current focused row and, if it differs from the
+// last emitted (row, cells) tuple, marks a RowFocusedMsg for the next
+// flush. An empty visible slice is only reported once we've previously
+// emitted a non-empty focus — an initially-empty table skips the msg so
+// parents don't get an Empty ping before any rows exist.
+func (m *Model) noteFocus() {
+	empty := len(m.visible) == 0 || m.cursor < 0 || m.cursor >= len(m.visible)
+	if empty {
+		if !m.focusInit || m.focusIdx == -1 {
+			return
+		}
+		m.focusIdx = -1
+		m.focusCells = nil
+		m.focusPending = true
+		return
+	}
+	cells := []string(m.visible[m.cursor])
+	if m.focusInit && m.focusIdx == m.cursor && rowCellsEqual(m.focusCells, cells) {
+		return
+	}
+	m.focusIdx = m.cursor
+	m.focusCells = append([]string(nil), cells...)
+	m.focusPending = true
+}
+
+// flushMsgs batches every pending emit (viewport, focus) into a single
+// tea.Cmd. Update return paths call this so callers don't need to know
+// which specific subset changed on any given tick.
+func (m *Model) flushMsgs() tea.Cmd {
+	return tea.Batch(m.flushViewport(), m.flushFocus())
+}
+
+// flushFocus returns a tea.Cmd carrying the pending RowFocusedMsg and
+// clears the pending flag, or nil when nothing has changed. Every Update
+// return path batches this alongside flushViewport.
+func (m *Model) flushFocus() tea.Cmd {
+	if !m.focusPending {
+		return nil
+	}
+	m.focusPending = false
+	m.focusInit = true
+	if m.focusIdx < 0 {
+		return func() tea.Msg { return RowFocusedMsg{Empty: true} }
+	}
+	cells := append([]string(nil), m.focusCells...)
+	cols := make([]string, len(m.cols))
+	for i, c := range m.cols {
+		cols[i] = c.Title
+	}
+	idx := m.focusIdx
+	return func() tea.Msg {
+		return RowFocusedMsg{Row: idx, Cells: cells, Columns: cols}
+	}
+}
+
 // dataRows returns the body height available for data rows (the pane's
 // inner viewport minus the one row reserved for the header, and one
 // additional row when Borders.HeaderRule is set).
@@ -1273,6 +1399,7 @@ func (m *Model) refresh() {
 	}
 
 	m.noteViewport()
+	m.noteFocus()
 }
 
 // rebuildDistinct populates m.distinct[i] with the sorted unique
@@ -1444,10 +1571,14 @@ func (m Model) headerCells() []string {
 // widths is the effective width per column (Column.Width plus any flex
 // share); pass it from m.widths so the same row geometry is used by
 // header, data rows, and the header rule. sep is " " by default; with
-// Options.Borders.Vertical set, it becomes " <glyph> ".
+// Options.Borders.Vertical set, it becomes " <glyph> ". Columns with
+// Hidden=true are skipped entirely — no cell, no separator around them.
 func renderRow(cells []string, cols []Column, widths []int, sep string) string {
-	parts := make([]string, len(cols))
+	parts := make([]string, 0, len(cols))
 	for i, col := range cols {
+		if col.Hidden {
+			continue
+		}
 		cell := ""
 		if i < len(cells) {
 			cell = cells[i]
@@ -1456,7 +1587,7 @@ func renderRow(cells []string, cols []Column, widths []int, sep string) string {
 		if i < len(widths) {
 			w = widths[i]
 		}
-		parts[i] = formatCell(cell, w, col.Align)
+		parts = append(parts, formatCell(cell, w, col.Align))
 	}
 	return strings.Join(parts, sep)
 }

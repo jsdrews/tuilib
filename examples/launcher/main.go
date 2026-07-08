@@ -39,6 +39,7 @@ import (
 	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
 	datarunner "github.com/jsdrews/tuilib/examples/data/runner"
 	datatable "github.com/jsdrews/tuilib/examples/data/table"
+	datatextview "github.com/jsdrews/tuilib/examples/data/textview"
 	datatree "github.com/jsdrews/tuilib/examples/data/tree"
 	paneshowcase "github.com/jsdrews/tuilib/examples/pane/showcase"
 	"github.com/jsdrews/tuilib/examples/themecheck"
@@ -54,6 +55,7 @@ var entries = []entry{
 	{"Panes — border + title showcase", "Four panes demonstrating border styles, title positions, and slot-bracket variants.", paneshowcase.New},
 	{"List — filterable cities", "A filterable list.Model as a single-screen app.", datalist.New},
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
+	{"TextView — static text with search + wrap", "Two documents (README + git diff) that cycle via d. /-search + n/N to jump matches, w to toggle wrap, g/G and ctrl+u/d to scroll. No follow, no MaxLines, no filter mode — the counterpart to logview for read-static-text.", datatextview.New},
 	{"Table — filterable + sortable cities", "table.Model with sticky header, three column sizing modes side-by-side (City uses Flex:1 + MaxWidth:28 to absorb leftover space up to a cap — resize the terminal to watch it stretch then stop; Region/Population fixed; Status uses Width:0 for content-auto). [/] to step sort column + s to toggle direction (City + Region sort lexically; Population sorts numerically via a custom Less that parses \"8.3M\"). Status column uses ansi.CellColor so the selected-row bg passes through colored cells. Wiki column wraps each city's Wikipedia URL in ansi.Hyperlink — shift-click in alacritty/tmux/kitty/iTerm2 launches the full URL even when the column is narrow.", datatable.New},
 	{"Form — text + select + confirm", "A form.Model with Text, Select, and Confirm fields; each field is its own bordered component, submit replaces with a result pane.", dataform.New},
 	{"Loading — spinners while fetching", "List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch.", dataloading.New},

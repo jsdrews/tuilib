@@ -65,7 +65,7 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
-   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/tree`, `pkg/inspector` all return a
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
    bordered, titled render from `View()`. To put a label on a component,
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
@@ -78,7 +78,7 @@ example in `examples/`.
    an internal `pane.Pane` + `View()` returns the bordered render.
 
 10. **Components expose `Help() []key.Binding`.** Interactive components
-    (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `tree`,
+    (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `textview`, `tree`,
     `inspector`, `form`) return the bindings they currently respond to. Screens compose these into their
     own `Help()` so the hint strip updates as state changes — e.g. the
     focused field of a form, or whether a logview's filter is engaged.
@@ -216,6 +216,14 @@ example in `examples/`.
     streaming. See `examples/app/tabs`, where the Logs tab keeps appending
     lines while you're on the Cities or Counter tab.
 
+    Strip position is configurable via `Options.StripPos`: `tab.StripTop`
+    (default) puts the strip on the first row; `tab.StripBottom` renders
+    the body first and the strip on the last row. Body height is the
+    same either way — the tabs Model consumes exactly one row for the
+    strip regardless of position. Reach for `StripBottom` in dashboard
+    shapes where the primary content is above the fold and tab switching
+    is a secondary affordance.
+
 20. **For yes/no modals, use `pkg/confirm`.** A `confirm.Model` renders a
     bordered titled pane with two buttons and resolves via
     `confirm.ConfirmedMsg` / `confirm.CancelledMsg` posted as `tea.Cmd`s.
@@ -242,7 +250,16 @@ example in `examples/`.
     chrome from `theme.Alert()` is intentionally neutral: for an
     error-tinted look, override `ActiveColor` with `t.ErrorBG` (and
     optionally `OKStyle` foreground with the same) — the component is
-    palette-agnostic and the semantics live in the override. Hosting,
+    palette-agnostic and the semantics live in the override. For
+    dynamic-length messages (subprocess stderr, `%w`-chained errors,
+    multi-line API responses) set `Options.Autosize = true`: the modal
+    word-wraps at 80% terminal width (40-col floor), caps height at
+    60%, and scrolls the message region internally with the OK button
+    pinned to the last inner row (scroll keys per rule 23:
+    `↑↓`/`j`/`k`, `g`/`G`, `ctrl+u/d`, `PgUp/PgDn`). In autosize the
+    host composes with `layout.Sized(&s.modal)` alone — the modal
+    centers itself inside whatever bounds it gets, so the outer
+    `layout.Center(w, h, ...)` wrapper is redundant. Hosting,
     `IsCapturingKeys`, `Help()` composition, and ZStack placement all
     follow rule 20. See `examples/data/alert`.
 
@@ -360,6 +377,14 @@ example in `examples/`.
   mostly text stream that needs search / jump / filter / auto-follow.
   Wrapping `viewport.Model` directly skips the search highlight, current-
   line indicator, and `MaxLines` cap that logview already gets right.
+- **Don't use `pkg/logview` for static text.** Reach for `pkg/textview`
+  when the payload is a document rather than a stream — a rendered
+  README, a diff, a kubectl describe, an API response body. textview
+  drops logview's streaming machinery (follow / filter mode / MaxLines)
+  and keeps only what read-static-text needs: scroll + search + wrap
+  toggle. `SetContent(s)` replaces the buffer and resets scroll to the
+  top. Same key vocabulary (`/` search, `n`/`N` step, `g`/`G` bounds,
+  `w` toggles wrap) so users don't relearn per component.
 - **Don't roll your own tree viewer.** Use `pkg/tree` for any
   hierarchical data the user needs to expand/collapse and search. Provide
   a `Node` (Label + Children) over your own data shape — don't force
@@ -429,6 +454,8 @@ If you genuinely can't use the app shell, here are the row costs:
 | `table.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body (then header consumes 1) |
 | `logview.Model` (Searchable=false) | caller-controlled, all body |
 | `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `textview.Model` (Searchable=false) | caller-controlled, all body |
+| `textview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `tree.Model` (Searchable=false) | caller-controlled, all body |
 | `tree.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
 | `inspector.Model` (Filterable=false) | caller-controlled, all body |
@@ -582,6 +609,21 @@ path.
   light-line defaults (`│` and `─` in palette index 240); override per
   screen for a different glyph or color, or set fields to `""` to
   disable. See `examples/data/table` and `theme.Table()`.
+- **TextView component:** `pkg/textview` is the read-static-text
+  counterpart to `pkg/logview`. Feed it a document via `Options.Content`
+  (or `SetContent(s)` at runtime — replaces + resets scroll to top).
+  `Wrap` (default true) word-wraps against the pane's inner width via
+  ANSI-aware `x/ansi.Wrap`; toggle at runtime with `w`. When wrap is
+  off, the pane's built-in truncation + horizontal scroll takes over
+  (rule 16). `Searchable=true` embeds the same filter pattern as
+  logview: `/` focuses, typing highlights case-insensitive substring
+  matches, enter blurs (query stays for `n`/`N` stepping), esc clears.
+  No follow, no filter mode, no `MaxLines` — for the streaming case
+  reach for `pkg/logview`. Same nav vocabulary as list/table/logview
+  (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
+  rule 23). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
+  rebuilds via `SetContent`/`SetQuery`/`SetWrap` — the theme swap
+  pattern from rule 4. See `examples/data/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by

@@ -7,6 +7,13 @@
 // border that the user must dismiss before continuing — the right shape
 // for "stop and acknowledge" feedback.
 //
+// The modal uses autosize (Options.Autosize = true): the pane word-wraps
+// its message against 80% of the terminal width, grows vertically up to
+// 60% of the terminal height, and scrolls internally when content
+// overflows — see the "Merge upstream (long stderr)" op for the
+// overflow case. The caller drops the outer layout.Center wrapper and
+// composes with just layout.Sized(&s.modal) inside the ZStack.
+//
 // The result message uses a typed alert.DismissedMsg via tea.Cmd, the
 // parent matches in its own Update to dismiss the modal, exactly the
 // same pattern as pkg/confirm.
@@ -47,6 +54,21 @@ var ops = []op{
 	{"Connect to server", "Connection refused: localhost:8080.\nIs the server running?", ""},
 	{"Run migration 0042", "Migration failed: column \"email\" already exists\nin table \"users\".", ""},
 	{"Deploy to staging", "Deploy aborted: 3 tests failed.\nRun `task test` for details.", ""},
+	{
+		"Merge upstream (long stderr)",
+		"error: Your local changes to the following files would be committed by merge:\n" +
+			"  services/api/handlers/users.go\n" +
+			"  services/api/handlers/sessions.go\n" +
+			"  services/api/handlers/webhooks.go\n" +
+			"Please commit your changes or stash them before you merge.\n" +
+			"Aborting.\n" +
+			"Merge with strategy ort failed.\n" +
+			"hint: Run `git status` to see the affected paths, then either\n" +
+			"hint: stage + commit the wanted edits and drop the rest, or\n" +
+			"hint: run `git stash push -m 'pre-merge'` to defer them.\n" +
+			"hint: Rerun the merge once the working tree is clean.",
+		"",
+	},
 }
 
 type alertScreen struct {
@@ -94,7 +116,9 @@ func (s *alertScreen) Layout() layout.Node {
 	if !s.modalUp {
 		return body
 	}
-	return layout.ZStack(body, layout.Center(52, 9, layout.Sized(&s.modal)))
+	// Autosize handles centering and content sizing internally, so the
+	// caller only needs layout.Sized inside the ZStack overlay.
+	return layout.ZStack(body, layout.Sized(&s.modal))
 }
 
 func (s *alertScreen) Help() []key.Binding {
@@ -138,6 +162,7 @@ func (s *alertScreen) openModal(opLabel, message string) {
 	aOpts.OK = "Dismiss"
 	aOpts.ActiveColor = s.t.ErrorBG
 	aOpts.OKStyle = lipgloss.NewStyle().Bold(true).Foreground(s.t.ErrorBG)
+	aOpts.Autosize = true
 	s.modal = talert.New(aOpts)
 }
 
