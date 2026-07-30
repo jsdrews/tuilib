@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 func TestRenderRowDefaultSep(t *testing.T) {
@@ -177,8 +178,8 @@ func TestContentAutoSizeStripsANSI(t *testing.T) {
 func TestFlexAbsorbsLeftover(t *testing.T) {
 	// inner width 30, two cols: fixed 10 + flex(1) — flex should grow to ~19 (30-10-1 sep).
 	m := New(Options{
-		Width:         32, // outer: 32 - 2 borders - 1 scrollbar = 29 inner
-		Height:        5,
+		Width:  32, // outer: 32 - 2 borders - 1 scrollbar = 29 inner
+		Height: 5,
 		Columns: []Column{
 			{Title: "fixed", Width: 10},
 			{Title: "flex", Width: 0, Flex: 1},
@@ -202,8 +203,8 @@ func TestFlexAbsorbsLeftover(t *testing.T) {
 func TestFlexProportionalSplit(t *testing.T) {
 	// Two flex cols, weights 1 + 3 → 25% / 75% of leftover.
 	m := New(Options{
-		Width:         42, // inner ~ 39
-		Height:        5,
+		Width:  42, // inner ~ 39
+		Height: 5,
 		Columns: []Column{
 			{Title: "fixed", Width: 5},
 			{Title: "a", Flex: 1},
@@ -216,7 +217,7 @@ func TestFlexProportionalSplit(t *testing.T) {
 	if inner <= 0 {
 		t.Skip("pane has no inner width in this test environment")
 	}
-	totalSep := 2 * 1 // 2 inter-column gaps, single space
+	totalSep := 2 * 1                        // 2 inter-column gaps, single space
 	leftover := inner - 5 - 4 - 4 - totalSep // base widths: fixed=5, two flex floor=4 each
 	if leftover <= 0 {
 		t.Skip("not enough room to test flex split")
@@ -235,8 +236,8 @@ func TestFlexProportionalSplit(t *testing.T) {
 func TestFlexNoExpansionWhenTooNarrow(t *testing.T) {
 	// Bases sum exceeds inner — flex columns should not grow (no negative).
 	m := New(Options{
-		Width:         10,
-		Height:        5,
+		Width:  10,
+		Height: 5,
 		Columns: []Column{
 			{Title: "long-fixed", Width: 30},
 			{Title: "flex", Flex: 1},
@@ -255,8 +256,8 @@ func TestFlexNoExpansionWhenTooNarrow(t *testing.T) {
 func TestMaxWidthCapsFlexGrowth(t *testing.T) {
 	// City min 10, MaxWidth 20; only flex column → grows to cap, leftover unused.
 	m := New(Options{
-		Width:         80,
-		Height:        5,
+		Width:  80,
+		Height: 5,
 		Columns: []Column{
 			{Title: "city", Width: 10, Flex: 1, MaxWidth: 20},
 			{Title: "fixed", Width: 8},
@@ -272,8 +273,8 @@ func TestMaxWidthCapsFlexGrowth(t *testing.T) {
 func TestMaxWidthRedistributesToOtherFlex(t *testing.T) {
 	// Two flex cols. City caps at 20; remainder should go entirely to Foo.
 	m := New(Options{
-		Width:         80, // inner ~ 77
-		Height:        5,
+		Width:  80, // inner ~ 77
+		Height: 5,
 		Columns: []Column{
 			{Title: "city", Width: 10, Flex: 1, MaxWidth: 20},
 			{Title: "foo", Width: 4, Flex: 1},
@@ -297,8 +298,8 @@ func TestMaxWidthRedistributesToOtherFlex(t *testing.T) {
 func TestMaxWidthBothCappedLeavesUnused(t *testing.T) {
 	// Both flex cols capped; leftover stays unused.
 	m := New(Options{
-		Width:         80,
-		Height:        5,
+		Width:  80,
+		Height: 5,
 		Columns: []Column{
 			{Title: "a", Width: 4, Flex: 1, MaxWidth: 10},
 			{Title: "b", Width: 4, Flex: 1, MaxWidth: 10},
@@ -431,8 +432,8 @@ func min2(a, b int) int {
 
 func TestSetDimensionsRecomputesFlex(t *testing.T) {
 	m := New(Options{
-		Width:         32,
-		Height:        5,
+		Width:  32,
+		Height: 5,
 		Columns: []Column{
 			{Title: "fixed", Width: 10},
 			{Title: "flex", Flex: 1},
@@ -441,7 +442,7 @@ func TestSetDimensionsRecomputesFlex(t *testing.T) {
 		SelectedStyle: lipgloss.NewStyle(),
 	})
 	w0 := m.widths[1]
-	m.SetDimensions(60, 5)
+	m.SetRect(geom.Rect{W: 60, H: 5})
 	if m.widths[1] <= w0 {
 		t.Errorf("flex width after resize = %d, want > %d", m.widths[1], w0)
 	}
@@ -570,7 +571,7 @@ func TestViewportChangedSuppressedUntilDimensionsApplied(t *testing.T) {
 		t.Errorf("unexpected emit with zero dataRows: %+v", vp)
 	}
 	// Applying dimensions makes the viewport real → next Update carries msg.
-	m.SetDimensions(20, 8)
+	m.SetRect(geom.Rect{W: 20, H: 8})
 	if m.dataRows() <= 0 {
 		t.Skip("no dataRows even after SetDimensions in test environment")
 	}

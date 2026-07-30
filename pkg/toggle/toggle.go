@@ -19,6 +19,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -133,11 +134,15 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View renders the toggle as a bordered three-line pane.
 func (m Model) View() string { return m.pane.View() }
 
-// SetWidth resizes the surrounding pane. Height is fixed at 3.
-func (m *Model) SetWidth(w int) {
-	m.pane.SetDimensions(w, 3)
+// SetRect places the toggle at r. Height is fixed at 3 regardless of what the
+// rect offers, since the pane is border + one content row + border.
+func (m *Model) SetRect(r geom.Rect) {
+	m.pane.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
 	m.pane.SetContent(m.renderInner())
 }
+
+// Rect returns the rect the toggle was last placed at.
+func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
 // SetTitle sets the title shown on the pane's top border.
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }

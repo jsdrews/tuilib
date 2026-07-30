@@ -40,10 +40,10 @@ func New(t theme.Theme) screen.Screen {
 	return s
 }
 
-func (s *listScreen) Title() string          { return "Themes" }
-func (s *listScreen) Init() tea.Cmd          { return nil }
-func (s *listScreen) OnEnter(any) tea.Cmd    { return nil }
-func (s *listScreen) IsCapturingKeys() bool  { return s.list.Filtering() }
+func (s *listScreen) Title() string         { return "Themes" }
+func (s *listScreen) Init() tea.Cmd         { return nil }
+func (s *listScreen) OnEnter(any) tea.Cmd   { return nil }
+func (s *listScreen) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *listScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	k, isKey := msg.(tea.KeyMsg)

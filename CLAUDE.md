@@ -18,10 +18,15 @@ example in `examples/`.
 
 2. **Describe layout declaratively, not with `m.h - N` math.** Compose
    `layout.VStack` / `HStack` / `ZStack` + `Fixed(n, …)` / `Flex(weight, …)`
-   and wrap components via `layout.Sized(&c)` (anything with
-   `SetDimensions(w,h)`) or `layout.Bar(&c)` (anything with `SetWidth(w)`).
-   Never write `height - 2` to leave room for a bar — put the bar in a
-   `Fixed(1, …)` sibling.
+   and wrap components via `layout.Sized(&c)` or `layout.Bar(&c)` —
+   both take anything with `SetRect(geom.Rect)`, which every component
+   satisfies. (`Bar` is `Sized`; the name just documents that a bar
+   belongs in a `Fixed(1, …)` slot.) Never write `height - 2` to leave
+   room for a bar — put the bar in a `Fixed(1, …)` sibling.
+
+   A rect carries absolute position as well as size, which is what lets
+   components answer mouse events without any marker injection — see
+   rule 26.
 
 3. **Always start from a `theme` builder.** Every component has a
    `th.Component()` method on `Theme` that returns a pre-styled `Options`.
@@ -45,10 +50,25 @@ example in `examples/`.
    guard — check `Filtering()`/`Focused()` only where *your* screen's
    own shortcuts would otherwise collide with input.
 
+   A screen using a `focus.Group` (rule 25) usually just delegates:
+   `return s.focus.IsCapturingKeys()`. Every component that swallows
+   printables implements `IsCapturingKeys()` itself — true while a text
+   field is focused or a filter is engaged — so the Group can answer
+   from whichever one currently holds focus.
+
 6. **Forward every `tea.Msg` to embedded components.** Don't conditionally
    skip forwarding — each component decides what to act on. Even if you
    intercepted a key for your own shortcut, still forward it so focus +
    viewport behavior stays correct.
+
+   Two deliberate exceptions, both about *user input aimed at what's on
+   screen*. A screen with a focus.Group sends `tea.KeyMsg` to the
+   focused component only — otherwise typing in an input would also
+   drive a list's cursor — but sends `mouse.Msg` to **every** component,
+   since each tests the position against its own rect and only the one
+   it landed in acts. `pkg/tab` inverts the second half: mouse goes to
+   the *active body only*, because hidden bodies aren't on screen
+   (rule 19).
 
 7. **Pass data through the stack, not globals.** Parent → child: construct
    the child with what it needs (`screen.Push(newDetail(city, s.t))`).
@@ -77,6 +97,12 @@ example in `examples/`.
    input-style components should follow the same shape: `Options.Title` +
    an internal `pane.Pane` + `View()` returns the bordered render.
 
+   A component owns its *geometry* as well as its pane: it stores the
+   rect `SetRect` gave it and does its own mouse hit-testing (rule 26).
+   Nothing outside the component knows where its rows, glyphs or buttons
+   are, which is exactly why the component has to be the one to decide a
+   click was its own.
+
 10. **Components expose `Help() []key.Binding`.** Interactive components
     (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `textview`, `tree`,
     `inspector`, `form`) return the bindings they currently respond to. Screens compose these into their
@@ -84,6 +110,14 @@ example in `examples/`.
     focused field of a form, or whether a logview's filter is engaged.
     When state changes the relevant bindings (filter focused vs. blurred,
     a query is active in logview), `Help()` reflects it.
+
+    Mouse affordances are advertised the same way, as bindings with
+    sentinel keys — `key.WithKeys("mouse:click")`, `WithHelp("click",
+    "focus + select")`. The sentinel matters twice: `help.Compile`
+    dedupes on the joined key string, so two *keyless* bindings would
+    collapse into one, and a sentinel can never match a real
+    `tea.KeyMsg`. Surface these in the expanded `?` panel rather than
+    the inline strip, which is already short on room.
 
 11. **Run interactive subprocesses through `pkg/runner`.** For editors,
     pagers, full-screen TUIs, or any command that needs the terminal
@@ -124,6 +158,13 @@ example in `examples/`.
     `examples/data/drilldown` where enter on the cities list loads
     detail + shifts focus right, and enter on the focused detail
     pushes the level-3 attribute screen.
+
+    Double-click is the mouse spelling of the same verb. Components
+    report it as an `ActivatedMsg` carrying the row that was opened;
+    the screen matches it and does whatever enter would have done, so
+    the two paths stay in step by construction. A *single* click only
+    focuses and moves the cursor — it must always be safe to explore
+    with.
 
 15. **Use `SetLoading(b bool) tea.Cmd` while data is in flight.** Any
     component that owns a pane (`list`, `logview`, `tree`, …) inherits a
@@ -209,12 +250,18 @@ example in `examples/`.
     forward to `tabs.OnEnterActive(result)` so the body that initiated the
     push receives it (rather than a sibling tab).
 
-    Message routing inside `tab.Model`: `tea.KeyMsg` goes to the active body
-    only (otherwise `/` filters, `j/k` cursors, etc. race across hidden
-    tabs); everything else (timers, async fetch results, custom messages)
-    fans out to every body so a `tea.Tick` re-arm in an inactive tab keeps
-    streaming. See `examples/app/tabs`, where the Logs tab keeps appending
-    lines while you're on the Cities or Counter tab.
+    Message routing inside `tab.Model`: `tea.KeyMsg` and `mouse.Msg` go to
+    the active body only (otherwise `/` filters, `j/k` cursors, etc. race
+    across hidden tabs — and a click would be claimed by a hidden body
+    still holding the rect it had when last drawn); everything else
+    (timers, async fetch results, custom messages) fans out to every body
+    so a `tea.Tick` re-arm in an inactive tab keeps streaming. See
+    `examples/app/tabs`, where the Logs tab keeps appending lines while
+    you're on the Cities or Counter tab.
+
+    Clicking a label in the strip switches to that tab. The strip's own
+    row is never part of the body, so this can't compete with whatever
+    the active body draws.
 
     Strip position is configurable via `Options.StripPos`: `tab.StripTop`
     (default) puts the strip on the first row; `tab.StripBottom` renders
@@ -301,6 +348,14 @@ example in `examples/`.
       `$`/`end` to the end. `pkg/table` additionally uses `shift+←` /
       `shift+→` to snap to the previous/next column edge.
 
+    The mouse wheel is on the same axis and follows the same rule: it
+    does exactly what `↓`/`j` does for the component **under the
+    pointer** — moves the cursor in `list`/`table`/`tree`/`inspector`,
+    scrolls the viewport in `logview`/`textview`/`pane`. It acts on
+    whatever is under the pointer whether or not that pane has focus,
+    and never takes focus: scrolling is navigation, not a claim on the
+    keyboard.
+
     The pane (`pkg/pane`) owns the horizontal axis for every component
     that embeds it (`list`, `table`, `logview`, `tree`, `inspector`,
     `filter`, `input`); the cursor-owning component intercepts only the
@@ -330,14 +385,99 @@ example in `examples/`.
     user-level config will route through the same struct via
     `pkg/config`. Don't add a parallel package-level `var keys` — every
     binding the component dispatches against must live in its `Keys`
-    struct.
+    struct. Mouse settings are the exception and deliberately do *not*
+    live here: the double-click threshold is a per-machine preference,
+    so it sits on `config.Config` (`double_click_ms`) with an
+    `app.Options.DoubleClickInterval` override, and no component carries
+    mouse configuration at all (rule 26).
+
+25. **Compose multi-component focus with `pkg/focus`, not an int.** A
+    screen with more than one interactive component holds a
+    `focus.Group` over them in tab order:
+
+    ```go
+    s.focus = focus.NewGroup(&s.query, &s.results, &s.caseTgl)
+    ```
+
+    The Group owns tab/shift-tab cycling, the blur-everything-focus-one
+    dance, and — the part a hand-rolled index can't do — granting focus
+    to a component that was *clicked*, since that request arrives at the
+    component rather than at the screen that knows the ordering. Batch
+    `Group.Init()` into the screen's `Init`, forward every message to
+    `Group.Update`, and route your own shortcuts with `Is`:
+
+    ```go
+    switch {
+    case s.focus.Is(&s.cities): …
+    case s.focus.Is(&s.detail): …
+    }
+    ```
+
+    Every interactive component satisfies `focus.Focusable`
+    (`Focus() tea.Cmd` / `Blur()` / `Focused() bool`). Components that
+    swallow printable keys also implement `focus.Capturer`
+    (`IsCapturingKeys() bool` — true while a text field is focused or a
+    filter is engaged), so a screen's rule-5 gate is usually just
+    `return s.focus.IsCapturingKeys()`. `Group.Help()` returns the
+    cycling bindings plus the focused component's, so the hint strip
+    tracks the active pane for free; relabel the cycling pair with
+    `WithKeys` when "pane" reads better than the default "field".
+
+    Rebuild the Group in `SetTheme` over the same field addresses and
+    restore the index with `SetIndex` — the components behind those
+    addresses are replaced, but the addresses are stable, so the Group
+    keeps pointing at the right panes. See `examples/app/focus`.
+
+26. **Mouse support comes from rects, not from markers.** `pkg/layout`
+    hands every node a `geom.Rect` — absolute position *and* size — and
+    `layout.Sized(&c)` passes it to the component's `SetRect`. A
+    component stores that rect and answers mouse events by testing
+    against it. Nothing is injected into the rendered string, so there
+    is no marker for `ansi.Cut` or `ZStack` to corrupt.
+
+    Mouse is opt-in per app: `app.Options.Mouse = app.MouseClick`. The
+    shell enables reporting from `Init`, so `tea.NewProgram` needs no
+    mouse option of its own. It also translates each `tea.MouseMsg` into
+    a `mouse.Msg` carrying a resolved click count — screens never see
+    the raw event, and no component needs a double-click threshold
+    plumbed into it.
+
+    Inside a component, hit-test with `Rect.Hit(x, y)` rather than
+    `Contains`: `Hit` also rejects events aimed at a component that
+    wasn't drawn in the current frame, so a hidden tab body or a
+    dismissed modal declines clicks without needing to know it's hidden.
+    Decline anything outside your rect by returning the message
+    untouched so a sibling can claim it.
+
+    The verbs, library-wide:
+
+    - **Click** focuses the component (via `focus.RequestSelf`) and
+      moves the cursor to the clicked row.
+    - **Double-click** does what enter does (rule 14) — components emit
+      an `ActivatedMsg` and the screen decides what "open" means.
+    - **Wheel** does what `↓`/`j` does for the component *under the
+      pointer*, focused or not (rule 23). Scrolling is navigation, not a
+      claim on the keyboard.
+    - **Library-drawn chrome is clickable**: table headers sort, tree
+      and inspector `▸`/`▾` glyphs toggle on a single click, modal
+      buttons commit, tab labels switch, breadcrumb crumbs unwind via
+      `screen.PopTo`, and scrollbars accept click-to-jump and drag.
+
+    `pane.RowAt(x, y)` inverts the border inset and scroll offset for
+    components that scroll the pane. Components that window their own
+    rows (`table`, `inspector`) map through their own window start
+    instead — and must keep that computation in one place, shared with
+    rendering, or a click lands on a different row than the one under
+    the pointer.
 
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
-  The shell owns them, including theme-swap rebuilds and `SetWidth` on
-  resize. The only reason to skip it is if you need something the shell's
-  shape doesn't support.
+  The shell owns them, including theme-swap rebuilds and re-placing them
+  on resize. It also owns mouse: enabling reporting, resolving double
+  clicks, and routing clicks on its own chrome (crumbs, the `? help`
+  affordance). The only reason to skip it is if you need something the
+  shell's shape doesn't support.
 - **Don't write `m.h - 2` / `m.h - 5` math inside a screen's `Layout()`.**
   Use `Fixed`/`Flex` siblings. The body gets whatever's left; it doesn't
   need to know about sibling sizes.
@@ -411,6 +551,29 @@ example in `examples/`.
 - **Don't write per-component reset codes.** If bar colors drift between
   embedded segments, the fix is usually "make sure every embedded style
   sets the same `Background()`," not a manual `\x1b[0m`.
+- **Don't hand-roll a focus index.** `focus.Group` (rule 25) owns
+  cycling, the blur-all-focus-one dance, click-to-focus grants, and
+  `IsCapturingKeys` delegation. An int plus an `applyFocus` helper gets
+  the first of those right and silently misses the rest — most visibly,
+  a clicked component has no way to tell the screen it wants focus.
+- **Don't reach for bubblezone or any marker-injection scheme.** Markers
+  encode position *inside the rendered string*, and this library rewrites
+  strings freely — `pane` truncates with `ansi.Cut`, `table` cuts cells,
+  `ZStack` splices three fragments per row. `layout` already computes
+  every rect; use it (rule 26). ZStack in particular duplicates any
+  escape it carries across the splice, so a marked region on a row
+  crossed by a modal registers twice and the wrong copy wins.
+- **Don't compute a component's scroll window in two places.** If
+  rendering derives the visible range one way and hit-testing derives it
+  another, a click resolves to a different row than the one under the
+  pointer — and it only shows up once the content is long enough to
+  scroll. Extract the decision (`viewStart()`, `elideStart()`) and call
+  it from both.
+- **Don't move a viewport under a component that windows its own rows.**
+  `table` and `inspector` derive their window from the cursor and
+  re-render every frame, so a scroll applied behind their back is undone
+  immediately. `pane.HandleScrollbar` reports a target row for exactly
+  this reason; move the cursor instead.
 - **Don't add a comment explaining what well-named code does.** Component
   doc comments belong at the package and exported-symbol level; inline
   code should be self-describing.
@@ -431,16 +594,30 @@ layout.VStack(                                   // stack children top-to-bottom
 - `Fixed(n, node)` reserves exactly `n` cells on the main axis.
 - `Flex(weight, node)` takes a share of what's left; sibling weights set
   the ratio.
-- `Bar(&c)` adapts any `SetWidth(int) + View()` component.
-- `Sized(&c)` adapts any `SetDimensions(w,h int) + View()` component.
-- `RenderFunc(func(w,h int) string)` — escape hatch; size and render inline.
-- `ZStack(base, overlay)` composites overlay over base.
+- `Sized(&c)` adapts any `SetRect(geom.Rect) + View()` component.
+- `Bar(&c)` is `Sized` under a name that says "this renders one row".
+- `RenderFunc(func(r geom.Rect) string)` — escape hatch; render inline at
+  `r.W` × `r.H`.
+- `ZStack(base, overlay)` composites overlay over base. Both layers get
+  the same rect; occluding the base is the host screen's job (rule 20).
 - `Center(w, h, node)` renders `node` at a fixed size, centered in the
   parent's rect — the standard modal pattern (use inside a `ZStack`).
+  The child's rect is offset to where it is actually drawn, so a
+  centered modal hit-tests against its visible position.
+
+A `geom.Rect` is `{X, Y, W, H, Gen}`: absolute terminal position, size,
+and the render generation it was stamped in. The root of a render calls
+`geom.NextGen()` once per frame and seeds its rect with `geom.New`;
+children inherit. Use `Rect.Hit(x, y)` rather than `Contains` for click
+routing — it also rejects a rect from an earlier frame, which is what
+stops an undrawn component claiming a click.
 
 ## Manual layout reference (only when not using `pkg/app`)
 
-If you genuinely can't use the app shell, here are the row costs:
+If you genuinely can't use the app shell, here are the row costs. Size
+components with `SetRect(geom.Rect{W: w, H: h})`; a zero X/Y is fine when
+you aren't hit-testing, and mouse support needs the app shell anyway
+(it's what translates `tea.MouseMsg` into `mouse.Msg`).
 
 | Component | Rows consumed |
 |---|---|
@@ -498,6 +675,26 @@ path.
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
   (not `pkg/theme`) when they grow their own user-tunable defaults.
+  Today it carries `theme:` and `double_click_ms:`.
+- **Geometry:** `pkg/geom` is a leaf holding `Rect{X,Y,W,H,Gen}` plus
+  `Contains` / `Hit` / `Fresh` / `Inset` / `CenterIn`, and the
+  render-generation counter (`NextGen`, `Gen`). Both `pkg/layout` and
+  every component depend on it; it depends on nothing in tuilib, which
+  is why it exists as its own package rather than living in `layout`.
+  `CenterIn` mirrors `lipgloss.Place`'s centering exactly, so a
+  component that draws itself centered can hit-test where it landed.
+- **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
+  cycling, click grants), the `Focusable` interface every component
+  satisfies, and the optional `Capturer` that answers rule 5. Components
+  identify themselves in focus requests by `Token` rather than by
+  pointer — bubbletea's value receiver on `Update` means a component
+  cannot name its own address. See rule 25 and `examples/app/focus`.
+- **Mouse:** `pkg/mouse` is the `Msg` components actually handle
+  (bubbletea's event plus a resolved `Clicks` count) and the `Tracker`
+  that counts rapid repeat presses in the same cell. The app shell owns
+  one tracker, so no component carries mouse state or a threshold. See
+  rule 26 and `examples/app/mouse`; run the launcher to try it, since
+  `app.Options.Mouse` is set there for the whole suite.
 - **Help footer + expanded panel:** the statusbar's left slot renders the
   active screen's `Help()` bindings as `key desc  •  key desc  •  …`. When
   they don't all fit, the line is truncated and a `? help` affordance is
@@ -568,7 +765,7 @@ path.
   surplus redistributes to remaining uncapped flex columns; when all
   flex columns are capped, leftover space stays unused on the right
   edge. Effective widths recompute on
-  `SetRows`/`SetKeyedRows`/`SetColumns`/`SetDimensions`, so flex
+  `SetRows`/`SetKeyedRows`/`SetColumns`/`SetRect`, so flex
   columns reflow on resize and content-auto re-fits when data swaps.
   When the table is narrower than the sum of base widths, flex
   columns don't grow — overflow goes to h-scroll, never to a column

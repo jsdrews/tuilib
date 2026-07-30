@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -131,12 +132,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View renders the input as a bordered three-line pane.
 func (m Model) View() string { return m.pane.View() }
 
-// SetWidth resizes the surrounding pane. Height is fixed at 3.
-func (m *Model) SetWidth(w int) {
-	m.pane.SetDimensions(w, 3)
-	m.input.Width = max(0, w-4)
+// SetRect places the input at r. Height is fixed at 3 regardless of what the
+// rect offers, since the pane is border + one content row + border.
+func (m *Model) SetRect(r geom.Rect) {
+	m.pane.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+	m.input.Width = max(0, r.W-4)
 	m.pane.SetContent(m.input.View())
 }
+
+// Rect returns the rect the input was last placed at.
+func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
 // SetTitle sets the title shown on the pane's top border.
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
@@ -168,6 +173,11 @@ func (m *Model) Blur() {
 
 // Focused reports whether the input is accepting keystrokes.
 func (m Model) Focused() bool { return m.input.Focused() }
+
+// IsCapturingKeys reports whether the input owns the keyboard — true
+// whenever it is focused, since every printable belongs to the text field.
+// Satisfies focus.Capturer.
+func (m Model) IsCapturingKeys() bool { return m.Focused() }
 
 // Help returns the keys this input "owns" — there are no special
 // shortcuts (typing is implied), so the slice is empty. Kept for

@@ -63,6 +63,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -71,12 +73,12 @@ import (
 // terminals); height is capped at 60%. Message content beyond the height
 // cap scrolls internally with the OK button pinned to the last inner row.
 const (
-	autosizeMinWidth   = 40
-	autosizeWidthNum   = 4
-	autosizeWidthDen   = 5
-	autosizeHeightNum  = 3
-	autosizeHeightDen  = 5
-	autosizeMinHeight  = 5
+	autosizeMinWidth  = 40
+	autosizeWidthNum  = 4
+	autosizeWidthDen  = 5
+	autosizeHeightNum = 3
+	autosizeHeightDen = 5
+	autosizeMinHeight = 5
 )
 
 // DismissedMsg is emitted when the user dismisses the alert.
@@ -87,7 +89,7 @@ type DismissedMsg struct{}
 // error-styled alert, override ActiveColor with the theme's ErrorBG after
 // calling theme.Alert().
 type Options struct {
-	// Width and Height set the pane's outer dimensions. SetDimensions
+	// Width and Height set the pane's outer dimensions. SetRect
 	// overrides these later if the host re-sizes the modal.
 	Width, Height int
 
@@ -116,8 +118,8 @@ type Options struct {
 	InactiveBorder lipgloss.Border
 	SlotBrackets   pane.SlotBracketStyle
 
-	// Autosize enables message-content sizing. When true, SetDimensions
-	// treats (w, h) as the outer bounds (typically the terminal size).
+	// Autosize enables message-content sizing. When true, SetRect
+	// treats the rect as the outer bounds (typically the terminal size).
 	// The modal word-wraps its message, sizes itself to fit — capped at
 	// 80% width (min 40 cols) and 60% height — and centers within those
 	// bounds. Content past the height cap scrolls internally with
@@ -125,7 +127,7 @@ type Options struct {
 	// pinned to the last inner row regardless of scroll position.
 	//
 	// When false (the zero value, preserving the fixed-size shape),
-	// SetDimensions sets the pane's outer size directly and the caller
+	// SetRect sets the pane's outer size directly and the caller
 	// handles centering with layout.Center(w, h, layout.Sized(&m)).
 	Autosize bool
 }
@@ -141,6 +143,7 @@ type Model struct {
 
 	// autosize-mode state.
 	autosize     bool
+	rect         geom.Rect
 	outerW       int
 	outerH       int
 	modalW       int
@@ -197,6 +200,9 @@ func (m Model) Init() tea.Cmd { return nil }
 // matches the result in its own Update to dismiss the modal and act. All
 // keys are active — the modal is the only thing focused while it's up.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	k, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -262,20 +268,24 @@ func (m Model) View() string {
 		m.pane.View())
 }
 
-// SetDimensions resizes the surrounding pane. In autosize mode the given
-// (w, h) are treated as outer bounds — the pane sizes itself to fit the
+// SetRect places the surrounding pane. In autosize mode the rect is
+// treated as outer bounds — the pane sizes itself to fit the
 // wrapped message content, capped at 80% width / 60% height — and the
 // wrapped-message viewport recomputes so the modal remains responsive to
 // terminal resizes.
-func (m *Model) SetDimensions(w, h int) {
+// The rect is retained so an autosize modal, which draws itself centered
+// inside the bounds it was given, can hit-test against where it actually
+// landed rather than against the outer bounds.
+func (m *Model) SetRect(r geom.Rect) {
+	m.rect = r
 	if m.autosize {
-		m.outerW, m.outerH = w, h
+		m.outerW, m.outerH = r.W, r.H
 		m.recomputeAutosize()
-		m.pane.SetDimensions(m.modalW, m.modalH)
+		m.pane.SetRect(geom.CenterIn(r, m.modalW, m.modalH))
 		m.pane.SetContent(m.renderInner())
 		return
 	}
-	m.pane.SetDimensions(w, h)
+	m.pane.SetRect(r)
 	m.pane.SetContent(m.renderInner())
 }
 
@@ -291,7 +301,7 @@ func (m *Model) SetMessage(s string) {
 	if m.autosize {
 		m.scrollOffset = 0
 		m.recomputeAutosize()
-		m.pane.SetDimensions(m.modalW, m.modalH)
+		m.pane.SetRect(geom.CenterIn(m.rect, m.modalW, m.modalH))
 	}
 	m.pane.SetContent(m.renderInner())
 }
@@ -339,6 +349,49 @@ func (m Model) Help() []key.Binding {
 // lines starting at scrollOffset, always padded to viewportRows so the
 // blank spacer + OK button pin to the last two inner rows regardless of
 // scroll position.
+// handleMouse resolves a click on the OK button and, in autosize mode,
+// wheel scrolling over the message region.
+//
+// Clicking OK dismisses outright — the button is an acknowledgement, so
+// there is nothing to arm. A click elsewhere inside the modal is swallowed
+// rather than passed through: the alert owns input while it is up. Clicks
+// outside do nothing, leaving esc and the button as the ways out.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if !m.pane.Rect().Hit(e.X, e.Y) {
+		return m, nil
+	}
+	if m.autosize && m.canScroll() && (e.IsWheelUp() || e.IsWheelDown()) {
+		if e.IsWheelUp() {
+			m.scrollOffset -= pane.WheelStep
+		} else {
+			m.scrollOffset += pane.WheelStep
+		}
+		m.clampScroll()
+		m.pane.SetContent(m.renderInner())
+		return m, nil
+	}
+	if e.IsPress() && m.onOK(e.X, e.Y) {
+		return m, dismissed()
+	}
+	return m, nil
+}
+
+// onOK reports whether a position falls on the OK button. The button always
+// occupies the last inner line, left-aligned — in autosize mode it stays
+// pinned there regardless of how far the message has scrolled.
+func (m Model) onOK(x, y int) bool {
+	line, inBody := m.pane.RowAt(x, y)
+	if !inBody {
+		return false
+	}
+	if line != strings.Count(m.renderInner(), "\n") {
+		return false
+	}
+	c := m.pane.ContentRect()
+	pos := (x - c.X) + m.pane.XOffset()
+	return pos >= 0 && pos < ansi.StringWidth("[ "+m.okLabel+" ]")
+}
+
 func (m Model) renderInner() string {
 	ok := m.okStyle.Render("[ " + m.okLabel + " ]")
 
@@ -373,7 +426,7 @@ func (m Model) renderInner() string {
 
 // recomputeAutosize measures the message against the current outer bounds
 // and sets modalW / modalH / wrapped / viewportRows. Called on
-// SetDimensions and SetMessage in autosize mode.
+// SetRect and SetMessage in autosize mode.
 func (m *Model) recomputeAutosize() {
 	if m.outerW < 4 || m.outerH < 3 {
 		m.modalW, m.modalH = m.outerW, m.outerH
@@ -397,7 +450,7 @@ func (m *Model) recomputeAutosize() {
 	}
 
 	// pane reserves 2 border cols + 1 scrollbar col; inner content width
-	// is outer - 3 (see pkg/pane SetDimensions).
+	// is outer - 3 (see pkg/pane SetRect).
 	const paneChromeW = 3
 	innerW := maxW - paneChromeW
 	if innerW < 1 {

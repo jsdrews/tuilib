@@ -57,6 +57,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -242,14 +245,14 @@ type Options struct {
 // The embedded pane.Keys covers horizontal scroll; mutate fields on
 // Pane to override h-scroll without touching the rest.
 type Keys struct {
-	Up, Down                 key.Binding
-	Top, Bottom              key.Binding
-	HalfUp, HalfDown         key.Binding
-	Filter                   key.Binding
-	SortPrev, SortNext       key.Binding
-	SortDir                  key.Binding
-	ColPrev, ColNext         key.Binding
-	Pane                     pane.Keys
+	Up, Down           key.Binding
+	Top, Bottom        key.Binding
+	HalfUp, HalfDown   key.Binding
+	Filter             key.Binding
+	SortPrev, SortNext key.Binding
+	SortDir            key.Binding
+	ColPrev, ColNext   key.Binding
+	Pane               pane.Keys
 }
 
 // DefaultKeys returns the table's stock keymap.
@@ -369,6 +372,10 @@ type Model struct {
 
 	keys Keys
 
+	// token is this table's stable identity for focus requests. Update takes
+	// a value receiver, so the model cannot name its own address.
+	token focus.Token
+
 	// Viewport tracking for ViewportChangedMsg. vpFirst/Last/Total start at
 	// -1 sentinels so the first real viewport always registers as a change.
 	// vpPending is set by noteViewport when the tuple changes and cleared
@@ -412,6 +419,7 @@ func New(opts Options) Model {
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
 		keys:          opts.Keys,
+		token:         focus.NewToken(),
 		vpFirst:       -1,
 		vpLast:        -1,
 		vpTotal:       -1,
@@ -456,6 +464,9 @@ func (m Model) Init() tea.Cmd { return nil }
 // pane so spinner ticks reach the loading-state animation.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		m.body, cmd = m.body.Update(msg)
@@ -578,15 +589,17 @@ func (m Model) Help() []key.Binding {
 	return out
 }
 
-// SetDimensions resizes the table in place. When filterable, the internal
-// filter pane consumes 3 rows at the top and the body pane gets the rest.
-func (m *Model) SetDimensions(w, h int) {
-	bodyH := h
+// SetRect places the table in the given rect. When filterable, the internal
+// filter pane takes the top 3 rows and the body pane gets the rest, offset
+// below it. Each child receives its own absolute rect so a click resolves to
+// the right one.
+func (m *Model) SetRect(r geom.Rect) {
+	body := r
 	if m.filterable {
-		m.filter.SetWidth(w)
-		bodyH = max(0, h-3)
+		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
 	}
-	m.body.SetDimensions(w, bodyH)
+	m.body.SetRect(body)
 	m.recomputeWidths()
 	m.refresh()
 }
@@ -670,8 +683,15 @@ func (m *Model) SetValue(s string) {
 // SetTitle updates the title rendered on the body pane's top border.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
-// SetFocused sets the body pane's focus state (controls border color).
-func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
+// Focus marks the component as focused, flipping the body pane's border to
+// its active color. Returns a nil command — there is no cursor to blink.
+func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+
+// Blur removes focus, flipping the body pane's border to its inactive color.
+func (m *Model) Blur() { m.body.SetFocused(false) }
+
+// Focused reports whether the component currently owns focus.
+func (m Model) Focused() bool { return m.body.Focused() }
 
 // SetActiveColor / SetInactiveColor update the body pane's border colors.
 // Useful for theme swaps that don't rebuild the model.
@@ -733,6 +753,10 @@ func (m Model) Columns() []Column { return m.cols }
 
 // Filtering reports whether the embedded filter currently has focus.
 func (m Model) Filtering() bool { return m.filterable && m.filter.Focused() }
+
+// IsCapturingKeys reports whether the table currently swallows printable
+// keys — true while its filter is focused. Satisfies focus.Capturer.
+func (m Model) IsCapturingKeys() bool { return m.Filtering() }
 
 // SortColumn returns the active sort column index (-1 when no sort).
 func (m Model) SortColumn() int { return m.sortCol }
@@ -1320,6 +1344,147 @@ func (m *Model) flushFocus() tea.Cmd {
 	return func() tea.Msg {
 		return RowFocusedMsg{Row: idx, Cells: cells, Columns: cols}
 	}
+}
+
+// FocusToken returns the table's stable focus identity. See focus.Identified.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// ActivatedMsg is emitted when the user opens the selected row with a double
+// click — the mouse spelling of enter (rule 14). Row is the index into the
+// post-filter visible set; Cells is that row's content.
+type ActivatedMsg struct {
+	Row   int
+	Cells []string
+}
+
+// headerRows is how many content lines the header occupies before the first
+// data row: the header itself, plus the rule when Borders.HeaderRule is set.
+func (m Model) headerRows() int {
+	if m.headerRule != "" {
+		return 2
+	}
+	return 1
+}
+
+// handleMouse routes a mouse event that may or may not belong to this table.
+//
+// The table windows its own rows rather than scrolling the pane, so a click
+// maps through viewStart instead of the pane's scroll offset. Content line 0
+// is the pinned header (line 1 too, with a rule); clicking there sorts by the
+// column under the pointer rather than selecting a row.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if row, ok := m.body.HandleScrollbar(e); ok {
+		if row < len(m.visible) {
+			m.cursor = row
+			m.refresh()
+		}
+		return m, m.flushMsgs()
+	}
+	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
+		if e.IsPress() {
+			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token), m.flushMsgs())
+		}
+		return m, m.flushMsgs()
+	}
+
+	line, inBody := m.body.RowAt(e.X, e.Y)
+	if !inBody {
+		return m, nil
+	}
+
+	switch {
+	case e.IsWheelUp():
+		m.moveCursor(-1)
+		return m, m.flushMsgs()
+
+	case e.IsWheelDown():
+		m.moveCursor(1)
+		return m, m.flushMsgs()
+
+	case e.IsPress():
+		if line < m.headerRows() {
+			return m, tea.Batch(m.clickHeader(e.X), focus.RequestSelf(m.token), m.flushMsgs())
+		}
+		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
+		row := m.viewStart + (line - m.headerRows())
+		if row >= 0 && row < len(m.visible) {
+			m.cursor = row
+			m.refresh()
+			if e.IsDoubleClick() {
+				idx := m.cursor
+				cells := append([]string(nil), m.visible[idx]...)
+				cmds = append(cmds, func() tea.Msg {
+					return ActivatedMsg{Row: idx, Cells: cells}
+				})
+			}
+		}
+		cmds = append(cmds, m.flushMsgs())
+		return m, tea.Batch(cmds...)
+	}
+	return m, nil
+}
+
+// clickHeader sorts by the column under x, mirroring what "[", "]" and "s"
+// do from the keyboard: clicking the active sort column flips direction,
+// clicking a different Sortable column sorts by it ascending. Columns that
+// aren't Sortable ignore the click.
+func (m *Model) clickHeader(x int) tea.Cmd {
+	col, ok := m.columnAt(x)
+	if !ok || col >= len(m.cols) || !m.cols[col].Sortable {
+		return nil
+	}
+	if m.sortCol == col {
+		m.sortDesc = !m.sortDesc
+	} else {
+		m.sortCol, m.sortDesc = col, false
+	}
+	m.applySort()
+	m.refresh()
+	return nil
+}
+
+// columnAt maps a terminal x to a column index, accounting for the pane's
+// border, its horizontal scroll offset, hidden columns, and the separator
+// between columns. Reports ok=false when x lands on a separator or past the
+// last column.
+func (m Model) columnAt(x int) (int, bool) {
+	c := m.body.ContentRect()
+	// Position within the rendered row, undoing the h-scroll offset.
+	pos := (x - c.X) + m.body.XOffset()
+	if pos < 0 {
+		return 0, false
+	}
+	sepW := ansi.StringWidth(m.colSep)
+	at := 0
+	first := true
+	for i, col := range m.cols {
+		if col.Hidden {
+			continue
+		}
+		if !first {
+			at += sepW
+		}
+		first = false
+		w := 0
+		if i < len(m.widths) {
+			w = m.widths[i]
+		}
+		if pos >= at && pos < at+w {
+			return i, true
+		}
+		at += w
+	}
+	return 0, false
+}
+
+// moveCursor steps the cursor by delta, clamped to the visible set.
+func (m *Model) moveCursor(delta int) {
+	next := m.cursor + delta
+	if next < 0 || next >= len(m.visible) {
+		return
+	}
+	m.cursor = next
+	m.refresh()
 }
 
 // dataRows returns the body height available for data rows (the pane's

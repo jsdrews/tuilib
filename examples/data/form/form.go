@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/form"
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -69,10 +70,9 @@ func (s *Screen) Layout() layout.Node {
 	return layout.RenderFunc(s.renderForm)
 }
 
-func (s *Screen) renderForm(w, h int) string {
-	inner := max(0, w-2-pane.ScrollbarWidth)
-	s.form.SetDimensions(inner, max(0, h-2))
-	s.body.SetDimensions(w, h)
+func (s *Screen) renderForm(r geom.Rect) string {
+	s.body.SetRect(r)
+	s.form.SetRect(s.body.ContentRect())
 	s.body.SetContent(s.form.View())
 	return s.body.View()
 }

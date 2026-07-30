@@ -1,11 +1,19 @@
-// Package focus demonstrates a screen with multiple components and
-// tab/shift-tab focus cycling. Only the focused component receives
-// keystrokes; the others sit dim with their inactive border color.
+// Package focus demonstrates a screen with multiple components sharing one
+// keyboard, using pkg/focus to decide which of them has it.
 //
-// The pattern is: keep an int focus index, intercept tab/shift-tab in
-// Update, call Blur on every component and Focus on the active one, and
-// forward all other messages to the focused component only — otherwise
-// typing in the input would also move list cursors.
+// A focus.Group holds the components in tab order and owns three things a
+// hand-rolled index cannot do as well:
+//
+//   - tab / shift-tab cycling, including the blur-everything-focus-one dance
+//   - granting focus to a component that was clicked, since the click arrives
+//     at the component rather than at the screen that knows the ordering
+//   - answering IsCapturingKeys from whichever component currently has focus
+//
+// The screen still routes messages itself, because focus is about the
+// keyboard and not about content: keys go to the focused component only —
+// otherwise typing in the query would also drive the list's cursor — while
+// mouse events go to every component, so each can test the click against its
+// own rect and claim it if it landed inside.
 package focus
 
 import (
@@ -13,9 +21,11 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/toggle"
@@ -34,47 +44,71 @@ type focusScreen struct {
 	results list.Model
 	caseTgl toggle.Model
 
-	focus int // 0=query, 1=results, 2=caseTgl
+	focus focus.Group
 }
 
-const focusCount = 3
-
 func (s *focusScreen) Title() string       { return "Focus" }
-func (s *focusScreen) Init() tea.Cmd       { return tea.Batch(textinput.Blink, s.query.Focus()) }
 func (s *focusScreen) OnEnter(any) tea.Cmd { return nil }
 
-// IsCapturingKeys claims keys only while the input is focused — that's
-// the one component that needs every printable (q, t, …) routed to it.
-// The list (j/k/↑↓) and toggle (←→/space) don't conflict with the shell's
-// global keys, so they let q-quit and esc-pop pass through normally.
-func (s *focusScreen) IsCapturingKeys() bool { return s.query.Focused() }
+func (s *focusScreen) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, s.focus.Init())
+}
+
+// IsCapturingKeys defers to whichever component holds focus. The input says
+// yes whenever it's focused; the list says yes only while its filter is
+// engaged; the toggle never does, since ←/→ and space don't collide with the
+// shell's globals.
+func (s *focusScreen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *focusScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok {
-		switch k.String() {
-		case "tab":
-			s.focus = (s.focus + 1) % focusCount
-			return s, s.applyFocus()
-		case "shift+tab":
-			s.focus = (s.focus - 1 + focusCount) % focusCount
-			return s, s.applyFocus()
-		case "esc":
-			// While capturing, the shell suppresses its auto-esc-pop; pop
-			// explicitly so esc backs out from any focus state.
-			return s, screen.Pop(nil)
-		}
+	var cmds []tea.Cmd
+
+	// The group consumes tab / shift-tab and grants any focus request a
+	// clicked component sent back up.
+	var gcmd tea.Cmd
+	s.focus, gcmd = s.focus.Update(msg)
+	cmds = append(cmds, gcmd)
+
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
+		// While capturing, the shell suppresses its auto-esc-pop; pop
+		// explicitly so esc backs out from any focus state.
+		return s, screen.Pop(nil)
 	}
 
+	if _, isMouse := msg.(mouse.Msg); isMouse {
+		cmds = append(cmds, s.forwardAll(msg)...)
+	} else {
+		cmds = append(cmds, s.forwardFocused(msg))
+	}
+	return s, tea.Batch(cmds...)
+}
+
+// forwardAll hands a message to every component. Used for mouse events: each
+// component tests the position against its own rect, and only the one it
+// landed in acts.
+func (s *focusScreen) forwardAll(msg tea.Msg) []tea.Cmd {
+	var cmds []tea.Cmd
+	var c tea.Cmd
+	s.query, c = s.query.Update(msg)
+	cmds = append(cmds, c)
+	s.results, c = s.results.Update(msg)
+	cmds = append(cmds, c)
+	s.caseTgl, c = s.caseTgl.Update(msg)
+	return append(cmds, c)
+}
+
+// forwardFocused hands a message to the focused component alone.
+func (s *focusScreen) forwardFocused(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
-	switch s.focus {
-	case 0:
+	switch {
+	case s.focus.Is(&s.query):
 		s.query, cmd = s.query.Update(msg)
-	case 1:
+	case s.focus.Is(&s.results):
 		s.results, cmd = s.results.Update(msg)
-	case 2:
+	case s.focus.Is(&s.caseTgl):
 		s.caseTgl, cmd = s.caseTgl.Update(msg)
 	}
-	return s, cmd
+	return cmd
 }
 
 func (s *focusScreen) Layout() layout.Node {
@@ -85,23 +119,11 @@ func (s *focusScreen) Layout() layout.Node {
 	)
 }
 
-// Help composes the screen-wide bindings (tab/shift-tab/esc) with the
-// focused component's own — each component owns its keys via Help().
+// Help composes the screen's own binding with the group's, which already
+// carries tab / shift-tab plus the focused component's keys.
 func (s *focusScreen) Help() []key.Binding {
-	base := []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next field")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev field")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	}
-	switch s.focus {
-	case 0:
-		return append(base, s.query.Help()...)
-	case 1:
-		return append(base, s.results.Help()...)
-	case 2:
-		return append(base, s.caseTgl.Help()...)
-	}
-	return base
+	out := s.focus.Help()
+	return append(out, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")))
 }
 
 func (s *focusScreen) SetTheme(t theme.Theme) {
@@ -129,20 +151,11 @@ func (s *focusScreen) SetTheme(t theme.Theme) {
 	tOpts.Initial = s.caseTgl.Value()
 	s.caseTgl = toggle.New(tOpts)
 
-	s.applyFocus()
-}
-
-func (s *focusScreen) applyFocus() tea.Cmd {
-	s.query.Blur()
-	s.results.SetFocused(false)
-	s.caseTgl.Blur()
-	switch s.focus {
-	case 0:
-		return s.query.Focus()
-	case 1:
-		s.results.SetFocused(true)
-	case 2:
-		return s.caseTgl.Focus()
-	}
-	return nil
+	// Rebuild the group over the same field addresses and restore the index.
+	// The components behind those addresses were just replaced, but the
+	// addresses themselves are stable, so the group keeps pointing at the
+	// right panes across a theme swap.
+	at := s.focus.Index()
+	s.focus = focus.NewGroup(&s.query, &s.results, &s.caseTgl)
+	s.focus.SetIndex(at)
 }

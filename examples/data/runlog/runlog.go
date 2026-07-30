@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
@@ -38,7 +39,7 @@ type Screen struct {
 	t       theme.Theme
 	cmds    list.Model
 	log     lv.Model
-	focus   int // 0 = command list, 1 = logview
+	focus   focus.Group
 	running *exec.Cmd
 }
 
@@ -76,7 +77,7 @@ type logDoneMsg struct{ err error }
 func (s *Screen) Title() string         { return "Runlog" }
 func (s *Screen) Init() tea.Cmd         { return textinput.Blink }
 func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
-func (s *Screen) IsCapturingKeys() bool { return s.log.Searching() }
+func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
@@ -99,9 +100,9 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok && !s.log.Searching() {
 		switch k.String() {
 		case "tab", "shift+tab":
-			s.focus = (s.focus + 1) % 2
-			s.applyFocus()
-			return s, nil
+			var cmd tea.Cmd
+			s.focus, cmd = s.focus.Update(msg)
+			return s, cmd
 		case "c":
 			if s.running != nil {
 				_ = s.running.Process.Signal(syscall.SIGINT)
@@ -115,7 +116,7 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			}
 			return s, nil
 		}
-		if s.focus == 0 && k.String() == "enter" && s.running == nil {
+		if s.focus.Is(&s.cmds) && k.String() == "enter" && s.running == nil {
 			idx := s.cmds.Cursor()
 			if idx >= 0 && idx < len(entries) {
 				s.log.Clear()
@@ -126,7 +127,7 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	if s.focus == 0 {
+	if s.focus.Is(&s.cmds) {
 		s.cmds, cmd = s.cmds.Update(msg)
 	} else {
 		s.log, cmd = s.log.Update(msg)
@@ -153,7 +154,7 @@ func (s *Screen) Help() []key.Binding {
 			key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "force-kill (SIGKILL)")),
 		)
 	}
-	if s.focus == 0 {
+	if s.focus.Is(&s.cmds) {
 		base = append(base,
 			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
 			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
@@ -195,8 +196,9 @@ func (s *Screen) SetTheme(t theme.Theme) {
 }
 
 func (s *Screen) applyFocus() {
-	s.cmds.SetFocused(s.focus == 0)
-	s.log.SetFocused(s.focus == 1)
+	at := s.focus.Index()
+	s.focus = focus.NewGroup(&s.cmds, &s.log)
+	s.focus.SetIndex(at)
 }
 
 func labels() []string {

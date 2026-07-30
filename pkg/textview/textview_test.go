@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // newTV builds a textview for tests. Width/height are pane outer dims.
@@ -224,11 +225,11 @@ func TestSetDimensionsRewrapsWhenWrapOn(t *testing.T) {
 	msg := strings.Repeat("word ", 30) // 150 chars
 	m := newTV(strings.TrimRight(msg, " "), 40, 10, false, true)
 	linesWide := len(m.lines)
-	m.SetDimensions(20, 10)
+	m.SetRect(geom.Rect{W: 20, H: 10})
 	if len(m.lines) <= linesWide {
 		t.Errorf("shrink should produce more wrapped lines: was %d, now %d", linesWide, len(m.lines))
 	}
-	m.SetDimensions(40, 10)
+	m.SetRect(geom.Rect{W: 40, H: 10})
 	if len(m.lines) != linesWide {
 		t.Errorf("grow back should restore line count: was %d, now %d", linesWide, len(m.lines))
 	}

@@ -12,7 +12,7 @@ type testNode struct {
 	children []Node
 }
 
-func (t *testNode) Label() string  { return t.label }
+func (t *testNode) Label() string    { return t.label }
 func (t *testNode) Children() []Node { return t.children }
 
 func n(label string, kids ...Node) *testNode {

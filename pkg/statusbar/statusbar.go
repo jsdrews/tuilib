@@ -11,6 +11,7 @@ package statusbar
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // MessageKind is the state of the center slot.
@@ -46,6 +47,8 @@ type Options struct {
 
 // Model is a one-line status bar.
 type Model struct {
+	rect geom.Rect
+
 	width       int
 	left, right string
 
@@ -129,7 +132,22 @@ func (m Model) View() string {
 	return lipgloss.NewStyle().Inline(true).MaxWidth(m.width).Width(m.width).Render(row)
 }
 
-func (m *Model) SetWidth(w int)    { m.width = w }
+func (m *Model) SetRect(r geom.Rect) { m.rect = r; m.width = r.W }
+func (m Model) Rect() geom.Rect      { return m.rect }
+
+// LeftContentRect returns the rect covering the left slot's text, excluding
+// the style's own padding. The app shell uses it to locate the trailing help
+// affordance inside the rendered hint line — the statusbar is handed that
+// line pre-rendered, so it knows where the slot sits but not what is in it.
+func (m Model) LeftContentRect() geom.Rect {
+	return geom.Rect{
+		X:   m.rect.X + m.leftStyle.GetPaddingLeft(),
+		Y:   m.rect.Y,
+		W:   lipgloss.Width(m.left),
+		H:   1,
+		Gen: m.rect.Gen,
+	}
+}
 func (m *Model) SetLeft(s string)  { m.left = s }
 func (m *Model) SetRight(s string) { m.right = s }
 

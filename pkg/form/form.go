@@ -29,6 +29,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/toggle"
@@ -91,6 +92,7 @@ type Model struct {
 	fields     []Field
 	focus      int // 0..len(fields)-1 is a field; len(fields) is the submit button
 	w, h       int
+	rect       geom.Rect
 	submitText string
 	spacing    int
 	styles     Styles
@@ -163,11 +165,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) View() string {
 	sep := "\n" + strings.Repeat("\n", m.spacing)
 	var b strings.Builder
+	// Fields are stacked, so each one's origin is the running total of what
+	// came before plus the separators. Height is only known after rendering,
+	// which is why y advances by the measured view rather than a prediction.
+	y := m.rect.Y
 	for i, f := range m.fields {
 		if i > 0 {
 			b.WriteString(sep)
+			y += 1 + m.spacing
 		}
-		b.WriteString(f.View(m.w, i == m.focus))
+		v := f.View(geom.Rect{X: m.rect.X, Y: y, W: m.rect.W, H: m.rect.H, Gen: m.rect.Gen}, i == m.focus)
+		b.WriteString(v)
+		y += lipgloss.Height(v)
 	}
 	b.WriteString(sep)
 	label := "[ " + m.submitText + " ]"
@@ -179,9 +188,13 @@ func (m Model) View() string {
 	return b.String()
 }
 
-// SetDimensions satisfies layout.Sized so the form can be placed into a
-// layout tree via layout.Sized(&formModel).
-func (m *Model) SetDimensions(w, h int) { m.w, m.h = w, h }
+// SetRect satisfies layout.Sizer so the form can be placed into a layout
+// tree via layout.Sized(&formModel). The rect is retained so View can hand
+// each field its own absolute position as it stacks them.
+func (m *Model) SetRect(r geom.Rect) { m.rect = r; m.w, m.h = r.W, r.H }
+
+// Rect returns the rect the form was last placed at.
+func (m Model) Rect() geom.Rect { return m.rect }
 
 // SetStyles replaces the form's styles and propagates them to every field.
 func (m *Model) SetStyles(s Styles) {
@@ -277,10 +290,12 @@ func (m *Model) propagateStyles() {
 type Field interface {
 	Key() string
 	Update(tea.Msg) (Field, tea.Cmd)
-	// View renders the field at the given outer width. focused tells the
-	// field whether it currently owns input — fields use it to flip border
-	// colors and expand inline (e.g. Select shows all options when focused).
-	View(width int, focused bool) string
+	// View renders the field into the given rect. Fields that occupy a
+	// fixed number of rows may ignore r.H and use their own. focused tells
+	// the field whether it currently owns input — fields use it to flip
+	// border colors and expand inline (e.g. Select shows all options when
+	// focused).
+	View(r geom.Rect, focused bool) string
 	Value() any
 	Focus() tea.Cmd
 	Blur()
@@ -314,11 +329,11 @@ func Text(opts TextOptions) Field {
 	return &textField{key: opts.Key, input: in}
 }
 
-func (f *textField) Key() string           { return f.key }
-func (f *textField) Value() any            { return f.input.Value() }
-func (f *textField) Focus() tea.Cmd        { return f.input.Focus() }
-func (f *textField) Blur()                 { f.input.Blur() }
-func (f *textField) Help() []key.Binding   { return f.input.Help() }
+func (f *textField) Key() string         { return f.key }
+func (f *textField) Value() any          { return f.input.Value() }
+func (f *textField) Focus() tea.Cmd      { return f.input.Focus() }
+func (f *textField) Blur()               { f.input.Blur() }
+func (f *textField) Help() []key.Binding { return f.input.Help() }
 
 func (f *textField) SetStyles(s *Styles) {
 	f.styles = s
@@ -342,8 +357,8 @@ func (f *textField) Update(msg tea.Msg) (Field, tea.Cmd) {
 	return f, cmd
 }
 
-func (f *textField) View(width int, _ bool) string {
-	f.input.SetWidth(width)
+func (f *textField) View(r geom.Rect, _ bool) string {
+	f.input.SetRect(r)
 	return f.input.View()
 }
 
@@ -390,10 +405,10 @@ func Select(o SelectOptions) Field {
 	return &selectField{key: o.Key, list: li, height: height}
 }
 
-func (f *selectField) Key() string           { return f.key }
-func (f *selectField) Focus() tea.Cmd        { f.list.SetFocused(true); return nil }
-func (f *selectField) Blur()                 { f.list.SetFocused(false) }
-func (f *selectField) Help() []key.Binding   { return f.list.Help() }
+func (f *selectField) Key() string         { return f.key }
+func (f *selectField) Focus() tea.Cmd      { return f.list.Focus() }
+func (f *selectField) Blur()               { f.list.Blur() }
+func (f *selectField) Help() []key.Binding { return f.list.Help() }
 
 func (f *selectField) SetStyles(s *Styles) {
 	f.styles = s
@@ -422,9 +437,14 @@ func (f *selectField) Update(msg tea.Msg) (Field, tea.Cmd) {
 	return f, cmd
 }
 
-func (f *selectField) View(width int, focused bool) string {
-	f.list.SetFocused(focused)
-	f.list.SetDimensions(width, f.height)
+func (f *selectField) View(r geom.Rect, focused bool) string {
+	if focused {
+		f.list.Focus()
+	} else {
+		f.list.Blur()
+	}
+	r.H = f.height
+	f.list.SetRect(r)
 	return f.list.View()
 }
 
@@ -452,11 +472,11 @@ func Confirm(o ConfirmOptions) Field {
 	return &confirmField{key: o.Key, toggle: t}
 }
 
-func (f *confirmField) Key() string           { return f.key }
-func (f *confirmField) Value() any            { return f.toggle.Value() }
-func (f *confirmField) Focus() tea.Cmd        { return f.toggle.Focus() }
-func (f *confirmField) Blur()                 { f.toggle.Blur() }
-func (f *confirmField) Help() []key.Binding   { return f.toggle.Help() }
+func (f *confirmField) Key() string         { return f.key }
+func (f *confirmField) Value() any          { return f.toggle.Value() }
+func (f *confirmField) Focus() tea.Cmd      { return f.toggle.Focus() }
+func (f *confirmField) Blur()               { f.toggle.Blur() }
+func (f *confirmField) Help() []key.Binding { return f.toggle.Help() }
 
 func (f *confirmField) SetStyles(s *Styles) {
 	f.styles = s
@@ -479,7 +499,7 @@ func (f *confirmField) Update(msg tea.Msg) (Field, tea.Cmd) {
 	return f, cmd
 }
 
-func (f *confirmField) View(width int, _ bool) string {
-	f.toggle.SetWidth(width)
+func (f *confirmField) View(r geom.Rect, _ bool) string {
+	f.toggle.SetRect(r)
 	return f.toggle.View()
 }

@@ -36,7 +36,10 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -49,7 +52,7 @@ type CancelledMsg struct{}
 // Options configures a new confirm dialog. Zero-value fields fall back to
 // defaults; start from theme.Confirm() to fill in the color tokens.
 type Options struct {
-	// Width and Height set the pane's outer dimensions. SetDimensions
+	// Width and Height set the pane's outer dimensions. SetRect
 	// overrides these later if the host re-sizes the modal.
 	Width, Height int
 
@@ -150,6 +153,9 @@ func (m Model) Init() tea.Cmd { return nil }
 //
 // All keys are active — the modal is the only thing focused while it's up.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	k, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
@@ -175,11 +181,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 // View renders the dialog as a bordered pane.
 func (m Model) View() string { return m.pane.View() }
 
-// SetDimensions resizes the surrounding pane.
-func (m *Model) SetDimensions(w, h int) {
-	m.pane.SetDimensions(w, h)
+// SetRect places the surrounding pane at r.
+func (m *Model) SetRect(r geom.Rect) {
+	m.pane.SetRect(r)
 	m.pane.SetContent(m.renderInner())
 }
+
+// Rect returns the rect the modal was last placed at.
+func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
 // SetTitle sets the title shown on the pane's top border.
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
@@ -260,6 +269,70 @@ func (m Model) renderInner() string {
 	parts = append(parts, buttons)
 	return strings.Join(parts, "\n")
 }
+
+// handleMouse resolves a click on one of the two buttons.
+//
+// Clicking a button commits it outright rather than merely highlighting it:
+// a mouse user who presses "Delete" has already made the choice, and asking
+// them to click once to select and again to confirm would be a worse dialog,
+// not a safer one. Moving the highlight first would also make a stray click
+// on the destructive side arm it for a subsequent enter, which is the
+// failure mode Initial=false exists to avoid.
+//
+// A click anywhere else inside the modal is swallowed — the modal owns input
+// while it is up, and a click on its own chrome should not leak through to
+// whatever it covers. Clicks outside it do nothing; dismissing is esc's job,
+// since click-outside-to-cancel is too easy to trigger by accident on a
+// destructive action.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if !e.IsPress() || !m.pane.Rect().Hit(e.X, e.Y) {
+		return m, nil
+	}
+	switch btn, ok := m.buttonAt(e.X, e.Y); {
+	case !ok:
+		return m, nil
+	case btn:
+		m.value = true
+		m.pane.SetContent(m.renderInner())
+		return m, confirmed()
+	default:
+		m.value = false
+		m.pane.SetContent(m.renderInner())
+		return m, cancelled()
+	}
+}
+
+// buttonAt maps a position to a button: true for confirm, false for cancel.
+// The buttons occupy the last inner line, laid out as cancel, two spaces,
+// confirm — the same order renderInner writes them in.
+func (m Model) buttonAt(x, y int) (confirm bool, ok bool) {
+	line, inBody := m.pane.RowAt(x, y)
+	if !inBody {
+		return false, false
+	}
+	content := m.renderInner()
+	if line != strings.Count(content, "\n") {
+		return false, false
+	}
+
+	c := m.pane.ContentRect()
+	pos := (x - c.X) + m.pane.XOffset()
+
+	cancelW := ansi.StringWidth("[ " + m.cancelLabel + " ]")
+	confirmW := ansi.StringWidth("[ " + m.confirmLabel + " ]")
+	confirmStart := cancelW + buttonGap
+
+	switch {
+	case pos >= 0 && pos < cancelW:
+		return false, true
+	case pos >= confirmStart && pos < confirmStart+confirmW:
+		return true, true
+	}
+	return false, false
+}
+
+// buttonGap is the spacing renderInner puts between the two buttons.
+const buttonGap = 2
 
 // confirmed and cancelled return commands carrying the result messages.
 func confirmed() tea.Cmd { return func() tea.Msg { return ConfirmedMsg{} } }

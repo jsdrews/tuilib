@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // Provider is implemented by components that want to surface extra key
@@ -77,6 +78,8 @@ type Options struct {
 // concern; the footer + panel are wired by pkg/app and follow the
 // Expanded() state plus overflow detection from ShortViewBudget.
 type Model struct {
+	rect geom.Rect
+
 	width, height int
 	bindings      []key.Binding
 
@@ -492,12 +495,26 @@ func padRight(s string, width int) string {
 // Count reports how many bindings the model currently holds.
 func (m Model) Count() int { return len(m.bindings) }
 
-func (m Model) Init() tea.Cmd                           { return nil }
-func (m Model) Update(_ tea.Msg) (Model, tea.Cmd)       { return m, nil }
-func (m *Model) SetDimensions(w, h int)                 { m.width, m.height = w, h }
-func (m *Model) SetBindings(b []key.Binding)            { m.bindings = Compile(b) }
-func (m Model) Width() int                              { return m.width }
-func (m Model) Height() int                             { return m.height }
+func (m Model) Init() tea.Cmd                     { return nil }
+func (m Model) Update(_ tea.Msg) (Model, tea.Cmd) { return m, nil }
+func (m *Model) SetRect(r geom.Rect)              { m.rect = r; m.width, m.height = r.W, r.H }
+func (m *Model) SetBindings(b []key.Binding)      { m.bindings = Compile(b) }
+func (m Model) Width() int                        { return m.width }
+
+// AffordanceWidth returns the visible width of the "? help" / "? close"
+// affordance that ShortViewBudget appends when bindings overflow. The app
+// shell uses it to locate the affordance at the end of the rendered hint
+// line, so clicking it toggles the panel exactly as the help key does.
+func (m Model) AffordanceWidth() int {
+	label := "help"
+	if m.expanded {
+		label = "close"
+	}
+	spacer := m.descStyle.Render(" ")
+	return lipgloss.Width(m.keyStyle.Render("?") + spacer + m.descStyle.Render(label))
+}
+
+func (m Model) Height() int { return m.height }
 
 // View renders the overlay as a bordered box.
 func (m Model) View() string {

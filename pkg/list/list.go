@@ -18,9 +18,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
-
 
 // Options configures a new list. Zero-value fields fall back to sane defaults
 // where that's meaningful; otherwise the pane/filter defaults apply.
@@ -177,6 +179,11 @@ type Model struct {
 
 	keys Keys
 
+	// token is this list's stable identity for focus requests. Update takes
+	// a value receiver, so the model cannot name its own address; the token
+	// is copied along with the model and stays constant.
+	token focus.Token
+
 	// Focus tracking for SelectedChangedMsg. focusInit flips true after
 	// the first emit so an initially-empty list doesn't send an Empty
 	// message before any items exist. focusIdx / -Item hold the last
@@ -195,6 +202,7 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		token:         focus.NewToken(),
 		items:         append([]string(nil), opts.Items...),
 		filterable:    opts.Filterable,
 		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
@@ -340,10 +348,97 @@ func (m *Model) flushMsgs() tea.Cmd {
 // Init satisfies tea.Model — nothing to kick off.
 func (m Model) Init() tea.Cmd { return nil }
 
+// FocusToken returns the list's stable focus identity. See focus.Identified.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// ActivatedMsg is emitted when the user opens the selected item with a
+// double click — the mouse spelling of enter (rule 14). Index and Item match
+// the selection at the moment of the second click. Screens that push a child
+// screen on enter match this to do the same thing on double click.
+type ActivatedMsg struct {
+	Index int
+	Item  string
+}
+
+// handleMouse routes a mouse event that may or may not belong to this list.
+//
+// The wheel does exactly what the up and down arrows do (rule 23), and it
+// works on whichever list is under the pointer whether or not that list has
+// focus — scrolling is navigation, not a claim on the keyboard. A press,
+// by contrast, both moves the cursor and asks for focus.
+//
+// Events outside the list's rect return untouched so a sibling can claim
+// them. Rect.Hit also rejects events when this list wasn't drawn in the
+// current frame, so a list hidden behind a modal or on an inactive tab
+// declines everything without knowing it is hidden.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if _, ok := m.body.HandleScrollbar(e); ok {
+		return m, m.flushMsgs()
+	}
+	// The filter pane owns its own rows; a click there focuses the filter
+	// rather than moving the cursor.
+	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
+		if e.IsPress() {
+			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token), m.flushMsgs())
+		}
+		return m, m.flushMsgs()
+	}
+
+	switch {
+	case e.IsWheelUp():
+		if !m.body.Rect().Hit(e.X, e.Y) {
+			return m, nil
+		}
+		m.moveCursor(-1)
+		return m, m.flushMsgs()
+
+	case e.IsWheelDown():
+		if !m.body.Rect().Hit(e.X, e.Y) {
+			return m, nil
+		}
+		m.moveCursor(1)
+		return m, m.flushMsgs()
+
+	case e.IsPress():
+		row, ok := m.body.RowAt(e.X, e.Y)
+		if !ok {
+			return m, nil
+		}
+		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
+		if row < len(m.visible) {
+			m.cursor = row
+			m.refresh()
+			if e.IsDoubleClick() {
+				idx, item := m.cursor, m.visible[m.cursor]
+				cmds = append(cmds, func() tea.Msg {
+					return ActivatedMsg{Index: idx, Item: item}
+				})
+			}
+		}
+		cmds = append(cmds, m.flushMsgs())
+		return m, tea.Batch(cmds...)
+	}
+	return m, nil
+}
+
+// moveCursor steps the cursor by delta, clamped to the visible set.
+func (m *Model) moveCursor(delta int) {
+	next := m.cursor + delta
+	if next < 0 || next >= len(m.visible) {
+		return
+	}
+	m.cursor = next
+	m.refresh()
+}
+
 // Update consumes up/down/j/k and "/" (when filterable); while the filter is
-// focused, every key is forwarded to it. Non-key messages are forwarded
-// to the body pane so spinner ticks reach the loading-state animation.
+// focused, every key is forwarded to it. Mouse events inside the list's rect
+// move the cursor and request focus. Non-key messages are forwarded to the
+// body pane so spinner ticks reach the loading-state animation.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		var cmd tea.Cmd
@@ -443,6 +538,12 @@ func (m Model) Items() []string { return m.items }
 // callers use this to decide whether to intercept global keys like "q".
 func (m Model) Filtering() bool { return m.filterable && m.filter.Focused() }
 
+// IsCapturingKeys reports whether the list currently swallows printable
+// keys — true while its filter is focused. Satisfies focus.Capturer, so a
+// focus.Group can answer the app shell's global-key gating (rule 5) without
+// the screen restating it.
+func (m Model) IsCapturingKeys() bool { return m.Filtering() }
+
 // Help returns the keys this list responds to. While the embedded filter
 // is focused it returns the filter's keys; otherwise the configured
 // nav/scroll/filter bindings from m.keys.
@@ -472,16 +573,17 @@ func (m Model) Value() string {
 	return ""
 }
 
-// SetDimensions resizes the list in place. When filterable, the internal
-// filter pane consumes 3 rows at the top and the body pane gets the rest;
-// otherwise the body pane takes the full height.
-func (m *Model) SetDimensions(w, h int) {
-	bodyH := h
+// SetRect places the list in the given rect. When filterable, the internal
+// filter pane consumes the top 3 rows and the body pane gets the rest,
+// offset below it; otherwise the body pane takes the whole rect. Each child
+// receives its own absolute rect so a click resolves to the right one.
+func (m *Model) SetRect(r geom.Rect) {
+	body := r
 	if m.filterable {
-		m.filter.SetWidth(w)
-		bodyH = max(0, h-3)
+		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
 	}
-	m.body.SetDimensions(w, bodyH)
+	m.body.SetRect(body)
 	m.refresh()
 }
 
@@ -558,10 +660,15 @@ func (m *Model) SetValue(s string) {
 	m.refresh()
 }
 
-// SetFocused sets the body pane's focus state so its border reads as
-// active or inactive. Useful when embedding a list inside a parent that
-// owns focus (e.g. a form field that gates input).
-func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
+// Focus marks the component as focused, flipping the body pane's border to
+// its active color. Returns a nil command — there is no cursor to blink.
+func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+
+// Blur removes focus, flipping the body pane's border to its inactive color.
+func (m *Model) Blur() { m.body.SetFocused(false) }
+
+// Focused reports whether the component currently owns focus.
+func (m Model) Focused() bool { return m.body.Focused() }
 
 // SetTitle updates the title rendered on the body pane's top border.
 // Useful when the list represents a slice that can change identity at

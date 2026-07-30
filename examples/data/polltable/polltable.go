@@ -353,10 +353,10 @@ func seedDeployments() []deployment {
 	return out
 }
 
-func syncLess(a, b string) bool       { return syncRank(a) < syncRank(b) }
-func healthLess(a, b string) bool     { return healthRank(a) < healthRank(b) }
-func replicasLess(a, b string) bool   { return parseRatio(a) < parseRatio(b) }
-func ageLess(a, b string) bool        { return parseDur(a) < parseDur(b) }
+func syncLess(a, b string) bool     { return syncRank(a) < syncRank(b) }
+func healthLess(a, b string) bool   { return healthRank(a) < healthRank(b) }
+func replicasLess(a, b string) bool { return parseRatio(a) < parseRatio(b) }
+func ageLess(a, b string) bool      { return parseDur(a) < parseDur(b) }
 
 func syncRank(s string) int {
 	switch {

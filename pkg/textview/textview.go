@@ -36,6 +36,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -149,6 +152,10 @@ type Model struct {
 	query            string     // last applied query (lower-cased)
 
 	keys Keys
+
+	// token is this component's stable identity for focus requests. Update
+	// takes a value receiver, so the model cannot name its own address.
+	token focus.Token
 }
 
 type matchPos struct {
@@ -164,6 +171,7 @@ func New(opts Options) Model {
 	opts.Keys.fillDefaults()
 
 	m := Model{
+		token:            focus.NewToken(),
 		raw:              opts.Content,
 		wrap:             opts.Wrap,
 		searchable:       opts.Searchable,
@@ -207,6 +215,9 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update dispatches search, match jumping, top/bottom jumps, wrap toggle,
 // and forwards everything else to the body pane.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	if m.searchable && m.filter.Focused() {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
@@ -290,15 +301,15 @@ func (m *Model) SetWrap(b bool) {
 	m.refresh()
 }
 
-// SetDimensions resizes the textview in place. When searchable, the
-// filter takes 3 rows at the top and the body pane gets the rest.
-func (m *Model) SetDimensions(w, h int) {
-	bodyH := h
+// SetRect places the textview in the given rect. When searchable, the filter
+// takes the top 3 rows and the body pane gets the rest, offset below it.
+func (m *Model) SetRect(r geom.Rect) {
+	body := r
 	if m.searchable {
-		m.filter.SetWidth(w)
-		bodyH = max0(h - 3)
+		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max0(r.H - 3), Gen: r.Gen}
 	}
-	m.body.SetDimensions(w, bodyH)
+	m.body.SetRect(body)
 	m.reflow()
 	m.recomputeMatches()
 	m.refresh()
@@ -307,8 +318,15 @@ func (m *Model) SetDimensions(w, h int) {
 // SetTitle sets the pane's top-left title.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
-// SetFocused flips the body pane's focus state.
-func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
+// Focus marks the component as focused, flipping the body pane's border to
+// its active color. Returns a nil command — there is no cursor to blink.
+func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+
+// Blur removes focus, flipping the body pane's border to its inactive color.
+func (m *Model) Blur() { m.body.SetFocused(false) }
+
+// Focused reports whether the component currently owns focus.
+func (m Model) Focused() bool { return m.body.Focused() }
 
 // SetActiveColor updates the body pane's active border color.
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor(c) }
@@ -333,6 +351,10 @@ func (m *Model) SetCurrentLineStyle(s lipgloss.Style) {
 // Mirror this from the enclosing screen's IsCapturingKeys() so the app
 // shell keeps its global keys (q, t, esc) out of the search input.
 func (m Model) Searching() bool { return m.searchable && m.filter.Focused() }
+
+// IsCapturingKeys reports whether the textview currently swallows printable
+// keys — true while its search filter is focused. Satisfies focus.Capturer.
+func (m Model) IsCapturingKeys() bool { return m.Searching() }
 
 // Query returns the current search text ("" when no search is active).
 func (m Model) Query() string {
@@ -392,7 +414,7 @@ func (m Model) Help() []key.Binding {
 
 // reflow re-splits m.raw into m.lines according to the current wrap
 // setting and the pane's inner width. Called on SetContent, SetWrap,
-// SetDimensions.
+// SetRect.
 func (m *Model) reflow() {
 	if m.raw == "" {
 		m.lines = nil
@@ -577,4 +599,40 @@ func max0(n int) int {
 		return 0
 	}
 	return n
+}
+
+// FocusToken returns the textview's stable focus identity. See
+// focus.Identified.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// handleMouse routes a mouse event that may or may not belong to this
+// textview. A document has no cursor to place, so a press only asks for
+// focus; the wheel scrolls the pane under the pointer regardless of focus.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if _, ok := m.body.HandleScrollbar(e); ok {
+		m.refreshStatus()
+		return m, nil
+	}
+	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
+		if e.IsPress() {
+			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token))
+		}
+		return m, nil
+	}
+
+	switch {
+	case e.IsWheelUp(), e.IsWheelDown():
+		if !m.body.ScrollWheel(e.X, e.Y, e.IsWheelUp()) {
+			return m, nil
+		}
+		m.refreshStatus()
+		return m, nil
+
+	case e.IsPress():
+		if !m.body.Rect().Hit(e.X, e.Y) {
+			return m, nil
+		}
+		return m, focus.RequestSelf(m.token)
+	}
+	return m, nil
 }

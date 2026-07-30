@@ -233,10 +233,10 @@ func newFilterableScreen(t theme.Theme) *filterableScreen {
 	return s
 }
 
-func (s *filterableScreen) Title() string          { return "Filter" }
-func (s *filterableScreen) Init() tea.Cmd          { return textinput.Blink }
-func (s *filterableScreen) OnEnter(any) tea.Cmd    { return nil }
-func (s *filterableScreen) IsCapturingKeys() bool  { return s.list.Filtering() }
+func (s *filterableScreen) Title() string         { return "Filter" }
+func (s *filterableScreen) Init() tea.Cmd         { return textinput.Blink }
+func (s *filterableScreen) OnEnter(any) tea.Cmd   { return nil }
+func (s *filterableScreen) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *filterableScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmd tea.Cmd
@@ -435,4 +435,3 @@ func (s *columnsScreen) SetTheme(t theme.Theme) {
 		s.ps[i] = p
 	}
 }
-

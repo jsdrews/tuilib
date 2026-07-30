@@ -7,22 +7,23 @@ import "github.com/charmbracelet/lipgloss"
 // clean to map onto our Theme struct.
 //
 // Slot reference (abridged):
-//   base00  default background
-//   base01  lighter background — status bars, line numbers
-//   base02  selection background
-//   base03  comments, invisibles, line highlighting
-//   base04  dark foreground (status bars)
-//   base05  default foreground
-//   base06  light foreground
-//   base07  lightest background
-//   base08  red       (variables, errors)
-//   base09  orange    (integers, constants)
-//   base0A  yellow    (classes, search hits)
-//   base0B  green     (strings, diff inserted)
-//   base0C  cyan      (support, regex, escapes)
-//   base0D  blue      (functions, methods)
-//   base0E  magenta   (keywords, storage)
-//   base0F  brown     (deprecated, embedded tags)
+//
+//	base00  default background
+//	base01  lighter background — status bars, line numbers
+//	base02  selection background
+//	base03  comments, invisibles, line highlighting
+//	base04  dark foreground (status bars)
+//	base05  default foreground
+//	base06  light foreground
+//	base07  lightest background
+//	base08  red       (variables, errors)
+//	base09  orange    (integers, constants)
+//	base0A  yellow    (classes, search hits)
+//	base0B  green     (strings, diff inserted)
+//	base0C  cyan      (support, regex, escapes)
+//	base0D  blue      (functions, methods)
+//	base0E  magenta   (keywords, storage)
+//	base0F  brown     (deprecated, embedded tags)
 //
 // Hex values are stored WITHOUT the leading "#" — the converter adds it.
 type Base16 struct {
@@ -32,15 +33,15 @@ type Base16 struct {
 
 // FromBase16 maps a Base16 palette onto a Theme. The mapping is opinionated:
 //
-//   BarBG   base01   lighter bg — the canonical status-bar surface
-//   BarFG   base05   default fg
-//   Current base06   light fg for emphasis (bolded by the crumb style)
-//   Muted   base04   dark fg (statusbar-muted)
-//   Subtle  base03   comment grey
-//   KeyFG   base0D   blue (functions/links/URLs — reads as "interactive")
-//   Info    base0B (green) on base00
-//   Error   base08 (red)   on base07
-//   Accent  base0E   keyword color — body-content highlight
+//	BarBG   base01   lighter bg — the canonical status-bar surface
+//	BarFG   base05   default fg
+//	Current base06   light fg for emphasis (bolded by the crumb style)
+//	Muted   base04   dark fg (statusbar-muted)
+//	Subtle  base03   comment grey
+//	KeyFG   base0D   blue (functions/links/URLs — reads as "interactive")
+//	Info    base0B (green) on base00
+//	Error   base08 (red)   on base07
+//	Accent  base0E   keyword color — body-content highlight
 //
 // If the resulting theme reads wrong for a specific palette (some base16
 // schemes have an unusually bright base04 or near-identical base01/base00),
