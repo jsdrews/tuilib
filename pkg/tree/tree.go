@@ -36,6 +36,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -127,15 +130,15 @@ type Options struct {
 // from the same struct, so custom bindings propagate to the hint strip
 // automatically. The embedded pane.Keys covers horizontal scroll.
 type Keys struct {
-	Up, Down                       key.Binding
-	Top, Bottom                    key.Binding
-	Toggle, Enter                  key.Binding
-	ExpandAll, CollapseAll         key.Binding
-	NextSibling, PrevSibling       key.Binding
-	NextLeaf, PrevLeaf             key.Binding
-	Search, NextMatch, PrevMatch   key.Binding
-	Filter                         key.Binding
-	Pane                           pane.Keys
+	Up, Down                     key.Binding
+	Top, Bottom                  key.Binding
+	Toggle, Enter                key.Binding
+	ExpandAll, CollapseAll       key.Binding
+	NextSibling, PrevSibling     key.Binding
+	NextLeaf, PrevLeaf           key.Binding
+	Search, NextMatch, PrevMatch key.Binding
+	Filter                       key.Binding
+	Pane                         pane.Keys
 }
 
 // DefaultKeys returns the tree's stock keymap.
@@ -163,22 +166,54 @@ func DefaultKeys() Keys {
 
 func (k *Keys) fillDefaults() {
 	d := DefaultKeys()
-	if len(k.Up.Keys()) == 0          { k.Up = d.Up }
-	if len(k.Down.Keys()) == 0        { k.Down = d.Down }
-	if len(k.Top.Keys()) == 0         { k.Top = d.Top }
-	if len(k.Bottom.Keys()) == 0      { k.Bottom = d.Bottom }
-	if len(k.Toggle.Keys()) == 0      { k.Toggle = d.Toggle }
-	if len(k.Enter.Keys()) == 0       { k.Enter = d.Enter }
-	if len(k.ExpandAll.Keys()) == 0   { k.ExpandAll = d.ExpandAll }
-	if len(k.CollapseAll.Keys()) == 0 { k.CollapseAll = d.CollapseAll }
-	if len(k.NextSibling.Keys()) == 0 { k.NextSibling = d.NextSibling }
-	if len(k.PrevSibling.Keys()) == 0 { k.PrevSibling = d.PrevSibling }
-	if len(k.NextLeaf.Keys()) == 0    { k.NextLeaf = d.NextLeaf }
-	if len(k.PrevLeaf.Keys()) == 0    { k.PrevLeaf = d.PrevLeaf }
-	if len(k.Search.Keys()) == 0      { k.Search = d.Search }
-	if len(k.NextMatch.Keys()) == 0   { k.NextMatch = d.NextMatch }
-	if len(k.PrevMatch.Keys()) == 0   { k.PrevMatch = d.PrevMatch }
-	if len(k.Filter.Keys()) == 0      { k.Filter = d.Filter }
+	if len(k.Up.Keys()) == 0 {
+		k.Up = d.Up
+	}
+	if len(k.Down.Keys()) == 0 {
+		k.Down = d.Down
+	}
+	if len(k.Top.Keys()) == 0 {
+		k.Top = d.Top
+	}
+	if len(k.Bottom.Keys()) == 0 {
+		k.Bottom = d.Bottom
+	}
+	if len(k.Toggle.Keys()) == 0 {
+		k.Toggle = d.Toggle
+	}
+	if len(k.Enter.Keys()) == 0 {
+		k.Enter = d.Enter
+	}
+	if len(k.ExpandAll.Keys()) == 0 {
+		k.ExpandAll = d.ExpandAll
+	}
+	if len(k.CollapseAll.Keys()) == 0 {
+		k.CollapseAll = d.CollapseAll
+	}
+	if len(k.NextSibling.Keys()) == 0 {
+		k.NextSibling = d.NextSibling
+	}
+	if len(k.PrevSibling.Keys()) == 0 {
+		k.PrevSibling = d.PrevSibling
+	}
+	if len(k.NextLeaf.Keys()) == 0 {
+		k.NextLeaf = d.NextLeaf
+	}
+	if len(k.PrevLeaf.Keys()) == 0 {
+		k.PrevLeaf = d.PrevLeaf
+	}
+	if len(k.Search.Keys()) == 0 {
+		k.Search = d.Search
+	}
+	if len(k.NextMatch.Keys()) == 0 {
+		k.NextMatch = d.NextMatch
+	}
+	if len(k.PrevMatch.Keys()) == 0 {
+		k.PrevMatch = d.PrevMatch
+	}
+	if len(k.Filter.Keys()) == 0 {
+		k.Filter = d.Filter
+	}
 	k.Pane.FillDefaults()
 }
 
@@ -197,6 +232,10 @@ type Model struct {
 	currentLineStyle lipgloss.Style
 
 	keys Keys
+
+	// token is this component's stable identity for focus requests. Update
+	// takes a value receiver, so the model cannot name its own address.
+	token focus.Token
 
 	query      string // lower-cased
 	matchRows  []int  // indices into rows that contain a match
@@ -229,6 +268,7 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		token:            focus.NewToken(),
 		root:             opts.Root,
 		expanded:         map[string]bool{},
 		searchable:       opts.Searchable,
@@ -295,6 +335,9 @@ func (m Model) Init() tea.Cmd { return nil }
 // everything else to the body pane (so pgup/pgdn/arrows/mouse-wheel and
 // horizontal scroll keep working).
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(mm)
+	}
 	if m.searchable && m.filter.Focused() {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
@@ -393,6 +436,10 @@ func (m *Model) SetCursor(n int) {
 
 // Searching reports whether the embedded filter currently has focus.
 func (m Model) Searching() bool { return m.searchable && m.filter.Focused() }
+
+// IsCapturingKeys reports whether the tree currently swallows printable
+// keys — true while its search filter is focused. Satisfies focus.Capturer.
+func (m Model) IsCapturingKeys() bool { return m.Searching() }
 
 // FilterMode reports whether non-matching subtrees are currently hidden.
 func (m Model) FilterMode() bool { return m.filterMode }
@@ -511,22 +558,31 @@ func (m *Model) restoreCursor(prev string) {
 	}
 }
 
-// SetDimensions resizes the tree in place.
-func (m *Model) SetDimensions(w, h int) {
-	bodyH := h
+// SetRect places the tree in the given rect. When searchable, the internal
+// filter pane takes the top 3 rows and the body pane gets the rest, offset
+// below it.
+func (m *Model) SetRect(r geom.Rect) {
+	body := r
 	if m.searchable {
-		m.filter.SetWidth(w)
-		bodyH = max(0, h-3)
+		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
 	}
-	m.body.SetDimensions(w, bodyH)
+	m.body.SetRect(body)
 	m.refresh()
 }
 
 // SetTitle sets the pane's top-left title.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
-// SetFocused flips the body pane's focus state.
-func (m *Model) SetFocused(b bool) { m.body.SetFocused(b) }
+// Focus marks the component as focused, flipping the body pane's border to
+// its active color. Returns a nil command — there is no cursor to blink.
+func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+
+// Blur removes focus, flipping the body pane's border to its inactive color.
+func (m *Model) Blur() { m.body.SetFocused(false) }
+
+// Focused reports whether the component currently owns focus.
+func (m Model) Focused() bool { return m.body.Focused() }
 
 // SetActiveColor updates the body pane's active border color.
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor(c) }
@@ -898,6 +954,80 @@ func (m *Model) renderContent() string {
 	return b.String()
 }
 
+// FocusToken returns the tree's stable focus identity. See focus.Identified.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// handleMouse routes a mouse event that may or may not belong to this tree.
+//
+// Clicking the ▸/▾ glyph expands or collapses that node directly, which is
+// the one place a single click does more than select — the glyph is drawn
+// precisely to say "this opens". Anywhere else on a row selects it, and a
+// double click toggles, matching what space does from the keyboard. Rule 23
+// keeps ←/→ and h/l out of it: they scroll, here as everywhere.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if _, ok := m.body.HandleScrollbar(e); ok {
+		return m, m.flushMsgs()
+	}
+	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
+		if e.IsPress() {
+			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token), m.flushMsgs())
+		}
+		return m, m.flushMsgs()
+	}
+
+	switch {
+	case e.IsWheelUp():
+		if _, ok := m.body.RowAt(e.X, e.Y); !ok {
+			return m, nil
+		}
+		m.moveCursor(-1)
+		return m, m.flushMsgs()
+
+	case e.IsWheelDown():
+		if _, ok := m.body.RowAt(e.X, e.Y); !ok {
+			return m, nil
+		}
+		m.moveCursor(1)
+		return m, m.flushMsgs()
+
+	case e.IsPress():
+		row, ok := m.body.RowAt(e.X, e.Y)
+		if !ok || row >= len(m.rows) {
+			return m, nil
+		}
+		m.cursor = row
+		if m.onGlyph(e.X, m.rows[row]) || e.IsDoubleClick() {
+			m.toggleCursor()
+		} else {
+			m.refresh()
+		}
+		return m, tea.Batch(focus.RequestSelf(m.token), m.flushMsgs())
+	}
+	return m, nil
+}
+
+// onGlyph reports whether x falls on r's expand/collapse glyph. The glyph
+// sits at column 2*depth (two cells of indent per level) and is one cell
+// wide; leaves draw blank there and are never a target.
+func (m Model) onGlyph(x int, r row) bool {
+	if r.isLeaf {
+		return false
+	}
+	c := m.body.ContentRect()
+	pos := (x - c.X) + m.body.XOffset()
+	return pos == 2*r.depth
+}
+
+// moveCursor steps the cursor by delta, clamped to the visible rows.
+func (m *Model) moveCursor(delta int) {
+	next := m.cursor + delta
+	if next < 0 || next >= len(m.rows) {
+		return
+	}
+	m.cursor = next
+	m.refresh()
+}
+
 func (m *Model) formatRow(r row, current bool) string {
 	indent := strings.Repeat("  ", r.depth)
 	glyph := "  "
@@ -1039,4 +1169,3 @@ func (m *Model) refreshStatus() {
 	}
 	m.body.SetBottomLeft(state)
 }
-

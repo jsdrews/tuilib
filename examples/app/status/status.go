@@ -50,7 +50,7 @@ func (s *statusScreen) OnEnter(any) tea.Cmd   { return nil }
 func (s *statusScreen) IsCapturingKeys() bool { return s.menu.Filtering() }
 
 func (s *statusScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.menu.Filtering() && k.String() == "enter" {
+	if s.menu.IsActivate(msg) {
 		idx := s.menu.Cursor()
 		if idx >= 0 && idx < len(actions) {
 			return s, actions[idx].run()

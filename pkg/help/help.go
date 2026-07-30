@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // Provider is implemented by components that want to surface extra key
@@ -77,6 +78,8 @@ type Options struct {
 // concern; the footer + panel are wired by pkg/app and follow the
 // Expanded() state plus overflow detection from ShortViewBudget.
 type Model struct {
+	rect geom.Rect
+
 	width, height int
 	bindings      []key.Binding
 
@@ -492,12 +495,61 @@ func padRight(s string, width int) string {
 // Count reports how many bindings the model currently holds.
 func (m Model) Count() int { return len(m.bindings) }
 
-func (m Model) Init() tea.Cmd                           { return nil }
-func (m Model) Update(_ tea.Msg) (Model, tea.Cmd)       { return m, nil }
-func (m *Model) SetDimensions(w, h int)                 { m.width, m.height = w, h }
-func (m *Model) SetBindings(b []key.Binding)            { m.bindings = Compile(b) }
-func (m Model) Width() int                              { return m.width }
-func (m Model) Height() int                             { return m.height }
+func (m Model) Init() tea.Cmd                     { return nil }
+func (m Model) Update(_ tea.Msg) (Model, tea.Cmd) { return m, nil }
+func (m *Model) SetRect(r geom.Rect)              { m.rect = r; m.width, m.height = r.W, r.H }
+func (m *Model) SetBindings(b []key.Binding)      { m.bindings = Compile(b) }
+func (m Model) Width() int                        { return m.width }
+
+// AffordanceSpan reports where the "? help" / "? close" affordance sits
+// within the footer line rendered at width: its start offset in cells and
+// its width. ok is false when no affordance is drawn. The app shell uses it
+// to route a click there to the same toggle the help key drives.
+//
+// The offset is not simply "the end of the line" — each of the three footer
+// shapes places it differently. Minimal mode renders it first and pads after
+// it; the collapsed flow appends it last; the expanded grid makes it the
+// final column, padded to that column's width rather than its own. Getting
+// this from one place keeps a click landing on the glyph the user sees.
+func (m Model) AffordanceSpan(width int) (start, w int, ok bool) {
+	if len(m.bindings) == 0 || width <= 0 {
+		return 0, 0, false
+	}
+	label := "help"
+	if m.expanded {
+		label = "close"
+	}
+	spacerW := lipgloss.Width(m.descStyle.Render(" "))
+	naturalW := lipgloss.Width(m.keyStyle.Render("?")) + spacerW +
+		lipgloss.Width(m.descStyle.Render(label))
+
+	switch {
+	case m.minimal:
+		return 0, naturalW, true
+
+	case m.expanded:
+		cols, keyW, descW, row0Count := m.planGridFull(width)
+		if cols == 0 {
+			return 0, 0, false
+		}
+		sepW := lipgloss.Width(m.descStyle.Render(m.shortSep))
+		at := 0
+		for c := 0; c < row0Count; c++ {
+			at += keyW[c] + spacerW + descW[c] + sepW
+		}
+		affCol := cols - 1
+		return at, keyW[affCol] + spacerW + descW[affCol], true
+
+	default:
+		line, _, overflow := m.ShortViewBudget(width)
+		if !overflow {
+			return 0, 0, false
+		}
+		return lipgloss.Width(line) - naturalW, naturalW, true
+	}
+}
+
+func (m Model) Height() int { return m.height }
 
 // View renders the overlay as a bordered box.
 func (m Model) View() string {

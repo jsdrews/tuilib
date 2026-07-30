@@ -79,9 +79,9 @@ func TestSelectedChangedOnCursorMove(t *testing.T) {
 func TestSelectedChangedOnExpand(t *testing.T) {
 	// InitialDepth=1 expands root, so "a" is a visible collapsed child.
 	m := newTree(n("root", n("a", n("leaf"))))
-	m, _ = m.Update(struct{}{}) // drain init
+	m, _ = m.Update(struct{}{})                                         // drain init
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // cursor→ "root/a"
-	_, cmd := m.Update(struct{}{})                                     // drain focus emit from move
+	_, cmd := m.Update(struct{}{})                                      // drain focus emit from move
 	if drainSelectedChangedMsg(cmd) != nil {
 		// Expected: the focus msg from the cursor-down was already flushed
 		// in that Update's cmd. A subsequent tick shouldn't re-emit.
@@ -149,7 +149,7 @@ func TestSelectedChangedSuppressedOnEmptyInit(t *testing.T) {
 func TestSelectedChangedIncludesDuplicateSiblingSuffix(t *testing.T) {
 	// Two children with the label "dup" — second uses "dup:2" in the path.
 	m := newTree(n("root", n("dup"), n("dup")))
-	m, _ = m.Update(struct{}{}) // drain init (cursor on "root")
+	m, _ = m.Update(struct{}{})                                         // drain init (cursor on "root")
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // → "root/dup"
 	// Move to the second "dup"; drain the focus that fires here.
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) // → "root/dup:2"

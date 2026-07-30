@@ -1,6 +1,6 @@
 // Package layout is a tiny declarative engine for composing Bubble Tea view
 // strings. Every layout is a tree of Node; each Node knows how to render
-// itself at a given (width, height). VStack and HStack split their allotment
+// itself into a given geom.Rect. VStack and HStack split their allotment
 // among Fixed- and Flex-sized children; ZStack overlays children.
 //
 // The point is to remove hand-written "m.h-2" math from callers. You
@@ -9,11 +9,25 @@
 // Typical use:
 //
 //	root := layout.VStack(
-//	    layout.Fixed(1, layout.RenderFunc(func(w, h int) string { ... })),
+//	    layout.Fixed(1, layout.RenderFunc(func(r geom.Rect) string { ... })),
 //	    layout.Flex(1, body),
-//	    layout.Fixed(1, layout.RenderFunc(func(w, h int) string { ... })),
+//	    layout.Fixed(1, layout.RenderFunc(func(r geom.Rect) string { ... })),
 //	)
-//	return root.Render(termW, termH)
+//	return root.Render(geom.New(0, 0, termW, termH))
+//
+// # Rects, not sizes
+//
+// A Node receives a geom.Rect rather than a bare (width, height): it learns
+// where it sits in absolute terminal coordinates, not merely how big it is.
+// Components store the rect they were handed and use it to answer mouse
+// events without any marker injection into the rendered string — see
+// pkg/geom.
+//
+// The root of a render calls geom.NextGen once per frame and seeds its rect
+// with geom.New; every child inherits that generation as the rect propagates
+// down. A nested root (pkg/tab rendering its active body's layout) must not
+// call NextGen — it renders inside an existing frame and passes the
+// generation from the rect it was given.
 package layout
 
 import (
@@ -21,55 +35,46 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
-// Node is the unit of layout — something that can render itself at a given
-// outer size. Components participate by being wrapped in RenderFunc (or any
-// adapter that yields a Node).
+// Node is the unit of layout — something that can render itself into a given
+// rect. Components participate by being wrapped in Sized (or any adapter that
+// yields a Node).
 type Node interface {
-	Render(w, h int) string
+	Render(r geom.Rect) string
 }
 
-// RenderFunc adapts a render-at-size function into a Node. It is the
-// primary bridge from existing components: close over the component, set
-// its dimensions inside the func, and return its View().
-type RenderFunc func(w, h int) string
+// RenderFunc adapts a render-into-rect function into a Node. It is the
+// escape hatch for content the component adapters don't cover: close over
+// whatever you need, render at r.W by r.H, and return the string.
+type RenderFunc func(r geom.Rect) string
 
 // Render satisfies Node.
-func (f RenderFunc) Render(w, h int) string { return f(w, h) }
+func (f RenderFunc) Render(r geom.Rect) string { return f(r) }
 
-// Widther is satisfied by components sized by width alone (single-row bars
-// like breadcrumb and statusbar). Bar wraps one into a Node.
-type Widther interface {
-	SetWidth(int)
-	View() string
-}
-
-// Sizer is satisfied by components sized by both width and height. Sized
-// wraps one into a Node.
+// Sizer is satisfied by any component the layout engine can place: it accepts
+// the rect it should occupy and renders into it. Every interactive component
+// in tuilib satisfies this, as do the single-row bars.
 type Sizer interface {
-	SetDimensions(w, h int)
+	SetRect(r geom.Rect)
 	View() string
 }
 
-// Bar wraps a single-row component (breadcrumb.Model, statusbar.Model, …)
-// as a Node. The height argument to Render is ignored — these components
-// always render one row. Pass a pointer: &m.bc, &m.sb.
-func Bar(w Widther) Node {
-	return RenderFunc(func(width, _ int) string {
-		w.SetWidth(width)
-		return w.View()
-	})
-}
-
-// Sized wraps a two-dimensional component (pane.Pane, list.Model, …) as a
-// Node. Pass a pointer: &m.list, &m.body.
+// Sized wraps a component as a Node, handing it its rect at render time.
+// Pass a pointer: &m.list, &m.body.
 func Sized(s Sizer) Node {
-	return RenderFunc(func(w, h int) string {
-		s.SetDimensions(w, h)
+	return RenderFunc(func(r geom.Rect) string {
+		s.SetRect(r)
 		return s.View()
 	})
 }
+
+// Bar wraps a single-row component (breadcrumb.Model, statusbar.Model, …) as
+// a Node. It behaves exactly as Sized — the name documents intent, since a
+// bar is expected to sit in a Fixed(1, …) slot and render one row.
+func Bar(s Sizer) Node { return Sized(s) }
 
 // Item is a child of VStack or HStack. Construct with Fixed or Flex.
 type Item struct {
@@ -100,11 +105,13 @@ func VStack(items ...Item) Node { return vstack(items) }
 
 type vstack []Item
 
-func (v vstack) Render(w, h int) string {
-	sizes := distribute(v, h)
+func (v vstack) Render(r geom.Rect) string {
+	sizes := distribute(v, r.H)
 	parts := make([]string, len(v))
+	y := r.Y
 	for i, it := range v {
-		parts[i] = it.node.Render(w, sizes[i])
+		parts[i] = it.node.Render(geom.Rect{X: r.X, Y: y, W: r.W, H: sizes[i], Gen: r.Gen})
+		y += sizes[i]
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
@@ -114,28 +121,34 @@ func HStack(items ...Item) Node { return hstack(items) }
 
 type hstack []Item
 
-func (h hstack) Render(w, height int) string {
-	sizes := distribute(h, w)
+func (h hstack) Render(r geom.Rect) string {
+	sizes := distribute(h, r.W)
 	parts := make([]string, len(h))
+	x := r.X
 	for i, it := range h {
-		parts[i] = it.node.Render(sizes[i], height)
+		parts[i] = it.node.Render(geom.Rect{X: x, Y: r.Y, W: sizes[i], H: r.H, Gen: r.Gen})
+		x += sizes[i]
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 }
 
 // Center renders child at its natural size (given by naturalW/naturalH)
-// padded to the parent's (w, h) with surrounding whitespace. Useful as the
+// padded to the parent's rect with surrounding whitespace. Useful as the
 // overlay layer inside a ZStack.
+//
+// The child's rect is offset to where lipgloss.Place will actually draw it,
+// so a centered modal hit-tests against its visible position rather than the
+// parent's origin.
 func Center(naturalW, naturalH int, child Node) Node {
-	return RenderFunc(func(w, h int) string {
-		return lipgloss.Place(w, h,
+	return RenderFunc(func(r geom.Rect) string {
+		return lipgloss.Place(r.W, r.H,
 			lipgloss.Center, lipgloss.Center,
-			child.Render(naturalW, naturalH))
+			child.Render(geom.CenterIn(r, naturalW, naturalH)))
 	})
 }
 
-// ZStack layers overlay on top of base. Both are rendered at the full
-// (w, h). Compositing happens cell-by-cell: cells that are spaces in the
+// ZStack layers overlay on top of base. Both are rendered into the full
+// rect. Compositing happens cell-by-cell: cells that are spaces in the
 // overlay pass the base through; non-space cells replace base at that
 // column. Empty overlay rows pass through entirely.
 //
@@ -143,18 +156,23 @@ func Center(naturalW, naturalH int, child Node) Node {
 // blots out the modal's bounding box; pane borders and content to the
 // left and right of the modal stay visible. Wide characters and ANSI
 // styles are handled via x/ansi cell-aware cutting.
+//
+// Both layers receive the same rect, so a component in the base still
+// believes it owns cells the overlay covers. Occlusion is the host screen's
+// job: while a modal is up, forward messages to the modal alone (see the
+// confirm and alert examples) so the covered components never see the click.
 func ZStack(base, overlay Node) Node { return zstack{base: base, overlay: overlay} }
 
 type zstack struct {
 	base, overlay Node
 }
 
-func (z zstack) Render(w, h int) string {
-	baseView := z.base.Render(w, h)
+func (z zstack) Render(r geom.Rect) string {
+	baseView := z.base.Render(r)
 	if z.overlay == nil {
 		return baseView
 	}
-	overlayView := z.overlay.Render(w, h)
+	overlayView := z.overlay.Render(r)
 	baseLines := strings.Split(baseView, "\n")
 	overlayLines := strings.Split(overlayView, "\n")
 	for i, ol := range overlayLines {
@@ -176,7 +194,7 @@ func (z zstack) Render(w, h int) string {
 			"\x1b[0m" +
 			ansi.Cut(ol, left, right+1) +
 			"\x1b[0m" +
-			ansi.Cut(baseLines[i], right+1, w)
+			ansi.Cut(baseLines[i], right+1, r.W)
 	}
 	return strings.Join(baseLines, "\n")
 }
@@ -249,7 +267,7 @@ func stripANSI(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
 			i += 2
-			for i < len(s) && !((s[i] >= '@' && s[i] <= '~')) {
+			for i < len(s) && !(s[i] >= '@' && s[i] <= '~') {
 				i++
 			}
 			continue

@@ -21,6 +21,7 @@ import (
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
 	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
+	appmouse "github.com/jsdrews/tuilib/examples/app/mouse"
 	appreplace "github.com/jsdrews/tuilib/examples/app/replace"
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
@@ -30,8 +31,8 @@ import (
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
 	dataform "github.com/jsdrews/tuilib/examples/data/form"
 	datainspector "github.com/jsdrews/tuilib/examples/data/inspector"
-	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
 	datalist "github.com/jsdrews/tuilib/examples/data/list"
+	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
 	datalogview "github.com/jsdrews/tuilib/examples/data/logview"
 	datametrics "github.com/jsdrews/tuilib/examples/data/metrics"
 	datapoll "github.com/jsdrews/tuilib/examples/data/poll"
@@ -46,7 +47,7 @@ import (
 )
 
 type entry struct {
-	name string
+	name  string
 	blurb string
 	build func(theme.Theme) screen.Screen
 }
@@ -71,6 +72,7 @@ var entries = []entry{
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},
 	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
+	{"Mouse — click, double-click, wheel, drag", "Three panes wired for mouse: click to focus, click a row to select, double-click to open, click a table header to sort or a tree ▸ to expand, wheel over any pane, drag a scrollbar. Requires app.Options.Mouse — the launcher sets it.", appmouse.New},
 	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
@@ -91,10 +93,10 @@ func newRoot() *rootScreen {
 	return s
 }
 
-func (s *rootScreen) Title() string          { return "Examples" }
-func (s *rootScreen) Init() tea.Cmd          { return textinput.Blink }
-func (s *rootScreen) OnEnter(any) tea.Cmd    { return nil }
-func (s *rootScreen) IsCapturingKeys() bool  { return s.menu.Filtering() }
+func (s *rootScreen) Title() string         { return "Examples" }
+func (s *rootScreen) Init() tea.Cmd         { return textinput.Blink }
+func (s *rootScreen) OnEnter(any) tea.Cmd   { return nil }
+func (s *rootScreen) IsCapturingKeys() bool { return s.menu.Filtering() }
 
 func (s *rootScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	prevIdx, prevOK := s.menu.SelectedIndex()
@@ -105,7 +107,13 @@ func (s *rootScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		s.rebuildInfo()
 	}
 
-	if k, ok := msg.(tea.KeyMsg); ok && !s.menu.Filtering() && k.String() == "enter" {
+	// Enter and double-click are the same verb (rule 14), so they resolve to
+	// the same branch. A screen has to opt into the mouse half explicitly:
+	// the list reports the activation, and what "open" means is the screen's
+	// call — here, pushing the selected example.
+	// Enter and double-click are the same verb (rule 14); IsActivate folds
+	// both into one branch so what "open" means is written once.
+	if s.menu.IsActivate(msg) {
 		if idx, ok := s.menu.SelectedIndex(); ok && idx >= 0 && idx < len(entries) {
 			return s, tea.Batch(cmd, screen.Push(entries[idx].build(s.t)))
 		}
@@ -175,6 +183,13 @@ func main() {
 		ThemeEnvVar: "TUILIB_THEME",
 		Version:     "examples",
 		ThemeKey:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		// Mouse is opt-in per app, and app.Options is the only place it is
+		// configured — the shell enables reporting from Init, so
+		// tea.NewProgram below needs no mouse option of its own. Turning it
+		// on here makes every example in the suite mouse-capable, which is
+		// the point: anything that behaves badly with a pointer shows up
+		// immediately rather than only in the mouse demo.
+		Mouse: app.MouseClick,
 	})
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
 		fmt.Println(err)

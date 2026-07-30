@@ -57,13 +57,13 @@ type cityList struct {
 	list list.Model
 }
 
-func (s *cityList) Title() string          { return "Cities" }
-func (s *cityList) Init() tea.Cmd          { return textinput.Blink }
-func (s *cityList) OnEnter(any) tea.Cmd    { return nil }
-func (s *cityList) IsCapturingKeys() bool  { return s.list.Filtering() }
+func (s *cityList) Title() string         { return "Cities" }
+func (s *cityList) Init() tea.Cmd         { return textinput.Blink }
+func (s *cityList) OnEnter(any) tea.Cmd   { return nil }
+func (s *cityList) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *cityList) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if city, ok := s.list.Selected(); ok {
 			return s, screen.Push(newCityDetail(city, s.t))
 		}
@@ -126,7 +126,7 @@ func (s *cityDetail) Init() tea.Cmd         { return nil }
 func (s *cityDetail) IsCapturingKeys() bool { return s.actions.Filtering() }
 
 func (s *cityDetail) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.actions.Filtering() && k.String() == "enter" {
+	if s.actions.IsActivate(msg) {
 		if action, ok := s.actions.Selected(); ok {
 			switch action {
 			case actionPickTZ:
@@ -213,13 +213,13 @@ func newTimezonePicker(t theme.Theme) *timezonePicker {
 	return s
 }
 
-func (s *timezonePicker) Title() string          { return "Timezone" }
-func (s *timezonePicker) Init() tea.Cmd          { return textinput.Blink }
-func (s *timezonePicker) OnEnter(any) tea.Cmd    { return nil }
-func (s *timezonePicker) IsCapturingKeys() bool  { return s.list.Filtering() }
+func (s *timezonePicker) Title() string         { return "Timezone" }
+func (s *timezonePicker) Init() tea.Cmd         { return textinput.Blink }
+func (s *timezonePicker) OnEnter(any) tea.Cmd   { return nil }
+func (s *timezonePicker) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *timezonePicker) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if tz, ok := s.list.Selected(); ok {
 			return s, screen.Pop(tz) // child → parent data flow
 		}
@@ -266,4 +266,3 @@ func (s *timezonePicker) SetTheme(t theme.Theme) {
 	}
 	s.list.SetCursor(cursor)
 }
-

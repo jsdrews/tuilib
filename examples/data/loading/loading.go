@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
@@ -40,10 +41,8 @@ type Screen struct {
 	log  lv.Model
 	tree tw.Model
 
-	focus int // 0=list, 1=log, 2=tree
+	focus focus.Group
 }
-
-const focusCount = 3
 
 // fetchedMsg variants — one per component — let us deliver each result
 // independently so the spinners disappear on different schedules.
@@ -81,17 +80,7 @@ func (s *Screen) OnEnter(any) tea.Cmd { return nil }
 // IsCapturingKeys claims keys whenever the focused component is in a
 // text-input state — that's where global keys like q/t would otherwise
 // steal printables from the search box.
-func (s *Screen) IsCapturingKeys() bool {
-	switch s.focus {
-	case 0:
-		return s.list.Filtering()
-	case 1:
-		return s.log.Searching()
-	case 2:
-		return s.tree.Searching()
-	}
-	return false
-}
+func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
@@ -111,13 +100,13 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		if !s.IsCapturingKeys() {
 			switch m.String() {
 			case "tab":
-				s.focus = (s.focus + 1) % focusCount
-				s.applyFocus()
-				return s, nil
+				var cmd tea.Cmd
+				s.focus, cmd = s.focus.Update(msg)
+				return s, cmd
 			case "shift+tab":
-				s.focus = (s.focus - 1 + focusCount) % focusCount
-				s.applyFocus()
-				return s, nil
+				var cmd tea.Cmd
+				s.focus, cmd = s.focus.Update(msg)
+				return s, cmd
 			case "r":
 				return s, s.startFetches()
 			}
@@ -143,12 +132,12 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) routeKey(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
-	switch s.focus {
-	case 0:
+	switch {
+	case s.focus.Is(&s.list):
 		s.list, cmd = s.list.Update(msg)
-	case 1:
+	case s.focus.Is(&s.log):
 		s.log, cmd = s.log.Update(msg)
-	case 2:
+	case s.focus.Is(&s.tree):
 		s.tree, cmd = s.tree.Update(msg)
 	}
 	return cmd
@@ -172,15 +161,7 @@ func (s *Screen) Help() []key.Binding {
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	}
-	switch s.focus {
-	case 0:
-		return append(base, s.list.Help()...)
-	case 1:
-		return append(base, s.log.Help()...)
-	case 2:
-		return append(base, s.tree.Help()...)
-	}
-	return base
+	return append(base, s.focus.Help()...)
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
@@ -226,9 +207,9 @@ func (s *Screen) SetTheme(t theme.Theme) {
 }
 
 func (s *Screen) applyFocus() {
-	s.list.SetFocused(s.focus == 0)
-	s.log.SetFocused(s.focus == 1)
-	s.tree.SetFocused(s.focus == 2)
+	at := s.focus.Index()
+	s.focus = focus.NewGroup(&s.list, &s.log, &s.tree)
+	s.focus.SetIndex(at)
 }
 
 func (s *Screen) startFetches() tea.Cmd {

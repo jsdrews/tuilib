@@ -74,7 +74,7 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	s.list, cmd = s.list.Update(msg)
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		idx := s.list.Cursor()
 		if idx >= 0 && idx < len(commands) {
 			c := commands[idx]

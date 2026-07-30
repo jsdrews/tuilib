@@ -95,7 +95,7 @@ func (s *alertScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		return s, cmd
 	}
 
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if idx, ok := s.list.SelectedIndex(); ok && idx >= 0 && idx < len(ops) {
 			o := ops[idx]
 			if o.errMsg != "" {

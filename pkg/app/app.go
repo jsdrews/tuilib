@@ -10,12 +10,17 @@
 package app
 
 import (
+	"time"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
+	"github.com/jsdrews/tuilib/pkg/config"
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -62,6 +67,22 @@ type Options struct {
 	// produce 15+) at the cost of inline discoverability.
 	HelpVerbose bool
 
+	// Mouse selects how much mouse input the shell enables. Defaults to
+	// MouseOff, so an app gains mouse support only by asking for it — the
+	// terminal's own click-drag text selection stops working the moment
+	// mouse reporting is on, and that trade is the app author's to make.
+	//
+	// When set to MouseClick the shell enables cell-motion reporting from
+	// Init, translates each event into a mouse.Msg (resolving double
+	// clicks), and forwards it to the active screen. Components hit-test it
+	// against the rect layout gave them; see pkg/geom and pkg/mouse.
+	Mouse MouseMode
+
+	// DoubleClickInterval is the window in which a second press in the same
+	// cell counts as a double click. Zero falls back to the user's config
+	// file, then to mouse.DefaultDoubleClickInterval.
+	DoubleClickInterval time.Duration
+
 	// ThemeEnvVar names an environment variable consulted for the initial
 	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
 	// theme's Name, that theme becomes Themes[0]. Empty string disables
@@ -80,6 +101,36 @@ type Options struct {
 	// (the default) esc pops the stack whenever depth > 1 and the active
 	// screen is not capturing keys.
 	DisableAutoEscPop bool
+}
+
+// MouseMode selects how much mouse input the app shell enables. It is an
+// enum rather than a bool so a hover tier can be added later without
+// breaking callers who already set the field.
+type MouseMode int
+
+const (
+	// MouseOff disables mouse reporting entirely, leaving the terminal's
+	// native click-drag text selection intact. This is the default: turning
+	// reporting on takes selection away from the user, so it should be a
+	// decision the app makes rather than something it inherits.
+	MouseOff MouseMode = iota
+
+	// MouseClick enables cell-motion reporting — presses, releases, the
+	// wheel, and motion while a button is held. Bare pointer movement is
+	// not reported, so nothing re-renders while the pointer merely crosses
+	// the screen.
+	MouseClick
+)
+
+// enableCmd returns the bubbletea command that turns this mode on, or nil
+// for MouseOff. Enabling from Init rather than via a tea.NewProgram option
+// keeps mouse configuration on app.Options, so callers never have to keep
+// two places in sync.
+func (m MouseMode) enableCmd() tea.Cmd {
+	if m == MouseClick {
+		return tea.EnableMouseCellMotion
+	}
+	return nil
 }
 
 // SetThemeMsg asks the app to switch to the named theme and rebroadcast it
@@ -145,6 +196,9 @@ type Model struct {
 	help         help.Model
 	helpExpanded bool
 	helpOverflow bool
+
+	mouseMode MouseMode
+	mouse     mouse.Tracker
 }
 
 // New constructs an app shell. By default it reorders Themes via
@@ -177,6 +231,13 @@ func New(opts Options) Model {
 	if opts.HelpMaxRows <= 0 {
 		opts.HelpMaxRows = 6
 	}
+	// Double-click speed is a per-machine preference, so an unset option
+	// defers to the user's config file before falling back to the default.
+	if opts.DoubleClickInterval <= 0 && !opts.SkipConfig {
+		if cfg, err := config.Load(); err == nil && cfg.DoubleClickMs > 0 {
+			opts.DoubleClickInterval = time.Duration(cfg.DoubleClickMs) * time.Millisecond
+		}
+	}
 
 	t := opts.Themes[0]
 	opts.Root.SetTheme(t)
@@ -192,13 +253,21 @@ func New(opts Options) Model {
 		helpMaxRows: opts.HelpMaxRows,
 		helpMinimal: !opts.HelpVerbose,
 		autoEscPop:  !opts.DisableAutoEscPop,
+		mouseMode:   opts.Mouse,
+		mouse:       mouse.NewTracker(opts.DoubleClickInterval),
 	}
 	m.apply()
 	return m
 }
 
-// Init runs the root screen's Init + OnEnter(nil).
-func (m Model) Init() tea.Cmd { return m.stack.Init() }
+// Init runs the root screen's Init + OnEnter(nil), and turns on mouse
+// reporting when Options.Mouse asks for it.
+func (m Model) Init() tea.Cmd {
+	if enable := m.mouseMode.enableCmd(); enable != nil {
+		return tea.Batch(m.stack.Init(), enable)
+	}
+	return m.stack.Init()
+}
 
 // theme returns the currently-active palette.
 func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
@@ -293,6 +362,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, nil
 
+	case tea.MouseMsg:
+		// Screens never see the raw event. Resolving the click count here
+		// keeps double-click timing in one place instead of duplicating a
+		// threshold across every component (see pkg/mouse).
+		if m.mouseMode == MouseOff {
+			return m, nil
+		}
+		e := m.mouse.Track(msg, time.Now())
+		// The shell owns its own chrome, exactly as it owns the keys that
+		// drive it — a screen should no more handle a crumb click than it
+		// handles esc-pop.
+		if e.IsPress() {
+			if cmd, handled := m.clickChrome(e); handled {
+				return m, cmd
+			}
+		}
+		var cmd tea.Cmd
+		m.stack, cmd = m.stack.Update(e)
+		m.apply()
+		return m, cmd
+
 	case SetThemeMsg:
 		for i, t := range m.themes {
 			if t.Name == msg.Name {
@@ -349,6 +439,62 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// clickChrome handles clicks on the shell's own furniture — the breadcrumb
+// trail and the statusbar's help affordance — and reports whether it
+// consumed the event.
+//
+// Clicking a crumb unwinds to that depth in one step, the mouse counterpart
+// of pressing esc repeatedly. Clicking the "? help" affordance toggles the
+// expanded panel, and only while the affordance is actually shown: it is the
+// source of truth for whether the help key does anything, so the click
+// follows the same rule rather than inventing a second one.
+func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
+	m.placeChrome()
+
+	if i, ok := m.bc.CrumbAt(e.X, e.Y); ok {
+		if depth := i + 1; depth < m.stack.Depth() {
+			var cmd tea.Cmd
+			m.stack, cmd = m.stack.Update(screen.PopToMsg{Depth: depth})
+			m.apply()
+			return cmd, true
+		}
+		// The current crumb — already here, nothing to do, but the click
+		// belongs to the breadcrumb and shouldn't fall through to the body.
+		return nil, true
+	}
+
+	if m.helpOverflow && m.helpKey.Keys() != nil {
+		slot := m.sb.LeftContentRect()
+		if at, aw, ok := m.help.AffordanceSpan(m.shortViewBudget()); ok && slot.Hit(e.X, e.Y) {
+			rel := e.X - slot.X
+			if rel >= at && rel < at+aw {
+				m.helpExpanded = !m.helpExpanded
+				m.apply()
+				return nil, true
+			}
+		}
+	}
+	return nil, false
+}
+
+// placeChrome gives the breadcrumb and statusbar the rects they occupy, so
+// they can hit-test a click.
+//
+// They can't get these from rendering the way components do. View has a value
+// receiver — bubbletea's Model interface requires it — so the layout.Bar
+// wrappers there call SetRect on a copy of the Model that is discarded when
+// View returns. Screens escape this because screen.Screen is an interface
+// holding a pointer, but these two are plain value fields on the shell.
+//
+// Deriving the rects here instead is not a workaround so much as an
+// admission of where the knowledge lives: the shell defines this layout, so
+// it already knows the breadcrumb is the first row and the statusbar the
+// last. View builds the same two Fixed(1, …) slots from the same facts.
+func (m *Model) placeChrome() {
+	m.bc.SetRect(geom.New(0, 0, m.w, 1))
+	m.sb.SetRect(geom.New(0, max(0, m.h-1), m.w, 1))
+}
+
 // View composes the standard shell as a vertical stack: breadcrumb (1 row),
 // active screen's body layout (flex), statusbar (1 row). The screen never
 // knows its own terminal dimensions — the layout engine hands it a body
@@ -358,18 +504,20 @@ func (m Model) View() string {
 		return ""
 	}
 
+	// One generation per frame. Every rect handed down inherits this value,
+	// so a component that isn't drawn this frame keeps an older stamp and
+	// declines mouse events (see pkg/geom).
+	geom.NextGen()
+
 	var body layout.Node
 	if cur := m.stack.Current(); cur != nil {
 		body = cur.Layout()
 	} else {
-		body = layout.RenderFunc(func(w, h int) string { return "" })
+		body = layout.RenderFunc(func(geom.Rect) string { return "" })
 	}
 
 	items := []layout.Item{
-		layout.Fixed(1, layout.RenderFunc(func(w, _ int) string {
-			m.bc.SetWidth(w)
-			return m.bc.View()
-		})),
+		layout.Fixed(1, layout.Bar(&m.bc)),
 		layout.Flex(1, body),
 	}
 	if m.helpExpanded {
@@ -379,8 +527,8 @@ func (m Model) View() string {
 			// Match the statusbar's left-slot Padding(0,1) so panel
 			// columns align with the footer's row 0.
 			leftPad := 1
-			items = append(items, layout.Fixed(rows, layout.RenderFunc(func(w, _ int) string {
-				rightPad := w - leftPad - budget
+			items = append(items, layout.Fixed(rows, layout.RenderFunc(func(r geom.Rect) string {
+				rightPad := r.W - leftPad - budget
 				if rightPad < 0 {
 					rightPad = 0
 				}
@@ -388,11 +536,8 @@ func (m Model) View() string {
 			})))
 		}
 	}
-	items = append(items, layout.Fixed(1, layout.RenderFunc(func(w, _ int) string {
-		m.sb.SetWidth(w)
-		return m.sb.View()
-	})))
-	return layout.VStack(items...).Render(m.w, m.h)
+	items = append(items, layout.Fixed(1, layout.Bar(&m.sb)))
+	return layout.VStack(items...).Render(geom.New(0, 0, m.w, m.h))
 }
 
 // Theme exposes the app's current palette for screens that need it outside

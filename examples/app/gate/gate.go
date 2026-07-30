@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/form"
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -50,10 +51,10 @@ type creds struct {
 }
 
 type Screen struct {
-	t          theme.Theme
-	body       pane.Pane
-	auth       *creds
-	formShown  bool // whether we've pushed the login form during this session
+	t         theme.Theme
+	body      pane.Pane
+	auth      *creds
+	formShown bool // whether we've pushed the login form during this session
 }
 
 func (s *Screen) Title() string {
@@ -184,10 +185,9 @@ func (s *loginScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *loginScreen) Layout() layout.Node { return layout.RenderFunc(s.render) }
 
-func (s *loginScreen) render(w, h int) string {
-	inner := max(0, w-2-pane.ScrollbarWidth)
-	s.form.SetDimensions(inner, max(0, h-2))
-	s.body.SetDimensions(w, h)
+func (s *loginScreen) render(r geom.Rect) string {
+	s.body.SetRect(r)
+	s.form.SetRect(s.body.ContentRect())
 	s.body.SetContent(s.form.View())
 	return s.body.View()
 }

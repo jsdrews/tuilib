@@ -75,6 +75,30 @@ func Pop(result any) tea.Cmd {
 	return func() tea.Msg { return PopMsg{Result: result} }
 }
 
+// PopToMsg is emitted by PopTo; the Stack handles it by unwinding to Depth.
+type PopToMsg struct {
+	Depth  int
+	Result any
+}
+
+// PopTo returns a command that unwinds the stack until it is depth screens
+// deep, delivering result to the screen left on top. depth is 1-based, so
+// PopTo(1, nil) returns to the root.
+//
+// This is the jump the breadcrumb needs: clicking the first crumb from four
+// levels down is one navigation, not three. Screens in between are discarded
+// without being activated — firing OnEnter on each would kick off fetches for
+// views the user never sees. They are also not notified they were dismissed,
+// which matches what a single Pop already does; a screen holding a
+// subprocess or a ticker should stop it from the action that started it, not
+// rely on a teardown hook that does not exist.
+//
+// A depth at or above the current one is a no-op, so PopTo can be called
+// without first checking where the stack is.
+func PopTo(depth int, result any) tea.Cmd {
+	return func() tea.Msg { return PopToMsg{Depth: depth, Result: result} }
+}
+
 // Replace returns a command that swaps the active screen with s. The
 // previous top is discarded and s.Init + s.OnEnter(nil) run, exactly as if
 // it had just been pushed. The screen below is not notified (no OnEnter
@@ -140,6 +164,14 @@ func (s Stack) Update(msg tea.Msg) (Stack, tea.Cmd) {
 	case PopMsg:
 		if len(s.items) > 1 {
 			s.items = s.items[:len(s.items)-1]
+			top := s.items[len(s.items)-1]
+			return s, top.OnEnter(m.Result)
+		}
+		return s, nil
+
+	case PopToMsg:
+		if m.Depth >= 1 && m.Depth < len(s.items) {
+			s.items = s.items[:m.Depth]
 			top := s.items[len(s.items)-1]
 			return s, top.OnEnter(m.Result)
 		}

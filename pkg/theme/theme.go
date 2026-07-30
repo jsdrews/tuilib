@@ -142,7 +142,7 @@ func Solarized() Theme {
 		KeyFG:          lipgloss.Color("37"),  // cyan
 		BorderActive:   lipgloss.Color("33"),  // blue
 		BorderInactive: lipgloss.Color("240"),
-		InfoBG:         lipgloss.Color("64"),  // green
+		InfoBG:         lipgloss.Color("64"), // green
 		InfoFG:         lipgloss.Color("234"),
 		ErrorBG:        lipgloss.Color("160"), // red
 		ErrorFG:        lipgloss.Color("255"),
@@ -179,12 +179,12 @@ func Dracula() Theme {
 		BarBG:          lipgloss.Color("235"),
 		BarFG:          lipgloss.Color("252"),
 		Current:        lipgloss.Color("255"),
-		Muted:          lipgloss.Color("61"),  // comment
+		Muted:          lipgloss.Color("61"), // comment
 		Subtle:         lipgloss.Color("238"),
 		KeyFG:          lipgloss.Color("141"), // purple
 		BorderActive:   lipgloss.Color("212"), // pink
 		BorderInactive: lipgloss.Color("238"),
-		InfoBG:         lipgloss.Color("84"),  // green
+		InfoBG:         lipgloss.Color("84"), // green
 		InfoFG:         lipgloss.Color("235"),
 		ErrorBG:        lipgloss.Color("203"), // red
 		ErrorFG:        lipgloss.Color("255"),

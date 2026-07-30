@@ -28,7 +28,7 @@ type node struct {
 	kids  []*node
 }
 
-func (n *node) Label() string    { return n.label }
+func (n *node) Label() string { return n.label }
 func (n *node) Children() []tw.Node {
 	out := make([]tw.Node, len(n.kids))
 	for i, k := range n.kids {

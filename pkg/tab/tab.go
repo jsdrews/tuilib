@@ -32,8 +32,11 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/help"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -99,6 +102,8 @@ type Options struct {
 
 // Model is the tab pane.
 type Model struct {
+	rect geom.Rect
+
 	tabs   []Tab
 	active int
 	w, h   int
@@ -222,11 +227,31 @@ func (m Model) Init() tea.Cmd {
 //   - tea.KeyMsg goes to the active body only. Sending keystrokes to every
 //     tab would race "/" filters, "j/k" cursors, and similar shortcuts
 //     across panes the user can't see.
+//   - mouse.Msg likewise goes to the active body only, for the same reason:
+//     it is user input aimed at what's on screen. Hidden bodies still hold
+//     the rects they had when last drawn, so fanning a click out would let
+//     an invisible pane claim it. (Rect.Hit's generation check makes that
+//     safe regardless; routing narrowly means hidden tabs don't waste work
+//     hit-testing every click either.)
 //   - Every other message fans out to every body, so timers, async fetches,
 //     and other background streams in inactive tabs stay alive across
 //     switches. (A body's tea.Tick re-arm cmd that fired while another tab
 //     was active still reaches it.)
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if mm, ok := msg.(mouse.Msg); ok {
+		// A click on the strip switches tabs; anything else belongs to the
+		// body. The strip is one row, so this never competes with the body
+		// for the same cell.
+		if mm.IsPress() {
+			if i, hit := m.tabAt(mm.X, mm.Y); hit {
+				return m.switchTo(i)
+			}
+		}
+		body := m.tabs[m.active].Body
+		next, cmd := body.Update(msg)
+		m.tabs[m.active].Body = next
+		return m, cmd
+	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		if !m.tabs[m.active].Body.IsCapturingKeys() {
 			switch {
@@ -274,8 +299,30 @@ func (m Model) switchTo(i int) (Model, tea.Cmd) {
 	return m, m.tabs[i].Body.OnEnter(nil)
 }
 
-// SetDimensions stores the available rect; renderStrip and the body share it.
-func (m *Model) SetDimensions(w, h int) { m.w, m.h = w, h }
+// SetRect stores the available rect; renderStrip and the body share it.
+func (m *Model) SetRect(r geom.Rect) { m.rect = r; m.w, m.h = r.W, r.H }
+
+// Rect returns the rect the tab host was last placed at.
+func (m Model) Rect() geom.Rect { return m.rect }
+
+// stripRect returns the rect the one-row tab strip occupies, and bodyRect
+// the rows left for the active body. The strip sits on the first row for
+// StripTop and the last for StripBottom; the body always gets h-1 rows.
+func (m Model) stripRect() geom.Rect {
+	if m.stripPos == StripBottom {
+		return geom.Rect{X: m.rect.X, Y: m.rect.Y + max(0, m.rect.H-1), W: m.rect.W, H: 1, Gen: m.rect.Gen}
+	}
+	return geom.Rect{X: m.rect.X, Y: m.rect.Y, W: m.rect.W, H: 1, Gen: m.rect.Gen}
+}
+
+func (m Model) bodyRect() geom.Rect {
+	h := max(0, m.rect.H-1)
+	y := m.rect.Y
+	if m.stripPos != StripBottom {
+		y++
+	}
+	return geom.Rect{X: m.rect.X, Y: y, W: m.rect.W, H: h, Gen: m.rect.Gen}
+}
 
 // View renders the tab strip (on the first or last row per StripPos) and
 // the active body's layout in the remaining rows.
@@ -285,7 +332,10 @@ func (m Model) View() string {
 	if bodyH < 0 {
 		bodyH = 0
 	}
-	body := m.tabs[m.active].Body.Layout().Render(m.w, bodyH)
+	// A nested render root: the body's layout tree starts here rather than
+	// at the terminal origin, so it inherits this Model's rect (and its
+	// generation) instead of calling geom.NextGen itself.
+	body := m.tabs[m.active].Body.Layout().Render(m.bodyRect())
 	if bodyH == 0 {
 		return strip
 	}
@@ -307,6 +357,31 @@ func (m Model) renderStrip(w int) string {
 	}
 	line := strings.Join(parts, m.separatorStyle.Render(m.separator))
 	return m.barStyle.Width(w).Render(line)
+}
+
+// tabAt maps a position to a tab index. Labels are laid out left to right
+// inside the bar's own left padding, separated by Options.Separator — the
+// same walk renderStrip does, so the two cannot drift apart without this
+// failing first.
+//
+// Reports hit=false for the gaps between labels and the empty stretch past
+// the last one, so clicking the bar's background does nothing rather than
+// snapping to the nearest tab.
+func (m Model) tabAt(x, y int) (int, bool) {
+	strip := m.stripRect()
+	if !strip.Hit(x, y) {
+		return 0, false
+	}
+	at := strip.X + m.barStyle.GetPaddingLeft()
+	sepW := ansi.StringWidth(m.separator)
+	for i, t := range m.tabs {
+		w := ansi.StringWidth(" " + t.Label + " ")
+		if x >= at && x < at+w {
+			return i, true
+		}
+		at += w + sepW
+	}
+	return 0, false
 }
 
 // ActiveTab returns the active tab index.

@@ -146,8 +146,9 @@ layout.VStack(
 
 - `Fixed(n, node)` reserves exactly n cells on the main axis.
 - `Flex(weight, node)` takes a share of what's left; sibling weights set the ratio.
-- `Bar(&c)` adapts any `SetWidth(int) + View()` component (breadcrumb, statusbar).
-- `Sized(&c)` adapts any `SetDimensions(w,h int) + View()` component (pane, list).
+- `Sized(&c)` adapts any `SetRect(geom.Rect) + View()` component (pane, list, …).
+- `Bar(&c)` is `Sized` under a name that says "this renders one row"
+  (breadcrumb, statusbar).
 - `RenderFunc(func(w,h int) string)` is the escape hatch — size and render inline.
 - `ZStack(base, overlay)` composites overlay on top; `Center(w, h, node)` renders `node` at its natural size centered within the parent's rect — the typical "modal" pattern.
 

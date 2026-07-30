@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -120,6 +121,10 @@ func (m *Model) Blur() {
 // Focused reports whether the filter is currently accepting keystrokes.
 func (m Model) Focused() bool { return m.input.Focused() }
 
+// IsCapturingKeys reports whether the filter owns the keyboard — true
+// whenever it is focused. Satisfies focus.Capturer.
+func (m Model) IsCapturingKeys() bool { return m.Focused() }
+
 // Help returns the keys the filter responds to. Empty when blurred
 // (the parent owns the "/" focus binding); commit/clear when focused.
 func (m Model) Help() []key.Binding {
@@ -151,8 +156,14 @@ func (m *Model) Reset() {
 	m.pane.SetContent(m.input.View())
 }
 
-// SetWidth resizes the surrounding pane. Height is fixed at 3.
-func (m *Model) SetWidth(w int) { m.pane.SetDimensions(w, 3) }
+// SetRect places the filter at r. Height is fixed at 3 regardless of what
+// the rect offers, since the pane is border + one content row + border.
+func (m *Model) SetRect(r geom.Rect) {
+	m.pane.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
+}
+
+// Rect returns the rect the filter was last placed at.
+func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
 // SetBottomLeft / SetBottomRight write into the surrounding pane's bottom
 // border slots. Useful for hints, completion previews, or counts that

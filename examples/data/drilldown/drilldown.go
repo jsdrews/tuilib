@@ -29,6 +29,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -48,14 +49,12 @@ type Screen struct {
 	cities list.Model
 	detail list.Model
 
-	focus int // 0=cities, 1=detail
+	focus focus.Group
 
 	reqID int    // monotonic; only the latest detail fetch's result is applied
 	shown string // city currently rendered in the detail list (or "")
 	attrs []attribute
 }
-
-const focusCount = 2
 
 type attribute struct {
 	key   string
@@ -77,7 +76,7 @@ func (s *Screen) OnEnter(any) tea.Cmd { return nil }
 
 // IsCapturingKeys claims keys whenever the focused list is filter-typing.
 // Detail isn't filterable, so only the cities filter matters.
-func (s *Screen) IsCapturingKeys() bool { return s.focus == 0 && s.cities.Filtering() }
+func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
@@ -101,9 +100,9 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		if !s.IsCapturingKeys() {
 			switch m.String() {
 			case "tab", "shift+tab":
-				s.focus = 1 - s.focus
-				s.applyFocus()
-				return s, nil
+				var cmd tea.Cmd
+				s.focus, cmd = s.focus.Update(msg)
+				return s, cmd
 			case "r":
 				return s, s.startFetches()
 			case "enter":
@@ -123,20 +122,19 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 // handleEnter drills in on the focused selection. Both branches mean
 // "open the focused thing" — the side effect just differs by pane.
 func (s *Screen) handleEnter() tea.Cmd {
-	switch s.focus {
-	case 0: // cities → load detail + move focus right
+	switch {
+	case s.focus.Is(&s.cities): // load detail + move focus right
 		city, ok := s.cities.Selected()
 		if !ok || s.cities.Loading() {
 			return nil
 		}
-		s.focus = 1
-		s.applyFocus()
+		s.focus.SetIndex(1)
 		if city == s.shown {
 			return nil // already loaded; just transferred focus
 		}
 		return s.fetchDetail(city)
 
-	case 1: // detail → push the attribute screen
+	case s.focus.Is(&s.detail): // push the attribute screen
 		if s.shown == "" || s.detail.Loading() {
 			return nil
 		}
@@ -151,10 +149,10 @@ func (s *Screen) handleEnter() tea.Cmd {
 
 func (s *Screen) routeKey(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
-	switch s.focus {
-	case 0:
+	switch {
+	case s.focus.Is(&s.cities):
 		s.cities, cmd = s.cities.Update(msg)
-	case 1:
+	case s.focus.Is(&s.detail):
 		s.detail, cmd = s.detail.Update(msg)
 	}
 	return cmd
@@ -169,19 +167,12 @@ func (s *Screen) Layout() layout.Node {
 
 func (s *Screen) Help() []key.Binding {
 	base := []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next pane")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refetch")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	}
-	switch s.focus {
-	case 0:
-		return append(base, s.cities.Help()...)
-	case 1:
-		return append(base, s.detail.Help()...)
-	}
-	return base
+	return append(base, s.focus.Help()...)
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
@@ -218,8 +209,14 @@ func (s *Screen) SetTheme(t theme.Theme) {
 }
 
 func (s *Screen) applyFocus() {
-	s.cities.SetFocused(s.focus == 0)
-	s.detail.SetFocused(s.focus == 1)
+	at := s.focus.Index()
+	// The group supplies the cycling bindings; relabel them for panes so
+	// the hint strip reads "next pane" rather than the default "next field".
+	s.focus = focus.NewGroup(&s.cities, &s.detail).WithKeys(focus.Keys{
+		Next: key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next pane")),
+		Prev: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev pane")),
+	})
+	s.focus.SetIndex(at)
 }
 
 // startFetches resets the cities list into loading state and schedules

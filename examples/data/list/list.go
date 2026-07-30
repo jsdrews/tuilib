@@ -32,10 +32,10 @@ func New(t theme.Theme) screen.Screen {
 	return s
 }
 
-func (s *Screen) Title() string          { return "Cities" }
-func (s *Screen) Init() tea.Cmd          { return textinput.Blink }
-func (s *Screen) OnEnter(any) tea.Cmd    { return nil }
-func (s *Screen) IsCapturingKeys() bool  { return s.list.Filtering() }
+func (s *Screen) Title() string         { return "Cities" }
+func (s *Screen) Init() tea.Cmd         { return textinput.Blink }
+func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
+func (s *Screen) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmd tea.Cmd

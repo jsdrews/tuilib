@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // stripLines splits and ANSI-strips each line for content assertions.
@@ -53,7 +54,7 @@ func newAutosize(msg string, outerW, outerH int) Model {
 		OK:       "OK",
 		Autosize: true,
 	})
-	m.SetDimensions(outerW, outerH)
+	m.SetRect(geom.Rect{W: outerW, H: outerH})
 	return m
 }
 
@@ -63,7 +64,7 @@ func TestNonAutosizeUnchanged(t *testing.T) {
 		Message: "hi",
 		OK:      "OK",
 	})
-	m.SetDimensions(30, 5)
+	m.SetRect(geom.Rect{W: 30, H: 5})
 	view := m.View()
 	// Non-autosize returns the pane view directly (no centering pad).
 	// The first line should be the top border of the pane.
@@ -326,7 +327,7 @@ func TestAutosizeReMeasuresOnResize(t *testing.T) {
 	m := newAutosize("some medium-length error message about a failed thing", 100, 30)
 	firstW, firstH := m.modalW, m.modalH
 	// Shrink the terminal — modal should re-wrap and shrink.
-	m.SetDimensions(50, 15)
+	m.SetRect(geom.Rect{W: 50, H: 15})
 	if m.modalW > 50 || m.modalH > 15 {
 		t.Errorf("post-resize dims %dx%d exceed outer 50x15", m.modalW, m.modalH)
 	}

@@ -41,16 +41,16 @@ func Terminal() Theme {
 		BarBG:          lipgloss.Color(bg),
 		BarFG:          lipgloss.Color(fg),
 		Current:        lipgloss.Color(fg),
-		Muted:          lipgloss.Color("8"),  // bright black — "dim fg"
+		Muted:          lipgloss.Color("8"), // bright black — "dim fg"
 		Subtle:         lipgloss.Color("8"),
 		KeyFG:          lipgloss.Color("12"), // bright blue
 		BorderActive:   lipgloss.Color("4"),  // blue
 		BorderInactive: lipgloss.Color("8"),
-		InfoBG:         lipgloss.Color("2"),  // green
+		InfoBG:         lipgloss.Color("2"), // green
 		InfoFG:         lipgloss.Color(bg),
-		ErrorBG:        lipgloss.Color("1"),  // red
+		ErrorBG:        lipgloss.Color("1"), // red
 		ErrorFG:        lipgloss.Color(fg),
-		Accent:         lipgloss.Color("5"),  // magenta
+		Accent:         lipgloss.Color("5"), // magenta
 	}
 }
 

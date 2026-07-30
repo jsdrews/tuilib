@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -20,17 +21,17 @@ type stubBody struct {
 	entered   int
 }
 
-func (b *stubBody) Title() string                            { return b.label }
-func (b *stubBody) Init() tea.Cmd                            { return nil }
-func (b *stubBody) OnEnter(any) tea.Cmd                      { b.entered++; return nil }
-func (b *stubBody) IsCapturingKeys() bool                    { return b.capturing }
-func (b *stubBody) Update(tea.Msg) (screen.Screen, tea.Cmd)  { return b, nil }
-func (b *stubBody) Help() []key.Binding                      { return nil }
-func (b *stubBody) SetTheme(theme.Theme)                     {}
+func (b *stubBody) Title() string                           { return b.label }
+func (b *stubBody) Init() tea.Cmd                           { return nil }
+func (b *stubBody) OnEnter(any) tea.Cmd                     { b.entered++; return nil }
+func (b *stubBody) IsCapturingKeys() bool                   { return b.capturing }
+func (b *stubBody) Update(tea.Msg) (screen.Screen, tea.Cmd) { return b, nil }
+func (b *stubBody) Help() []key.Binding                     { return nil }
+func (b *stubBody) SetTheme(theme.Theme)                    {}
 func (b *stubBody) Layout() layout.Node {
 	marker := b.label
-	return layout.RenderFunc(func(w, h int) string {
-		lines := make([]string, h)
+	return layout.RenderFunc(func(r geom.Rect) string {
+		lines := make([]string, r.H)
 		for i := range lines {
 			if i == 0 {
 				lines[i] = marker
@@ -46,7 +47,7 @@ func newTabs(t theme.Theme, pos StripPos, bodies ...*stubBody) Model {
 		tabs[i] = Tab{Label: b.label, Body: b}
 	}
 	m := New(Options{Theme: t, Tabs: tabs, StripPos: pos})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 	return m
 }
 
@@ -55,7 +56,7 @@ func TestStripTopByDefault(t *testing.T) {
 	a := &stubBody{label: "AAA"}
 	b := &stubBody{label: "BBB"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "One", Body: a}, {Label: "Two", Body: b}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 
 	lines := strings.Split(m.View(), "\n")
 	if len(lines) != 6 {
@@ -117,7 +118,7 @@ func TestSwitchToNextRunsOnEnter(t *testing.T) {
 	a := &stubBody{label: "A"}
 	b := &stubBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 
 	beforeA, beforeB := a.entered, b.entered
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
@@ -135,7 +136,7 @@ func TestNumberKeyJumpsToTab(t *testing.T) {
 	b := &stubBody{label: "B"}
 	c := &stubBody{label: "C"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}, {Label: "C", Body: c}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'3'}})
 	if m.ActiveTab() != 2 {
 		t.Errorf("active tab after '3' = %d, want 2", m.ActiveTab())
@@ -147,7 +148,7 @@ func TestKeyMsgRoutesToActiveBodyOnly(t *testing.T) {
 	a := &countingBody{label: "A"}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	if a.keyCount != 1 {
@@ -163,7 +164,7 @@ func TestNonKeyMsgFansOutToAllBodies(t *testing.T) {
 	a := &countingBody{label: "A"}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 
 	m, _ = m.Update(struct{}{})
 	if a.otherCount != 1 || b.otherCount != 1 {
@@ -192,7 +193,7 @@ func TestSwitchKeysSuppressedWhileCapturing(t *testing.T) {
 	a := &countingBody{label: "A", capturing: true}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
-	m.SetDimensions(30, 6)
+	m.SetRect(geom.Rect{W: 30, H: 6})
 
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
 	if m.ActiveTab() != 0 {
@@ -227,8 +228,8 @@ func (b *countingBody) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	}
 	return b, nil
 }
-func (b *countingBody) Help() []key.Binding { return nil }
+func (b *countingBody) Help() []key.Binding  { return nil }
 func (b *countingBody) SetTheme(theme.Theme) {}
 func (b *countingBody) Layout() layout.Node {
-	return layout.RenderFunc(func(w, h int) string { return "" })
+	return layout.RenderFunc(func(geom.Rect) string { return "" })
 }

@@ -36,6 +36,13 @@ type Config struct {
 	// Theme names a theme to use as the initial palette. Matched against
 	// theme.Theme.Name by theme.Resolve. Empty string disables the lookup.
 	Theme string `yaml:"theme"`
+
+	// DoubleClickMs is the window, in milliseconds, in which a second press
+	// in the same cell counts as a double click. Comfortable timing varies
+	// a lot between people and input devices, which is why it lives here
+	// rather than being fixed per app. Zero or absent leaves the app's own
+	// setting in force, falling back to mouse.DefaultDoubleClickInterval.
+	DoubleClickMs int `yaml:"double_click_ms"`
 }
 
 // Path returns the path tuilib will read from. Honors $XDG_CONFIG_HOME,

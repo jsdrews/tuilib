@@ -16,6 +16,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 )
 
 // Keys is the pane's keymap for horizontal scroll. Each binding carries
@@ -44,10 +47,18 @@ func DefaultKeys() Keys {
 // the merge.
 func (k *Keys) FillDefaults() {
 	d := DefaultKeys()
-	if len(k.Left.Keys()) == 0      { k.Left = d.Left }
-	if len(k.Right.Keys()) == 0     { k.Right = d.Right }
-	if len(k.LeftEdge.Keys()) == 0  { k.LeftEdge = d.LeftEdge }
-	if len(k.RightEdge.Keys()) == 0 { k.RightEdge = d.RightEdge }
+	if len(k.Left.Keys()) == 0 {
+		k.Left = d.Left
+	}
+	if len(k.Right.Keys()) == 0 {
+		k.Right = d.Right
+	}
+	if len(k.LeftEdge.Keys()) == 0 {
+		k.LeftEdge = d.LeftEdge
+	}
+	if len(k.RightEdge.Keys()) == 0 {
+		k.RightEdge = d.RightEdge
+	}
 }
 
 // HScrollStep is how many cells left/right scroll the pane horizontally.
@@ -59,6 +70,7 @@ type Pane struct {
 	viewport viewport.Model
 
 	width, height int
+	rect          geom.Rect
 
 	rawLines []string
 	maxLineW int
@@ -71,9 +83,14 @@ type Pane struct {
 	bottomMid   string
 	bottomRight string // empty => auto-filled with scroll percent
 
-	focused     bool
-	hScrollbar  bool
-	titlePos    BorderPosition
+	focused    bool
+	hScrollbar bool
+
+	// Scrollbar drag state. Tracked here because the release that ends a
+	// drag can land anywhere, including outside the pane.
+	vDragging bool
+	hDragging bool
+	titlePos  BorderPosition
 
 	loading      bool
 	spinner      spinner.Model
@@ -176,7 +193,7 @@ func New(opts Options) Pane {
 		slotBrackets:   opts.SlotBrackets,
 		keys:           opts.Keys,
 	}
-	p.SetDimensions(opts.Width, opts.Height)
+	p.SetRect(geom.Rect{W: opts.Width, H: opts.Height})
 	return p
 }
 
@@ -344,18 +361,201 @@ func (p *Pane) SetContent(s string) {
 	p.pushContent()
 }
 
-// SetDimensions sets the Pane's outer size (including border). The inner
-// content area is sized as (width-2-scrollbar) × (height-2), shrunk by
-// one more row when HScrollbar is enabled.
-func (p *Pane) SetDimensions(width, height int) {
-	p.width, p.height = width, height
-	p.viewport.Width = max(0, width-2-ScrollbarWidth)
-	innerH := height - 2
+// SetRect places the Pane at an absolute position and outer size (including
+// border). The inner content area is sized as (width-2-scrollbar) ×
+// (height-2), shrunk by one more row when HScrollbar is enabled.
+//
+// The rect is retained so the Pane and the components embedding it can map a
+// mouse position back to a content row — see Rect and ContentRect.
+func (p *Pane) SetRect(r geom.Rect) {
+	p.rect = r
+	p.width, p.height = r.W, r.H
+	p.viewport.Width = max(0, r.W-2-ScrollbarWidth)
+	innerH := r.H - 2
 	if p.hScrollbar {
 		innerH -= ScrollbarHeight
 	}
 	p.viewport.Height = max(0, innerH)
 	p.pushContent()
+}
+
+// Rect returns the outer rect the Pane was last placed at, border included.
+func (p Pane) Rect() geom.Rect { return p.rect }
+
+// ContentRect returns the rect covering the Pane's inner content area — the
+// outer rect less the border, the right-edge scrollbar, and the horizontal
+// scrollbar row when enabled. It is the region row 0 of the content occupies,
+// so RowAt inverts against it.
+func (p Pane) ContentRect() geom.Rect {
+	r := geom.Rect{
+		X:   p.rect.X + 1,
+		Y:   p.rect.Y + 1,
+		W:   p.viewport.Width,
+		H:   p.viewport.Height,
+		Gen: p.rect.Gen,
+	}
+	if r.W < 0 {
+		r.W = 0
+	}
+	if r.H < 0 {
+		r.H = 0
+	}
+	return r
+}
+
+// scrollMetrics returns the (total, visible, offset) triple the scrollbar is
+// drawn from — the viewport's own numbers, unless a component windows its
+// rows itself and pushed virtual metrics through SetVirtualScroll.
+func (p Pane) scrollMetrics() (total, visible, offset int) {
+	if p.virtualTotal > 0 {
+		return p.virtualTotal, p.virtualVisible, p.virtualOffset
+	}
+	return p.viewport.TotalLineCount(), p.viewport.VisibleLineCount(), p.viewport.YOffset
+}
+
+// VScrollbarRect returns the rect of the vertical scrollbar column, which
+// View draws immediately right of the viewport.
+func (p Pane) VScrollbarRect() geom.Rect {
+	c := p.ContentRect()
+	return geom.Rect{X: c.X + p.viewport.Width, Y: c.Y, W: ScrollbarWidth, H: p.viewport.Height, Gen: p.rect.Gen}
+}
+
+// HScrollbarRect returns the rect of the horizontal scrollbar row, drawn
+// below the body when HScrollbar is enabled. Empty when it isn't.
+func (p Pane) HScrollbarRect() geom.Rect {
+	if !p.hScrollbar {
+		return geom.Rect{}
+	}
+	c := p.ContentRect()
+	return geom.Rect{X: c.X, Y: c.Y + p.viewport.Height, W: p.viewport.Width, H: ScrollbarHeight, Gen: p.rect.Gen}
+}
+
+// ScrollbarDrag reports whether a scrollbar drag is in progress.
+func (p Pane) ScrollbarDrag() bool { return p.vDragging || p.hDragging }
+
+// HandleScrollbar processes a mouse event against the Pane's scrollbars.
+// Components call it first from their own mouse handling, so a click on the
+// bar scrolls rather than selecting the row behind it.
+//
+// ok reports whether the event was a scrollbar interaction at all. row is
+// the content row the interaction targets — meaningful only when ok is true.
+//
+// For a pane that scrolls its own viewport, the scroll is already applied and
+// row can be ignored. For a component that windows its rows itself (pkg/table
+// and pkg/inspector push metrics through SetVirtualScroll, and derive their
+// window from the cursor), nothing is applied: moving the viewport under such
+// a component would be undone on its next render, so it must move its cursor
+// to row instead.
+//
+// Pressing anywhere on the track jumps there, the thumb included — grabbing
+// the thumb is a jump to where it already is, which leaves it put. Motion
+// while the button is held keeps jumping, which is what makes it a drag. The
+// pane tracks that state itself because the release can land outside the bar,
+// or outside the pane entirely, and must still end the drag.
+func (p *Pane) HandleScrollbar(e mouse.Msg) (row int, ok bool) {
+	if e.Action == tea.MouseActionRelease {
+		if p.vDragging || p.hDragging {
+			p.vDragging, p.hDragging = false, false
+			return 0, true
+		}
+		return 0, false
+	}
+
+	held := e.Action == tea.MouseActionMotion && e.Button == tea.MouseButtonLeft
+	if !e.IsPress() && !held {
+		return 0, false
+	}
+
+	switch {
+	case p.vDragging && held:
+		return p.jumpV(e.Y), true
+	case p.hDragging && held:
+		p.jumpH(e.X)
+		return 0, true
+	case e.IsPress() && p.VScrollbarRect().Hit(e.X, e.Y):
+		p.vDragging = true
+		return p.jumpV(e.Y), true
+	case e.IsPress() && p.HScrollbarRect().Hit(e.X, e.Y):
+		p.hDragging = true
+		p.jumpH(e.X)
+		return 0, true
+	}
+	return 0, false
+}
+
+// jumpV maps a position on the vertical track to a content row, scrolling
+// the viewport there when the pane owns its own scroll. Inverts what
+// Scrollbar draws.
+func (p *Pane) jumpV(y int) int {
+	bar := p.VScrollbarRect()
+	total, visible, _ := p.scrollMetrics()
+	if bar.H <= 0 || total <= visible {
+		return 0
+	}
+	rel := clampInt(y-bar.Y, 0, bar.H-1)
+	offset := clampInt(rel*total/bar.H, 0, max(0, total-visible))
+	if p.virtualTotal == 0 {
+		p.viewport.SetYOffset(offset)
+	}
+	return offset
+}
+
+// jumpH scrolls horizontally to the column at position x within the track.
+func (p *Pane) jumpH(x int) {
+	bar := p.HScrollbarRect()
+	if bar.W <= 0 || p.maxLineW <= p.viewport.Width {
+		return
+	}
+	rel := clampInt(x-bar.X, 0, bar.W-1)
+	p.SetXOffset(clampInt(rel*p.maxLineW/bar.W, 0, p.MaxXOffset()))
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// ScrollWheel applies a wheel event to the Pane's vertical scroll and reports
+// whether it was consumed. It is the shared implementation for components
+// that scroll the pane rather than moving a cursor — logview, textview, and a
+// bare pane. Events outside the content area, or aimed at a Pane that wasn't
+// drawn this frame, are declined so a sibling can claim them.
+//
+// bubbles' viewport handles the wheel on tea.MouseMsg, but tuilib components
+// receive mouse.Msg (which carries the resolved click count), so that path
+// never fires — this is where wheel scrolling actually happens.
+func (p *Pane) ScrollWheel(x, y int, up bool) bool {
+	if !p.ContentRect().Hit(x, y) {
+		return false
+	}
+	delta := WheelStep
+	if up {
+		delta = -delta
+	}
+	p.viewport.SetYOffset(p.viewport.YOffset + delta)
+	return true
+}
+
+// WheelStep is how many lines one wheel notch scrolls. Three matches the
+// convention terminals and GUI toolkits share.
+const WheelStep = 3
+
+// RowAt maps a terminal position to a zero-based index into the Pane's
+// content, accounting for the border inset and the current vertical scroll.
+// It reports ok=false when the position is outside the content area or the
+// Pane wasn't drawn in the current frame, so a caller can forward the event
+// on rather than claiming it.
+func (p Pane) RowAt(x, y int) (row int, ok bool) {
+	c := p.ContentRect()
+	if !c.Hit(x, y) {
+		return 0, false
+	}
+	return (y - c.Y) + p.viewport.YOffset, true
 }
 
 // XOffset returns the current horizontal scroll column.
@@ -437,8 +637,8 @@ func (p Pane) VisibleWidth() int { return p.viewport.Width }
 // Focused reports whether the pane is drawn in its active style.
 func (p Pane) Focused() bool { return p.focused }
 
-func (p *Pane) SetFocused(b bool)               { p.focused = b }
-func (p *Pane) SetTitle(s string)               { p.title = s }
+func (p *Pane) SetFocused(b bool)                   { p.focused = b }
+func (p *Pane) SetTitle(s string)                   { p.title = s }
 func (p *Pane) SetTitlePosition(pos BorderPosition) { p.titlePos = pos }
 
 // SetActiveColor updates the border color used when the pane is focused.
@@ -447,10 +647,10 @@ func (p *Pane) SetActiveColor(c lipgloss.TerminalColor) { p.activeColor = c }
 
 // SetInactiveColor updates the border color used when the pane is unfocused.
 func (p *Pane) SetInactiveColor(c lipgloss.TerminalColor) { p.inactiveColor = c }
-func (p *Pane) SetTopLeft(s string)      { p.topLeft = s }
-func (p *Pane) SetTopRight(s string)     { p.topRight = s }
-func (p *Pane) SetBottomLeft(s string)   { p.bottomLeft = s }
-func (p *Pane) SetBottomMiddle(s string) { p.bottomMid = s }
+func (p *Pane) SetTopLeft(s string)                       { p.topLeft = s }
+func (p *Pane) SetTopRight(s string)                      { p.topRight = s }
+func (p *Pane) SetBottomLeft(s string)                    { p.bottomLeft = s }
+func (p *Pane) SetBottomMiddle(s string)                  { p.bottomMid = s }
 
 // SetBottomRight overrides the auto-generated scroll percentage. Pass "" to
 // restore the default.
