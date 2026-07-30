@@ -63,7 +63,7 @@ func (s *cityList) OnEnter(any) tea.Cmd   { return nil }
 func (s *cityList) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *cityList) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if city, ok := s.list.Selected(); ok {
 			return s, screen.Push(newCityDetail(city, s.t))
 		}
@@ -126,7 +126,7 @@ func (s *cityDetail) Init() tea.Cmd         { return nil }
 func (s *cityDetail) IsCapturingKeys() bool { return s.actions.Filtering() }
 
 func (s *cityDetail) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.actions.Filtering() && k.String() == "enter" {
+	if s.actions.IsActivate(msg) {
 		if action, ok := s.actions.Selected(); ok {
 			switch action {
 			case actionPickTZ:
@@ -219,7 +219,7 @@ func (s *timezonePicker) OnEnter(any) tea.Cmd   { return nil }
 func (s *timezonePicker) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *timezonePicker) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if tz, ok := s.list.Selected(); ok {
 			return s, screen.Pop(tz) // child → parent data flow
 		}

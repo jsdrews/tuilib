@@ -449,6 +449,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // source of truth for whether the help key does anything, so the click
 // follows the same rule rather than inventing a second one.
 func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
+	m.placeChrome()
+
 	if i, ok := m.bc.CrumbAt(e.X, e.Y); ok {
 		if depth := i + 1; depth < m.stack.Depth() {
 			var cmd tea.Cmd
@@ -461,19 +463,36 @@ func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
 		return nil, true
 	}
 
-	// The affordance is the last cells of the rendered hint line, so its
-	// position follows from the slot's extent and the affordance's width
-	// rather than being tracked separately.
 	if m.helpOverflow && m.helpKey.Keys() != nil {
 		slot := m.sb.LeftContentRect()
-		if aw := m.help.AffordanceWidth(); aw > 0 && slot.Hit(e.X, e.Y) &&
-			e.X >= slot.X+slot.W-aw {
-			m.helpExpanded = !m.helpExpanded
-			m.apply()
-			return nil, true
+		if at, aw, ok := m.help.AffordanceSpan(m.shortViewBudget()); ok && slot.Hit(e.X, e.Y) {
+			rel := e.X - slot.X
+			if rel >= at && rel < at+aw {
+				m.helpExpanded = !m.helpExpanded
+				m.apply()
+				return nil, true
+			}
 		}
 	}
 	return nil, false
+}
+
+// placeChrome gives the breadcrumb and statusbar the rects they occupy, so
+// they can hit-test a click.
+//
+// They can't get these from rendering the way components do. View has a value
+// receiver — bubbletea's Model interface requires it — so the layout.Bar
+// wrappers there call SetRect on a copy of the Model that is discarded when
+// View returns. Screens escape this because screen.Screen is an interface
+// holding a pointer, but these two are plain value fields on the shell.
+//
+// Deriving the rects here instead is not a workaround so much as an
+// admission of where the knowledge lives: the shell defines this layout, so
+// it already knows the breadcrumb is the first row and the statusbar the
+// last. View builds the same two Fixed(1, …) slots from the same facts.
+func (m *Model) placeChrome() {
+	m.bc.SetRect(geom.New(0, 0, m.w, 1))
+	m.sb.SetRect(geom.New(0, max(0, m.h-1), m.w, 1))
 }
 
 // View composes the standard shell as a vertical stack: breadcrumb (1 row),

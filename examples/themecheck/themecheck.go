@@ -46,7 +46,6 @@ func (s *listScreen) OnEnter(any) tea.Cmd   { return nil }
 func (s *listScreen) IsCapturingKeys() bool { return s.list.Filtering() }
 
 func (s *listScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	k, isKey := msg.(tea.KeyMsg)
 	prevCursor := s.list.Cursor()
 
 	var cmd tea.Cmd
@@ -57,7 +56,7 @@ func (s *listScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		return s, tea.Batch(cmd, app.SetTheme(s.themes[c].Name))
 	}
 
-	if isKey && !s.list.Filtering() && k.String() == "enter" {
+	if s.list.IsActivate(msg) {
 		if name, ok := s.list.Selected(); ok {
 			for _, th := range s.themes {
 				if th.Name == name {

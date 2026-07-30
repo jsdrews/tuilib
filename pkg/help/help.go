@@ -501,17 +501,52 @@ func (m *Model) SetRect(r geom.Rect)              { m.rect = r; m.width, m.heigh
 func (m *Model) SetBindings(b []key.Binding)      { m.bindings = Compile(b) }
 func (m Model) Width() int                        { return m.width }
 
-// AffordanceWidth returns the visible width of the "? help" / "? close"
-// affordance that ShortViewBudget appends when bindings overflow. The app
-// shell uses it to locate the affordance at the end of the rendered hint
-// line, so clicking it toggles the panel exactly as the help key does.
-func (m Model) AffordanceWidth() int {
+// AffordanceSpan reports where the "? help" / "? close" affordance sits
+// within the footer line rendered at width: its start offset in cells and
+// its width. ok is false when no affordance is drawn. The app shell uses it
+// to route a click there to the same toggle the help key drives.
+//
+// The offset is not simply "the end of the line" — each of the three footer
+// shapes places it differently. Minimal mode renders it first and pads after
+// it; the collapsed flow appends it last; the expanded grid makes it the
+// final column, padded to that column's width rather than its own. Getting
+// this from one place keeps a click landing on the glyph the user sees.
+func (m Model) AffordanceSpan(width int) (start, w int, ok bool) {
+	if len(m.bindings) == 0 || width <= 0 {
+		return 0, 0, false
+	}
 	label := "help"
 	if m.expanded {
 		label = "close"
 	}
-	spacer := m.descStyle.Render(" ")
-	return lipgloss.Width(m.keyStyle.Render("?") + spacer + m.descStyle.Render(label))
+	spacerW := lipgloss.Width(m.descStyle.Render(" "))
+	naturalW := lipgloss.Width(m.keyStyle.Render("?")) + spacerW +
+		lipgloss.Width(m.descStyle.Render(label))
+
+	switch {
+	case m.minimal:
+		return 0, naturalW, true
+
+	case m.expanded:
+		cols, keyW, descW, row0Count := m.planGridFull(width)
+		if cols == 0 {
+			return 0, 0, false
+		}
+		sepW := lipgloss.Width(m.descStyle.Render(m.shortSep))
+		at := 0
+		for c := 0; c < row0Count; c++ {
+			at += keyW[c] + spacerW + descW[c] + sepW
+		}
+		affCol := cols - 1
+		return at, keyW[affCol] + spacerW + descW[affCol], true
+
+	default:
+		line, _, overflow := m.ShortViewBudget(width)
+		if !overflow {
+			return 0, 0, false
+		}
+		return lipgloss.Width(line) - naturalW, naturalW, true
+	}
 }
 
 func (m Model) Height() int { return m.height }

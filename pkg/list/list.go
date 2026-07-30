@@ -353,11 +353,36 @@ func (m Model) FocusToken() focus.Token { return m.token }
 
 // ActivatedMsg is emitted when the user opens the selected item with a
 // double click — the mouse spelling of enter (rule 14). Index and Item match
-// the selection at the moment of the second click. Screens that push a child
-// screen on enter match this to do the same thing on double click.
+// the selection at the moment of the second click.
+//
+// Token identifies which list sent it, so a screen holding several lists can
+// tell them apart. Prefer IsActivate over matching this type directly unless
+// you need the payload.
 type ActivatedMsg struct {
 	Index int
 	Item  string
+	Token focus.Token
+}
+
+// IsActivate reports whether msg means "open this list's selection" — enter
+// from the keyboard while the filter isn't taking input, or this list's own
+// double-click activation.
+//
+// Rule 14 makes those the same verb, and routing them through one predicate
+// is what keeps them that way: a screen writes the open branch once and both
+// inputs reach it.
+//
+//	if s.menu.IsActivate(msg) {
+//	    return s, screen.Push(detailFor(s.menu.Cursor()))
+//	}
+func (m Model) IsActivate(msg tea.Msg) bool {
+	switch k := msg.(type) {
+	case tea.KeyMsg:
+		return !m.Filtering() && k.String() == "enter"
+	case ActivatedMsg:
+		return k.Token == m.token
+	}
+	return false
 }
 
 // handleMouse routes a mouse event that may or may not belong to this list.
@@ -409,9 +434,9 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 			m.cursor = row
 			m.refresh()
 			if e.IsDoubleClick() {
-				idx, item := m.cursor, m.visible[m.cursor]
+				idx, item, tok := m.cursor, m.visible[m.cursor], m.token
 				cmds = append(cmds, func() tea.Msg {
-					return ActivatedMsg{Index: idx, Item: item}
+					return ActivatedMsg{Index: idx, Item: item, Token: tok}
 				})
 			}
 		}

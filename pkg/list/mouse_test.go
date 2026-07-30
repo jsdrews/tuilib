@@ -260,3 +260,58 @@ func TestEndToEndDoubleClickThroughTracker(t *testing.T) {
 		t.Errorf("two quick presses in the same cell did not activate the row")
 	}
 }
+
+// Enter and double-click must resolve through one predicate, or a screen
+// ends up implementing "open" twice and the two drift apart.
+func TestIsActivateAcceptsEnterAndDoubleClick(t *testing.T) {
+	m := newList(t, "alpha", "bravo")
+
+	if !m.IsActivate(tea.KeyMsg{Type: tea.KeyEnter}) {
+		t.Errorf("enter did not read as an activation")
+	}
+	if !m.IsActivate(ActivatedMsg{Token: m.FocusToken()}) {
+		t.Errorf("this list's own ActivatedMsg did not read as an activation")
+	}
+	if m.IsActivate(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}) {
+		t.Errorf("an unrelated key read as an activation")
+	}
+}
+
+// Two lists on one screen must not claim each other's double clicks.
+func TestIsActivateIgnoresAnotherListsActivation(t *testing.T) {
+	a := newList(t, "alpha")
+	b := newList(t, "bravo")
+
+	if a.IsActivate(ActivatedMsg{Token: b.FocusToken()}) {
+		t.Errorf("a list claimed another list's activation")
+	}
+}
+
+// While the filter is taking input, enter commits the filter rather than
+// opening the selection.
+func TestIsActivateIgnoresEnterWhileFiltering(t *testing.T) {
+	m := New(Options{Items: []string{"alpha"}, Filterable: true})
+	m.SetRect(geom.New(listRect.X, listRect.Y, listRect.W, listRect.H))
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	if !m.Filtering() {
+		t.Fatalf("setup: '/' did not focus the filter")
+	}
+
+	if m.IsActivate(tea.KeyMsg{Type: tea.KeyEnter}) {
+		t.Errorf("enter read as an activation while the filter had input")
+	}
+}
+
+// The double-click path must reach IsActivate end to end.
+func TestDoubleClickSatisfiesIsActivate(t *testing.T) {
+	m := newList(t, "alpha", "bravo", "charlie")
+
+	_, cmd := m.Update(press(listRect.X+3, firstRowY+1, 2))
+
+	for _, msg := range collect(cmd) {
+		if m.IsActivate(msg) {
+			return
+		}
+	}
+	t.Errorf("no message from a double click satisfied IsActivate")
+}

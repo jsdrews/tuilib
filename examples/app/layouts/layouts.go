@@ -52,7 +52,7 @@ func (s *homeScreen) OnEnter(any) tea.Cmd   { return nil }
 func (s *homeScreen) IsCapturingKeys() bool { return s.menu.Filtering() }
 
 func (s *homeScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && !s.menu.Filtering() && k.String() == "enter" {
+	if s.menu.IsActivate(msg) {
 		if item, ok := s.menu.Selected(); ok {
 			return s, screen.Push(screenFor(item, s.t))
 		}

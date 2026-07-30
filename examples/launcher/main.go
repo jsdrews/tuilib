@@ -107,7 +107,13 @@ func (s *rootScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		s.rebuildInfo()
 	}
 
-	if k, ok := msg.(tea.KeyMsg); ok && !s.menu.Filtering() && k.String() == "enter" {
+	// Enter and double-click are the same verb (rule 14), so they resolve to
+	// the same branch. A screen has to opt into the mouse half explicitly:
+	// the list reports the activation, and what "open" means is the screen's
+	// call — here, pushing the selected example.
+	// Enter and double-click are the same verb (rule 14); IsActivate folds
+	// both into one branch so what "open" means is written once.
+	if s.menu.IsActivate(msg) {
 		if idx, ok := s.menu.SelectedIndex(); ok && idx >= 0 && idx < len(entries) {
 			return s, tea.Batch(cmd, screen.Push(entries[idx].build(s.t)))
 		}

@@ -159,12 +159,26 @@ example in `examples/`.
     detail + shifts focus right, and enter on the focused detail
     pushes the level-3 attribute screen.
 
-    Double-click is the mouse spelling of the same verb. Components
-    report it as an `ActivatedMsg` carrying the row that was opened;
-    the screen matches it and does whatever enter would have done, so
-    the two paths stay in step by construction. A *single* click only
-    focuses and moves the cursor — it must always be safe to explore
-    with.
+    Double-click is the mouse spelling of the same verb, so route both
+    through one predicate rather than writing the open branch twice:
+
+    ```go
+    if s.menu.IsActivate(msg) {          // enter, or a double click
+        return s, screen.Push(detailFor(s.menu.Cursor()))
+    }
+    ```
+
+    `list.Model.IsActivate` / `table.Model.IsActivate` match enter (when
+    the filter isn't taking input) *or* that component's own
+    `ActivatedMsg`. The message carries a `focus.Token`, so two lists on
+    one screen never claim each other's double clicks. Match
+    `ActivatedMsg` directly only when you need its payload.
+
+    A screen has to opt in: a component reports the activation, but what
+    "open" means is the screen's call, and a screen that only checks for
+    an enter `KeyMsg` will silently do nothing on double click. A
+    *single* click only focuses and moves the cursor — it must always be
+    safe to explore with.
 
 15. **Use `SetLoading(b bool) tea.Cmd` while data is in flight.** Any
     component that owns a pane (`list`, `logview`, `tree`, …) inherits a

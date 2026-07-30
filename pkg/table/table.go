@@ -1352,9 +1352,28 @@ func (m Model) FocusToken() focus.Token { return m.token }
 // ActivatedMsg is emitted when the user opens the selected row with a double
 // click — the mouse spelling of enter (rule 14). Row is the index into the
 // post-filter visible set; Cells is that row's content.
+//
+// Token identifies which table sent it, so a screen holding several can tell
+// them apart. Prefer IsActivate over matching this type directly unless you
+// need the payload.
 type ActivatedMsg struct {
 	Row   int
 	Cells []string
+	Token focus.Token
+}
+
+// IsActivate reports whether msg means "open this table's selection" — enter
+// from the keyboard while the filter isn't taking input, or this table's own
+// double-click activation. See list.Model.IsActivate; rule 14 makes the two
+// inputs one verb, and this predicate is what keeps them that way.
+func (m Model) IsActivate(msg tea.Msg) bool {
+	switch k := msg.(type) {
+	case tea.KeyMsg:
+		return !m.Filtering() && k.String() == "enter"
+	case ActivatedMsg:
+		return k.Token == m.token
+	}
+	return false
 }
 
 // headerRows is how many content lines the header occupies before the first
@@ -1411,10 +1430,10 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 			m.cursor = row
 			m.refresh()
 			if e.IsDoubleClick() {
-				idx := m.cursor
+				idx, tok := m.cursor, m.token
 				cells := append([]string(nil), m.visible[idx]...)
 				cmds = append(cmds, func() tea.Msg {
-					return ActivatedMsg{Row: idx, Cells: cells}
+					return ActivatedMsg{Row: idx, Cells: cells, Token: tok}
 				})
 			}
 		}
