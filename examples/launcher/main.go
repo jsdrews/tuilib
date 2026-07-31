@@ -18,6 +18,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 
+	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
 	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
@@ -72,6 +73,7 @@ var entries = []entry{
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},
 	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
+	{"Filters — two filterable panes", "A list and a table, each with its own filter, on one screen. Exercises the focus states a single filterable pane can't reach: exactly one region highlighted at a time, clicking a body taking input back from its filter, switching panes clearing the filter you left, and tab completing a key:value term instead of cycling panes.", appfilters.New},
 	{"Mouse — click, double-click, wheel, drag", "Three panes wired for mouse: click to focus, click a row to select, double-click to open, click a table header to sort or a tree ▸ to expand, wheel over any pane, drag a scrollbar. Requires app.Options.Mouse — the launcher sets it.", appmouse.New},
 	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},

@@ -442,6 +442,29 @@ example in `examples/`.
     addresses are replaced, but the addresses are stable, so the Group
     keeps pointing at the right panes. See `examples/app/focus`.
 
+    **A filterable component has two focusable regions behind one
+    `Focusable`** — its filter and its body — and the two must stay
+    reconciled or focus drifts across the screen:
+
+    - `Focus()` highlights the body, but is a no-op while the filter
+      already has input. A click on a filter also asks the group for
+      focus, and that grant lands *after*; without the guard it snatches
+      the highlight back while the filter keeps the keystrokes.
+    - `Blur()` clears **both**. A filter left focused on a blurred
+      component is invisible and still swallows keys — that is what
+      breaks a second filterable pane.
+    - `Focused()` is true if either region is active.
+    - `FocusFilter()` / `BlurFilter()` move input between the two, so
+      exactly one region on screen ever reads as active. `/` and a click
+      on the filter route through the first; enter, esc, and a click on
+      the body route through the second.
+
+    `Group.Update` also declines to cycle while `IsCapturingKeys()` is
+    true. Tabbing out of a half-typed filter would strand it, and
+    `pkg/table` binds tab to complete a `key:value` term — leave the
+    field with enter or esc, then cycle. `examples/app/filters` is the
+    two-filterable-pane screen these rules exist for.
+
 26. **Mouse support comes from rects, not from markers.** `pkg/layout`
     hands every node a `geom.Rect` — absolute position *and* size — and
     `layout.Sized(&c)` passes it to the component's `SetRect`. A

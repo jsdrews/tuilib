@@ -404,7 +404,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// rather than moving the cursor.
 	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
 		if e.IsPress() {
-			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token), m.flushMsgs())
+			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
 	}
@@ -429,6 +429,12 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
+		// Clicking the body takes input back from the filter — otherwise it
+		// keeps swallowing keys with nothing on screen saying so.
+		if m.filterable && m.filter.Focused() {
+			m.filter.Blur()
+		}
+		m.body.SetFocused(true)
 		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
 		if row < len(m.visible) {
 			m.cursor = row
@@ -473,13 +479,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.filterable && m.filter.Focused() {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
+		// enter commits and esc cancels, both of which blur the filter from
+		// the inside; the body takes the highlight back when they do.
+		if !m.filter.Focused() {
+			m.body.SetFocused(true)
+		}
 		m.applyFilter()
 		m.refresh()
 		return m, tea.Batch(cmd, m.flushMsgs())
 	}
 	switch {
 	case m.filterable && key.Matches(km, m.keys.Filter):
-		return m, tea.Batch(m.filter.Focus(), m.flushMsgs())
+		return m, tea.Batch(m.FocusFilter(), m.flushMsgs())
 	case key.Matches(km, m.keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -685,15 +696,54 @@ func (m *Model) SetValue(s string) {
 	m.refresh()
 }
 
-// Focus marks the component as focused, flipping the body pane's border to
-// its active color. Returns a nil command — there is no cursor to blink.
-func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+// Focus gives the component the keyboard, highlighting the body pane.
+//
+// A filterable list has two focusable regions behind one Focusable, so this
+// deliberately does nothing when the filter already owns input: a click on
+// the filter also asks the group for focus, and the grant arrives afterwards.
+// Without this guard that grant would snatch the highlight back to the body
+// while the filter kept the keystrokes.
+func (m *Model) Focus() tea.Cmd {
+	if m.filterable && m.filter.Focused() {
+		return nil
+	}
+	m.body.SetFocused(true)
+	return nil
+}
 
-// Blur removes focus, flipping the body pane's border to its inactive color.
-func (m *Model) Blur() { m.body.SetFocused(false) }
+// Blur releases the keyboard, clearing *both* regions. Leaving a filter
+// focused on a blurred component is what lets a second filterable pane end
+// up invisibly eating keys.
+func (m *Model) Blur() {
+	m.body.SetFocused(false)
+	if m.filterable {
+		m.filter.Blur()
+	}
+}
 
-// Focused reports whether the component currently owns focus.
-func (m Model) Focused() bool { return m.body.Focused() }
+// Focused reports whether either of the component's regions owns input.
+func (m Model) Focused() bool {
+	return m.body.Focused() || (m.filterable && m.filter.Focused())
+}
+
+// FocusFilter moves input to the filter and takes the highlight off the
+// body, so exactly one region ever reads as active.
+func (m *Model) FocusFilter() tea.Cmd {
+	if !m.filterable {
+		return nil
+	}
+	m.body.SetFocused(false)
+	return m.filter.Focus()
+}
+
+// BlurFilter returns input from the filter to the body.
+func (m *Model) BlurFilter() {
+	if !m.filterable {
+		return
+	}
+	m.filter.Blur()
+	m.body.SetFocused(true)
+}
 
 // SetTitle updates the title rendered on the body pane's top border.
 // Useful when the list represents a slice that can change identity at

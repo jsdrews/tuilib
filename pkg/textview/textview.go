@@ -221,13 +221,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if m.searchable && m.filter.Focused() {
 		var cmd tea.Cmd
 		m.filter, cmd = m.filter.Update(msg)
+		// enter commits and esc cancels, both of which blur the filter from
+		// the inside; the body takes the highlight back when they do.
+		if !m.filter.Focused() {
+			m.body.SetFocused(true)
+		}
 		m.applyQuery()
 		return m, cmd
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch {
 		case m.searchable && key.Matches(k, m.keys.Search):
-			return m, m.filter.Focus()
+			return m, m.FocusFilter()
 		case key.Matches(k, m.keys.NextMatch):
 			m.jumpMatch(+1)
 			return m, nil
@@ -318,15 +323,53 @@ func (m *Model) SetRect(r geom.Rect) {
 // SetTitle sets the pane's top-left title.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
-// Focus marks the component as focused, flipping the body pane's border to
-// its active color. Returns a nil command — there is no cursor to blink.
-func (m *Model) Focus() tea.Cmd { m.body.SetFocused(true); return nil }
+// Focus gives the component the keyboard, highlighting the body pane.
+//
+// It deliberately does nothing when the filter already owns input: a click on
+// the filter also asks the group for focus, and that grant arrives afterwards.
+// Without this guard it would snatch the highlight back to the body while the
+// filter kept the keystrokes.
+func (m *Model) Focus() tea.Cmd {
+	if m.searchable && m.filter.Focused() {
+		return nil
+	}
+	m.body.SetFocused(true)
+	return nil
+}
 
-// Blur removes focus, flipping the body pane's border to its inactive color.
-func (m *Model) Blur() { m.body.SetFocused(false) }
+// Blur releases the keyboard, clearing *both* regions. Leaving a filter
+// focused on a blurred component is what lets a second filterable pane end up
+// invisibly eating keys.
+func (m *Model) Blur() {
+	m.body.SetFocused(false)
+	if m.searchable {
+		m.filter.Blur()
+	}
+}
 
-// Focused reports whether the component currently owns focus.
-func (m Model) Focused() bool { return m.body.Focused() }
+// Focused reports whether either of the component's regions owns input.
+func (m Model) Focused() bool {
+	return m.body.Focused() || (m.searchable && m.filter.Focused())
+}
+
+// FocusFilter moves input to the filter and takes the highlight off the body,
+// so exactly one region ever reads as active.
+func (m *Model) FocusFilter() tea.Cmd {
+	if !m.searchable {
+		return nil
+	}
+	m.body.SetFocused(false)
+	return m.filter.Focus()
+}
+
+// BlurFilter returns input from the filter to the body.
+func (m *Model) BlurFilter() {
+	if !m.searchable {
+		return
+	}
+	m.filter.Blur()
+	m.body.SetFocused(true)
+}
 
 // SetActiveColor updates the body pane's active border color.
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor(c) }
@@ -615,7 +658,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	}
 	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
 		if e.IsPress() {
-			return m, tea.Batch(m.filter.Focus(), focus.RequestSelf(m.token))
+			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token))
 		}
 		return m, nil
 	}
