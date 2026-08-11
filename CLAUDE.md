@@ -97,6 +97,13 @@ example in `examples/`.
    input-style components should follow the same shape: `Options.Title` +
    an internal `pane.Pane` + `View()` returns the bordered render.
 
+   A filterable component draws its filter *inside* its own pane, as a
+   pinned header row above a rule (`pane.SetHeader`), not as a second
+   pane stacked above it. Two equal-weight boxes read as siblings when
+   the relationship is parent-child — people genuinely cannot tell which
+   filter belongs to which pane once there are two components on screen.
+   One border says it unambiguously, and costs 2 fewer rows.
+
    A component owns its *geometry* as well as its pane: it stores the
    rect `SetRect` gave it and does its own mouse hit-testing (rule 26).
    Nothing outside the component knows where its rows, glyphs or buttons
@@ -127,6 +134,22 @@ example in `examples/`.
     pre-populated), and posts a `runner.Result` back when the subprocess
     exits. Don't call `tea.ExecProcess` directly — the wrapper handles
     fallback plumbing for terminals that miss the post-resume SIGWINCH.
+
+    Handing the terminal over also drops mouse reporting, and bubbletea's
+    `RestoreTerminal` does not restore it — it knows about the alt screen,
+    bracketed paste and focus reporting, but has no notion of mouse state.
+    The app shell re-enables it on `runner.Result` *and* on
+    `tea.ResumeMsg`, so neither a subprocess nor a ctrl+z suspend leaves
+    the TUI mouse-dead. An app driving `tea.ExecProcess` or `tea.Suspend`
+    outside the shell has to do that for itself.
+
+    Suspend is a shell-owned global key like `q` and `t`
+    (`app.Options.SuspendKey`, default ctrl+z, off via
+    `DisableSuspend`). Bubbletea does not bind it: it delivers ctrl+z as
+    an ordinary key and waits for the app to ask, so without the shell
+    the key does nothing. It is suppressed while a screen is capturing
+    keys — suspending mid-filter would strand the query — and ignored on
+    Windows, where bubbletea has no suspend support.
 
 12. **Stream subprocess output via a chained `tea.Cmd`.** When you want
     stdout/stderr in a logview rather than a terminal handoff, point
@@ -446,18 +469,28 @@ example in `examples/`.
     `Focusable`** — its filter and its body — and the two must stay
     reconciled or focus drifts across the screen:
 
-    - `Focus()` highlights the body, but is a no-op while the filter
-      already has input. A click on a filter also asks the group for
-      focus, and that grant lands *after*; without the guard it snatches
-      the highlight back while the filter keeps the keystrokes.
+    - `Focus()` lights the pane. It never blurs the filter, which
+      matters because a click on the filter also asks the group for
+      focus and that grant lands *after* — it must not undo what the
+      click just did.
     - `Blur()` clears **both**. A filter left focused on a blurred
       component is invisible and still swallows keys — that is what
       breaks a second filterable pane.
     - `Focused()` is true if either region is active.
-    - `FocusFilter()` / `BlurFilter()` move input between the two, so
-      exactly one region on screen ever reads as active. `/` and a click
-      on the filter route through the first; enter, esc, and a click on
-      the body route through the second.
+    - `FocusFilter()` / `BlurFilter()` move input between the two. The
+      pane border stays lit throughout — it means "this component has
+      focus". Which *region* has input is shown by the filter's prompt
+      and the rule beneath it taking `ActiveColor`; an inline filter has
+      no border of its own to light up, so those carry the signal. A
+      cursor alone is not enough: it blinks, so half the time there is
+      no cue at all.
+    - **Any press inside the pane other than the filter row hands input
+      back to the body** — the rule, the content, blank space below it,
+      the borders. Leaving the filter focused after a click into the
+      body is invisible and keeps swallowing keys. The exception is the
+      scrollbar, which returns earlier: scrolling never claims the
+      keyboard however it is expressed (rule 23), so dragging the bar
+      leaves a half-typed query alive.
 
     `Group.Update` also declines to cycle while `IsCapturingKeys()` is
     true. Tabbing out of a half-typed filter would strand it, and
@@ -499,6 +532,11 @@ example in `examples/`.
       and inspector `▸`/`▾` glyphs toggle on a single click, modal
       buttons commit, tab labels switch, breadcrumb crumbs unwind via
       `screen.PopTo`, and scrollbars accept click-to-jump and drag.
+    - **Input-style components too**: clicking an `input` focuses it,
+      clicking a side of a `toggle` picks that side outright, and
+      clicking a `form` field moves the form's focus there. A `toggle`
+      handles the mouse *before* its focus gate, since clicking an
+      unfocused one is how it gets focused.
 
     `pane.RowAt(x, y)` inverts the border inset and scroll offset for
     components that scroll the pane. Components that window their own
@@ -524,6 +562,23 @@ example in `examples/`.
 - **Don't handle `q`, `t`, or esc-pop inside a screen** when running under
   `pkg/app`. The shell routes those. Return them from `Help()` so they
   appear in the hints, but don't re-implement them.
+- **Don't validate a form outside the form.** `pkg/form` owns it:
+  `TextOptions.Required` for emptiness, `Validate func(any) error` on any
+  field for everything else, and `SelectOptions.RequirePick` for "must be
+  chosen deliberately" (a select always has a cursor, so required means
+  something different there). Required is checked first, so a blank field
+  reports "required" rather than whatever a format rule makes of `""`.
+  Validation runs **on submit**, then live for fields already flagged —
+  nothing nags mid-typing, but a correction is acknowledged at once. An
+  invalid submit is *refused*: no `SubmittedMsg`, focus moves to the first
+  offender, and `InvalidMsg{Keys}` lets the screen react optionally. A
+  screen can therefore never act on bad data by forgetting to check.
+  Errors render on the field's own border (tint + a short message in the
+  top-right slot) so nothing reflows — see rule 9's note on why layout
+  must not shift while the user is correcting it. Required fields carry a
+  `*` on their label, which is a standing property distinct from the
+  border, which is a complaint. Cross-field rules (password confirmation,
+  date ranges) are not supported: they have no field to attach to.
 - **Don't instantiate `textinput.New()` directly.** Use `input.Model` for a
   bare bordered text field, `filter.Model` for the "/-to-focus, enter-commits"
   pattern, or `list.Model` with `Filterable=true` for a filtered list.
@@ -606,11 +661,50 @@ example in `examples/`.
   pointer — and it only shows up once the content is long enough to
   scroll. Extract the decision (`viewStart()`, `elideStart()`) and call
   it from both.
-- **Don't move a viewport under a component that windows its own rows.**
-  `table` and `inspector` derive their window from the cursor and
-  re-render every frame, so a scroll applied behind their back is undone
-  immediately. `pane.HandleScrollbar` reports a target row for exactly
-  this reason; move the cursor instead.
+- **Don't scroll a cursor-owning component by moving its viewport.**
+  `refresh` re-asserts "the cursor is visible" and `layout.Sized` calls
+  `SetRect` — hence `refresh` — on every render, so a viewport moved on
+  its own is undone one frame later and the view snaps back to wherever
+  the cursor still was. Move the cursor as well: `list`, `table`, `tree`
+  and `inspector` all expose `scrollTo(row)`, which sets the cursor *and*
+  the window start so the next frame's cursor-visible pass is a no-op.
+  The wheel already worked this way (rule 23); the scrollbar had to
+  follow.
+- **Don't let an event that ends a gesture report a position.** A mouse
+  release finishes a scrollbar drag; it does not move anything.
+  `pane.HandleScrollbar` returns the *current* offset on release rather
+  than zero, because a caller that scrolls to the reported row would
+  slam back to the top the instant the button came up.
+- **Don't feed `focus.Group` only the keys it cycles on.** It needs
+  *every* message (rule 25), because click-to-focus works by a
+  `focus.RequestMsg` the clicked component sends back — a screen that
+  calls `Group.Update` inside its tab branch alone silently drops those.
+  The symptom is nasty: the clicked pane lights up, because the component
+  sets its own border directly, while every keystroke keeps going to the
+  pane focus never left. Typing into a filter and watching the characters
+  appear in a different pane is what this looks like.
+- **Don't route mouse events to the focused component only.** Keys go to
+  the focused one; mouse goes to *all* of them (rule 6). This is the
+  single easiest thing to get wrong when writing a screen, because the
+  keyboard version is right there and looks symmetric — it was wrong in
+  three shipped examples after the rule was already written down. The
+  symptom is misleading: the component under the pointer never receives
+  the press, so it can't take focus or release its filter, and it reads
+  as a broken component rather than a routing mistake. Documentation did
+  not prevent this; `internal/componenttest/screenrouting_test.go` does,
+  by driving real screens and asserting a press somewhere lands.
+- **Don't test shared behaviour in one component's package.** If
+  something must hold for every filterable component, assert it once in
+  `internal/componenttest` and run it across all of them. Testing the
+  component you just edited proves only that you edited it: the
+  click-to-blur behaviour was hand-written for `pkg/list`, rolled out to
+  the other five by a script that omitted it, and covered by a test that
+  lived in `pkg/list` — so five components shipped broken and the suite
+  stayed green.
+- **Force a colour profile in any test that asserts on styling.**
+  Without a TTY lipgloss falls back to the Ascii profile and strips every
+  style, so a render comparison silently passes no matter what the code
+  does. `lipgloss.SetColorProfile(termenv.TrueColor)` in TestMain.
 - **Don't add a comment explaining what well-named code does.** Component
   doc comments belong at the package and exported-symbol level; inline
   code should be self-describing.
@@ -663,22 +757,22 @@ you aren't hit-testing, and mouse support needs the app shell anyway
 | `filter.Model` | 3 (border + content + border) |
 | `pane.Pane` | caller-controlled, min 3 (4 when `HScrollbar=true` — one inner row reserved for the bar) |
 | `list.Model` (Filterable=false) | caller-controlled |
-| `list.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `list.Model` (Filterable=true) | caller-controlled; the filter is 2 inner rows (row + rule) inside the same pane |
 | `table.Model` (Filterable=false) | caller-controlled, all body (header consumes 1 inner row, leaving `VisibleRows()-1` data rows) |
-| `table.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body (then header consumes 1) |
+| `table.Model` (Filterable=true) | caller-controlled, the filter is 2 inner rows inside the same pane (then the column header consumes 1) |
 | `logview.Model` (Searchable=false) | caller-controlled, all body |
-| `logview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `logview.Model` (Searchable=true) | caller-controlled, the filter is 2 inner rows (row + rule) inside the same pane |
 | `textview.Model` (Searchable=false) | caller-controlled, all body |
-| `textview.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `textview.Model` (Searchable=true) | caller-controlled, the filter is 2 inner rows (row + rule) inside the same pane |
 | `tree.Model` (Searchable=false) | caller-controlled, all body |
-| `tree.Model` (Searchable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `tree.Model` (Searchable=true) | caller-controlled, the filter is 2 inner rows (row + rule) inside the same pane |
 | `inspector.Model` (Filterable=false) | caller-controlled, all body |
-| `inspector.Model` (Filterable=true) | caller-controlled, internally splits 3 for filter + rest for body |
+| `inspector.Model` (Filterable=true) | caller-controlled, the filter is 2 inner rows (row + rule) inside the same pane |
 
 Typical body height:
 - Plain body pane: `m.h - 2`
-- Body pane + standalone `filter.Model` above: `m.h - 5`
-- `list.Model` filterable: `m.h - 2` (the filter is inside it)
+- Any filterable component: `m.h - 2` — the filter is inside the pane, so
+  there is no sibling to subtract for.
 
 Prefer `pkg/layout` — this table exists for edge cases, not as the default
 path.

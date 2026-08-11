@@ -1,23 +1,30 @@
-// Package gate demonstrates a one-shot pre-screen flow: a "gated" root
-// screen that pushes a login form on first activation, receives the
-// credentials when the form pops, and re-pushes the form on logout.
+// Package prescreen demonstrates pushing a screen *in front of* another one
+// on first activation, and taking a result back when it pops — the shape
+// behind "log in before you can use this", "pick a workspace first", or
+// "re-authenticate, that token expired".
+//
+// The login form here is set dressing. What the example is actually about is
+// the flow: a root screen that pushes a child from OnEnter, receives the
+// child's result when it pops, and can re-push the same child later without
+// the child ever living permanently on the stack. See pkg/form and the
+// "Form" example for the component itself.
 //
 // The form lives as a regular screen.Screen — it's only on the stack
 // while the user is interacting with it, and is gone afterward. The
-// trigger lives in the gate's OnEnter: it fires on initial push (with
+// trigger lives in the root screen's OnEnter: it fires on initial push (with
 // nil), on every return-from-child, and is the natural hook for "if I'm
 // not authenticated yet, push the login screen now."
 //
-// State machine, driven from the gate's OnEnter:
+// State machine, driven from the root screen's OnEnter:
 //   - First entry, no creds: push the login form.
 //   - Login pops with creds: record them and rebuild the body.
 //   - Login pops with nil (cancelled before authenticating): bubble the
-//     pop up so the user returns to whatever screen pushed the gate.
+//     pop up so the user returns to whatever screen pushed this one.
 //
 // The same Push call can be re-issued at any point — e.g. on a "logout"
 // keystroke or when a request returns 401 — to bring the form back
 // without permanent stack residency.
-package gate
+package prescreen
 
 import (
 	"fmt"
@@ -36,7 +43,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// New returns the gate demo's entry screen.
+// New returns the prescreen demo's root screen.
 func New(t theme.Theme) screen.Screen {
 	s := &Screen{}
 	s.SetTheme(t)
@@ -59,14 +66,14 @@ type Screen struct {
 
 func (s *Screen) Title() string {
 	if s.auth != nil {
-		return "Gate (signed in)"
+		return "Prescreen (signed in)"
 	}
-	return "Gate"
+	return "Prescreen"
 }
 
 func (s *Screen) Init() tea.Cmd { return nil }
 
-// OnEnter runs each time the gate becomes the active top of the stack.
+// OnEnter runs each time the root screen becomes the active top of the stack.
 // On the initial push from the launcher, result is nil — we kick the
 // login flow off here. After the login screen pops, this fires again
 // with either credentials (success) or nil (cancelled).
@@ -145,7 +152,7 @@ func (s *Screen) rebuild() {
 // ---- login screen --------------------------------------------------------
 
 // loginScreen is the pushable form. SubmittedMsg pops with creds;
-// CancelledMsg pops with nil so the gate can decide what cancellation
+// CancelledMsg pops with nil so the root screen can decide what cancellation
 // means (here: bubble back to the launcher).
 type loginScreen struct {
 	t    theme.Theme

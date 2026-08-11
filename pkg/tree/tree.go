@@ -237,6 +237,13 @@ type Model struct {
 	// takes a value receiver, so the model cannot name its own address.
 	token focus.Token
 
+	// filterRule{Active,Inactive} draw the line separating the inline filter
+	// row from the content. The active one is used while the filter has
+	// input — an inline filter has no border of its own to light up, so the
+	// prompt and this rule carry that signal instead.
+	filterRuleActive   lipgloss.Style
+	filterRuleInactive lipgloss.Style
+
 	query      string // lower-cased
 	matchRows  []int  // indices into rows that contain a match
 	matchIdx   int    // -1 when no current match
@@ -413,12 +420,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // View stacks the filter (when searchable) above the body pane.
-func (m Model) View() string {
-	if m.searchable {
-		return m.filter.View() + "\n" + m.body.View()
-	}
-	return m.body.View()
-}
+func (m Model) View() string { return m.body.View() }
 
 // Selected returns the node under the cursor. ok is false when the visible
 // row set is empty (e.g. filter mode with no matches).
@@ -567,13 +569,35 @@ func (m *Model) restoreCursor(prev string) {
 // filter pane takes the top 3 rows and the body pane gets the rest, offset
 // below it.
 func (m *Model) SetRect(r geom.Rect) {
-	body := r
+	m.body.SetRect(r)
 	if m.searchable {
-		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
-		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
+		// The filter is a row inside the body pane, not a pane beside it, so
+		// it reads as belonging to what it filters. Placing the pane first
+		// gives the header its width; setting the header then re-measures.
+		m.placeInlineFilter(r)
+		m.body.SetHeader(m.filterHeader())
+		m.placeInlineFilter(r)
 	}
-	m.body.SetRect(body)
 	m.refresh()
+}
+
+// placeInlineFilter puts the filter on the pane's first inner row.
+func (m *Model) placeInlineFilter(r geom.Rect) {
+	inner := m.body.ContentRect()
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+}
+
+// filterHeader is the filter row plus a rule separating it from the content.
+func (m Model) filterHeader() string {
+	inner := m.body.ContentRect().W
+	if inner <= 0 {
+		return ""
+	}
+	rule := m.filterRuleInactive
+	if m.filter.Focused() {
+		rule = m.filterRuleActive
+	}
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
 }
 
 // SetTitle sets the pane's top-left title.
@@ -586,9 +610,6 @@ func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 // Without this guard it would snatch the highlight back to the body while the
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
-	if m.searchable && m.filter.Focused() {
-		return nil
-	}
 	m.body.SetFocused(true)
 	return nil
 }
@@ -600,6 +621,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.searchable {
 		m.filter.Blur()
+		m.body.SetHeader(m.filterHeader())
 	}
 }
 
@@ -614,8 +636,12 @@ func (m *Model) FocusFilter() tea.Cmd {
 	if !m.searchable {
 		return nil
 	}
-	m.body.SetFocused(false)
-	return m.filter.Focus()
+	// The filter lives inside the body pane, so the pane stays lit — it is
+	// the component that has focus. The filter row shows where input goes.
+	m.body.SetFocused(true)
+	cmd := m.filter.Focus()
+	m.body.SetHeader(m.filterHeader())
+	return cmd
 }
 
 // BlurFilter returns input from the filter to the body.
@@ -625,6 +651,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
+	m.body.SetHeader(m.filterHeader())
 }
 
 // SetActiveColor updates the body pane's active border color.
@@ -866,6 +893,9 @@ func (m *Model) refresh() {
 		m.matchIdx = -1
 	}
 
+	if m.searchable {
+		m.body.SetHeader(m.filterHeader())
+	}
 	m.body.SetContent(m.renderContent())
 	m.body.EnsureVisible(m.cursor)
 	m.refreshStatus()
@@ -1008,7 +1038,8 @@ func (m Model) FocusToken() focus.Token { return m.token }
 // double click toggles, matching what space does from the keyboard. Rule 23
 // keeps ←/→ and h/l out of it: they scroll, here as everywhere.
 func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
-	if _, ok := m.body.HandleScrollbar(e); ok {
+	if target, ok := m.body.HandleScrollbar(e); ok {
+		m.scrollTo(target)
 		return m, m.flushMsgs()
 	}
 	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
@@ -1016,6 +1047,16 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
+	}
+
+	// Any press elsewhere in this component's pane hands input back to the
+	// body — the rule, the content, blank space below it, the scrollbar row,
+	// the borders. Leaving the filter focused after a click into the body is
+	// invisible and keeps swallowing keys. Scrollbar presses returned above,
+	// so dragging the bar leaves a query alive (rule 23: scrolling never
+	// claims the keyboard).
+	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+		m.BlurFilter()
 	}
 
 	switch {
@@ -1034,15 +1075,21 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		return m, m.flushMsgs()
 
 	case e.IsPress():
-		row, ok := m.body.RowAt(e.X, e.Y)
-		if !ok || row >= len(m.rows) {
+		if !m.body.Rect().Hit(e.X, e.Y) {
 			return m, nil
 		}
-		m.cursor = row
-		if m.onGlyph(e.X, m.rows[row]) || e.IsDoubleClick() {
-			m.toggleCursor()
-		} else {
-			m.refresh()
+		// A press anywhere in the pane claims focus, including blank space
+		// below the last node. Landing on a row additionally moves the
+		// cursor — but "this pane is now active" must not depend on hitting
+		// a row, or clicking the empty half of a short tree does nothing.
+		m.body.SetFocused(true)
+		if row, ok := m.body.RowAt(e.X, e.Y); ok && row < len(m.rows) {
+			m.cursor = row
+			if m.onGlyph(e.X, m.rows[row]) || e.IsDoubleClick() {
+				m.toggleCursor()
+			} else {
+				m.refresh()
+			}
 		}
 		return m, tea.Batch(focus.RequestSelf(m.token), m.flushMsgs())
 	}
@@ -1059,6 +1106,31 @@ func (m Model) onGlyph(x int, r row) bool {
 	c := m.body.ContentRect()
 	pos := (x - c.X) + m.body.XOffset()
 	return pos == 2*r.depth
+}
+
+// scrollTo puts row at the top of the view and moves the cursor onto it.
+//
+// Moving the cursor is what makes the scroll stick. refresh re-asserts "the
+// cursor is visible" on every frame, and layout.Sized calls SetRect — hence
+// refresh — on every render, so a viewport moved on its own is undone one
+// frame later and the view snaps back to wherever the cursor still was.
+func (m *Model) scrollTo(row int) {
+	n := len(m.rows)
+	if n == 0 {
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= n {
+		row = n - 1
+	}
+	m.cursor = row
+	m.refresh()
+	// refresh pulled the viewport to the cursor; put the dragged row back
+	// at the top. The next frame's EnsureVisible is then a no-op, because
+	// the cursor is already the first visible row.
+	m.body.SetYOffset(row)
 }
 
 // moveCursor steps the cursor by delta, clamped to the visible rows.

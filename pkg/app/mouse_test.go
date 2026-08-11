@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -156,4 +159,137 @@ func TestMouseOffIgnoresClicks(t *testing.T) {
 	if tm.(Model).helpExpanded {
 		t.Errorf("clicks were handled with MouseOff")
 	}
+}
+
+// Handing the terminal to a subprocess kills mouse reporting, and
+// bubbletea's RestoreTerminal doesn't bring it back — it restores the alt
+// screen, bracketed paste and focus reporting, but has no notion of mouse
+// state. Enabling mouse from Init (rather than as a tea.NewProgram option)
+// means its startup flags don't record it either, so nothing would ever turn
+// it back on and the TUI returns mouse-dead.
+func TestMouseIsReenabledAfterASubprocess(t *testing.T) {
+	m := newApp(t, 1)
+
+	_, cmd := m.Update(runner.Result{})
+
+	if cmd == nil {
+		t.Fatalf("runner.Result produced no command; mouse was not re-enabled")
+	}
+	if !emits(cmd, isEnableMouse) {
+		t.Errorf("no enable-mouse command after a subprocess returned")
+	}
+}
+
+func TestMouseStaysOffAfterASubprocessWhenDisabled(t *testing.T) {
+	m := New(Options{
+		Root:       &stubScreen{name: "root"},
+		Themes:     []theme.Theme{theme.Dark()},
+		SkipConfig: true,
+	})
+	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
+	m = tm.(Model)
+
+	_, cmd := m.Update(runner.Result{})
+
+	if emits(cmd, isEnableMouse) {
+		t.Errorf("an app with MouseOff turned mouse on after a subprocess")
+	}
+}
+
+// emits reports whether cmd produces a message satisfying pred, flattening
+// batches the way bubbletea would.
+func emits(cmd tea.Cmd, pred func(tea.Msg) bool) bool {
+	if cmd == nil {
+		return false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			if emits(c, pred) {
+				return true
+			}
+		}
+		return false
+	}
+	return pred(msg)
+}
+
+// Suspending hands the terminal back to the shell exactly as a subprocess
+// does, so the same restore applies. bubbletea's RestoreTerminal runs before
+// ResumeMsg is sent, so re-enabling on that message lands in the right order.
+func TestMouseIsReenabledAfterSuspend(t *testing.T) {
+	m := newApp(t, 1)
+
+	_, cmd := m.Update(tea.ResumeMsg{})
+
+	if !emits(cmd, isEnableMouse) {
+		t.Errorf("no enable-mouse command after resuming from suspend")
+	}
+}
+
+func TestMouseStaysOffAfterSuspendWhenDisabled(t *testing.T) {
+	m := New(Options{
+		Root:       &stubScreen{name: "root"},
+		Themes:     []theme.Theme{theme.Dark()},
+		SkipConfig: true,
+	})
+	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
+	m = tm.(Model)
+
+	_, cmd := m.Update(tea.ResumeMsg{})
+
+	if emits(cmd, isEnableMouse) {
+		t.Errorf("an app with MouseOff turned mouse on after resuming")
+	}
+}
+
+// bubbletea delivers ctrl+z as an ordinary key and expects the app to ask
+// for the suspend, so without the shell binding it the key does nothing.
+func TestSuspendKeyRequestsSuspend(t *testing.T) {
+	m := newApp(t, 1)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+
+	if !emits(cmd, func(msg tea.Msg) bool { _, ok := msg.(tea.SuspendMsg); return ok }) {
+		t.Errorf("ctrl+z did not request a suspend")
+	}
+}
+
+// A screen taking keyboard input owns ctrl+z along with everything else —
+// suspending mid-filter would strand the query.
+func TestSuspendKeySuppressedWhileCapturing(t *testing.T) {
+	m := newApp(t, 1)
+	m.stack, _ = m.stack.Update(screen.PushMsg{Screen: &capturingScreen{}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+
+	if emits(cmd, func(msg tea.Msg) bool { _, ok := msg.(tea.SuspendMsg); return ok }) {
+		t.Errorf("ctrl+z suspended while a screen was capturing keys")
+	}
+}
+
+func TestDisableSuspendTurnsTheKeyOff(t *testing.T) {
+	m := New(Options{
+		Root:           &stubScreen{name: "root"},
+		Themes:         []theme.Theme{theme.Dark()},
+		DisableSuspend: true,
+		SkipConfig:     true,
+	})
+	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
+	m = tm.(Model)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+
+	if emits(cmd, func(msg tea.Msg) bool { _, ok := msg.(tea.SuspendMsg); return ok }) {
+		t.Errorf("DisableSuspend did not turn the suspend key off")
+	}
+}
+
+// capturingScreen claims the keyboard, as a focused filter would.
+type capturingScreen struct{ stubScreen }
+
+func (s *capturingScreen) IsCapturingKeys() bool { return true }
+
+func isEnableMouse(msg tea.Msg) bool {
+	return msg != nil && strings.Contains(fmt.Sprintf("%T", msg), "enableMouse")
 }

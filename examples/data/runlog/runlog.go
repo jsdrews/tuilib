@@ -24,6 +24,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -97,12 +98,24 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		return s, nil
 	}
 
+	// The group needs *every* message, not just tab: it also grants the
+	// focus requests a clicked component sends. Feeding it only tab keys
+	// drops those, so a click lights a pane while the keyboard stays put.
+	var gcmd tea.Cmd
+	s.focus, gcmd = s.focus.Update(msg)
+
+	// Enter and double-click both mean "run the selected command", so they
+	// resolve through one predicate rather than two branches that can drift.
+	if s.focus.Is(&s.cmds) && s.running == nil && s.cmds.IsActivate(msg) {
+		if idx := s.cmds.Cursor(); idx >= 0 && idx < len(entries) {
+			s.log.Clear()
+			s.log.Append("$ " + entries[idx].label)
+			return s, tea.Batch(gcmd, startCmd(entries[idx].build()))
+		}
+	}
+
 	if k, ok := msg.(tea.KeyMsg); ok && !s.log.Searching() {
 		switch k.String() {
-		case "tab", "shift+tab":
-			var cmd tea.Cmd
-			s.focus, cmd = s.focus.Update(msg)
-			return s, cmd
 		case "c":
 			if s.running != nil {
 				_ = s.running.Process.Signal(syscall.SIGINT)
@@ -116,23 +129,23 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			}
 			return s, nil
 		}
-		if s.focus.Is(&s.cmds) && k.String() == "enter" && s.running == nil {
-			idx := s.cmds.Cursor()
-			if idx >= 0 && idx < len(entries) {
-				s.log.Clear()
-				s.log.Append("$ " + entries[idx].label)
-				return s, startCmd(entries[idx].build())
-			}
-		}
 	}
 
+	// Mouse goes to every component so each can test the click against its
+	// own rect; keys go to the focused one alone.
+	if _, isMouse := msg.(mouse.Msg); isMouse {
+		var a, b tea.Cmd
+		s.cmds, a = s.cmds.Update(msg)
+		s.log, b = s.log.Update(msg)
+		return s, tea.Batch(gcmd, a, b)
+	}
 	var cmd tea.Cmd
 	if s.focus.Is(&s.cmds) {
 		s.cmds, cmd = s.cmds.Update(msg)
 	} else {
 		s.log, cmd = s.log.Update(msg)
 	}
-	return s, cmd
+	return s, tea.Batch(gcmd, cmd)
 }
 
 func (s *Screen) Layout() layout.Node {

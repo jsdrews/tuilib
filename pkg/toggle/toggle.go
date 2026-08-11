@@ -18,8 +18,11 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -57,6 +60,8 @@ type Options struct {
 // internal flag and the pane (so the border color reflects focus) — toggle
 // them together via Focus/Blur.
 type Model struct {
+	// token is this toggle's stable identity for focus requests.
+	token           focus.Token
 	value           bool
 	focused         bool
 	yesLabel        string
@@ -97,6 +102,7 @@ func New(opts Options) Model {
 	})
 
 	m := Model{
+		token:           focus.NewToken(),
 		value:           opts.Initial,
 		yesLabel:        opts.YesLabel,
 		noLabel:         opts.NoLabel,
@@ -114,6 +120,11 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update handles toggle keys when focused; no-op when blurred. The caller
 // should still forward every message — the toggle decides whether to act.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	// Mouse is handled before the focus gate: clicking an unfocused toggle
+	// is how you focus it, so bailing early would make it unclickable.
+	if e, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(e)
+	}
 	if !m.focused {
 		return m, nil
 	}
@@ -144,7 +155,50 @@ func (m *Model) SetRect(r geom.Rect) {
 // Rect returns the rect the toggle was last placed at.
 func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
+// FocusToken returns the toggle's stable focus identity.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// handleMouse focuses the toggle and, when the press lands on one of the two
+// buttons, picks that side outright. Clicking "Yes" means yes — asking the
+// user to click to focus and click again to choose would be a worse control,
+// not a safer one (the same reasoning as pkg/confirm).
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if !e.IsPress() || !m.pane.Rect().Hit(e.X, e.Y) {
+		return m, nil
+	}
+	if v, ok := m.buttonAt(e.X, e.Y); ok {
+		m.value = v
+	}
+	m.pane.SetContent(m.renderInner())
+	return m, tea.Batch(m.Focus(), focus.RequestSelf(m.token))
+}
+
+// buttonAt maps a position to a side: true for yes, false for no. The two
+// render as "[ yes ]  [ no ]" on the single content row.
+func (m Model) buttonAt(x, y int) (yes bool, ok bool) {
+	c := m.pane.ContentRect()
+	if !c.Hit(x, y) {
+		return false, false
+	}
+	pos := (x - c.X) + m.pane.XOffset()
+	yesW := ansi.StringWidth("[ " + m.yesLabel + " ]")
+	noW := ansi.StringWidth("[ " + m.noLabel + " ]")
+	const gap = 2
+	switch {
+	case pos >= 0 && pos < yesW:
+		return true, true
+	case pos >= yesW+gap && pos < yesW+gap+noW:
+		return false, true
+	}
+	return false, false
+}
+
 // SetTitle sets the title shown on the pane's top border.
+// SetTopRight writes into the pane's top-right border slot. Hosts use it for
+// a short annotation that belongs to the component as a whole — pkg/form
+// paints validation errors there. Pass "" to clear.
+func (m *Model) SetTopRight(s string) { m.pane.SetTopRight(s) }
+
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
 
 // Value returns the current bool.

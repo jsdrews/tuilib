@@ -20,9 +20,9 @@ import (
 
 	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
-	appgate "github.com/jsdrews/tuilib/examples/app/gate"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
 	appmouse "github.com/jsdrews/tuilib/examples/app/mouse"
+	appprescreen "github.com/jsdrews/tuilib/examples/app/prescreen"
 	appreplace "github.com/jsdrews/tuilib/examples/app/replace"
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
@@ -55,7 +55,7 @@ type entry struct {
 
 var entries = []entry{
 	{"Panes — border + title showcase", "Four panes demonstrating border styles, title positions, and slot-bracket variants.", paneshowcase.New},
-	{"List — filterable cities", "A filterable list.Model as a single-screen app.", datalist.New},
+	{"List — filterable cities (long, for scroll testing)", "A filterable list.Model with 372 numbered rows, so the scrollbar thumb is small and worth dragging. Every row shows its ordinal, so after a drag or a track click you can read whether the jump landed where the thumb said. Wheel scrolls whether or not the pane has focus; double-click opens a row.", datalist.New},
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
 	{"TextView — static text with search + wrap", "Two documents (README + git diff) that cycle via d. /-search + n/N to jump matches, w to toggle wrap, g/G and ctrl+u/d to scroll. No follow, no MaxLines, no filter mode — the counterpart to logview for read-static-text.", datatextview.New},
 	{"Table — filterable + sortable cities", "table.Model with sticky header, three column sizing modes side-by-side (City uses Flex:1 + MaxWidth:28 to absorb leftover space up to a cap — resize the terminal to watch it stretch then stop; Region/Population fixed; Status uses Width:0 for content-auto). [/] to step sort column + s to toggle direction (City + Region sort lexically; Population sorts numerically via a custom Less that parses \"8.3M\"). Status column uses ansi.CellColor so the selected-row bg passes through colored cells. Wiki column wraps each city's Wikipedia URL in ansi.Hyperlink — shift-click in alacritty/tmux/kitty/iTerm2 launches the full URL even when the column is narrow.", datatable.New},
@@ -75,7 +75,7 @@ var entries = []entry{
 	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
 	{"Filters — two filterable panes", "A list and a table, each with its own filter, on one screen. Exercises the focus states a single filterable pane can't reach: exactly one region highlighted at a time, clicking a body taking input back from its filter, switching panes clearing the filter you left, and tab completing a key:value term instead of cycling panes.", appfilters.New},
 	{"Mouse — click, double-click, wheel, drag", "Three panes wired for mouse: click to focus, click a row to select, double-click to open, click a table header to sort or a tree ▸ to expand, wheel over any pane, drag a scrollbar. Requires app.Options.Mouse — the launcher sets it.", appmouse.New},
-	{"Gate — login form on first entry", "A root screen that pushes a login form on top of itself via OnEnter; submit pops with creds, L re-pushes for logout. Form is on the stack only while interacting.", appgate.New},
+	{"Prescreen — push a screen in front, take a result back", "The \"log in before you can use this\" shape: a root screen pushes a child from OnEnter, receives its result on Pop, and can re-push it later (L logs out) — all without the child living permanently on the stack. The login form is set dressing; the flow is the point. Every field is clickable.", appprescreen.New},
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
 	{"Confirm — modal yes/no dialog", "Press d on a file to bring up a confirm modal via pkg/confirm; ConfirmedMsg/CancelledMsg flow back as tea.Msg, the parent dismisses and reports the outcome via app.Info.", dataconfirm.New},

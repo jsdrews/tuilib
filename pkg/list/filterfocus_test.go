@@ -21,24 +21,27 @@ func newFilterable(t *testing.T, r geom.Rect) Model {
 
 var fRect = geom.Rect{X: 0, Y: 0, W: 30, H: 12}
 
-// The filter occupies the top 3 rows; its input row is the middle one.
-const filterInputY = 1
+// The filter is a row inside the pane: border, filter, rule, then items.
+const (
+	filterInputY = 1
+	firstItemY   = 3
+)
 
-func TestClickingFilterUnhighlightsBody(t *testing.T) {
+// The filter is drawn inside the component's pane, so the pane border says
+// "this component has focus" and the filter row says "input goes here". The
+// border must stay lit while typing — dimming it would claim the component
+// lost focus when it did not.
+func TestClickingFilterKeepsPaneLit(t *testing.T) {
 	m := newFilterable(t, fRect)
 	m.Focus()
-	if !m.body.Focused() {
-		t.Fatalf("setup: body should be highlighted after Focus")
-	}
 
 	m, _ = m.Update(press(fRect.X+3, filterInputY, 1))
 
 	if !m.Filtering() {
 		t.Errorf("clicking the filter did not give it input")
 	}
-	if m.body.Focused() {
-		t.Errorf("body stayed highlighted while the filter owns input — " +
-			"nothing shows which region is active")
+	if !m.body.Focused() {
+		t.Errorf("the pane went dim while its own filter was taking input")
 	}
 }
 
@@ -52,8 +55,8 @@ func TestFocusDoesNotClobberAFocusedFilter(t *testing.T) {
 	if !m.Filtering() {
 		t.Errorf("the focus grant blurred the filter")
 	}
-	if m.body.Focused() {
-		t.Errorf("the focus grant re-highlighted the body over the filter")
+	if !m.body.Focused() {
+		t.Errorf("the focus grant left the pane dim")
 	}
 }
 
@@ -64,8 +67,8 @@ func TestClickingBodyBlursFilter(t *testing.T) {
 		t.Fatalf("setup: filter should own input")
 	}
 
-	// Body content starts below the filter's 3 rows, plus the pane border.
-	m, _ = m.Update(press(fRect.X+3, fRect.Y+4, 1))
+	// Items start below the border, the filter row, and the rule.
+	m, _ = m.Update(press(fRect.X+3, firstItemY, 1))
 
 	if m.Filtering() {
 		t.Errorf("clicking the body left the filter focused — it keeps eating keys")
@@ -108,7 +111,7 @@ func TestFocusedCoversFilterRegion(t *testing.T) {
 	}
 }
 
-func TestSlashFocusesFilterAndUnhighlightsBody(t *testing.T) {
+func TestSlashFocusesFilterAndKeepsPaneLit(t *testing.T) {
 	m := newFilterable(t, fRect)
 	m.Focus()
 
@@ -117,8 +120,8 @@ func TestSlashFocusesFilterAndUnhighlightsBody(t *testing.T) {
 	if !m.Filtering() {
 		t.Fatalf("'/' did not focus the filter")
 	}
-	if m.body.Focused() {
-		t.Errorf("'/' left the body highlighted alongside the filter")
+	if !m.body.Focused() {
+		t.Errorf("'/' dimmed the pane its own filter lives in")
 	}
 }
 

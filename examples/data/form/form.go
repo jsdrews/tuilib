@@ -4,6 +4,7 @@
 package form
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
@@ -50,6 +52,12 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		return s, nil
 	case form.CancelledMsg:
 		return s, screen.Pop(nil)
+	case form.InvalidMsg:
+		// The form already flagged the fields and moved focus to the first
+		// offender; this is purely for a summary the user can see at a
+		// glance. Reacting at all is optional.
+		return s, app.Error(fmt.Sprintf("%d field(s) need attention: %s",
+			len(m.Keys), strings.Join(m.Keys, ", ")))
 	}
 
 	if s.done {
@@ -102,16 +110,29 @@ func (s *Screen) SetTheme(t theme.Theme) {
 			Key:         "name",
 			Label:       "Name",
 			Placeholder: "your name…",
+			Required:    true,
 		}),
 		form.Text(form.TextOptions{
 			Key:         "email",
 			Label:       "Email",
 			Placeholder: "you@example.com",
+			Required:    true,
+			// Required runs first, so an empty field says "required" and
+			// only a non-empty one gets as far as this.
+			Validate: func(v any) error {
+				if s, _ := v.(string); !strings.Contains(s, "@") {
+					return errors.New("needs an @")
+				}
+				return nil
+			},
 		}),
 		form.Select(form.SelectOptions{
 			Key:     "role",
 			Label:   "Role",
 			Options: []string{"admin", "editor", "viewer"},
+			// Starts with nothing highlighted, so picking a role is a
+			// deliberate act rather than whatever the cursor defaulted to.
+			RequirePick: true,
 		}),
 		form.Confirm(form.ConfirmOptions{
 			Key:     "notify",

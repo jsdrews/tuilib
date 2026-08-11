@@ -376,6 +376,13 @@ type Model struct {
 	// a value receiver, so the model cannot name its own address.
 	token focus.Token
 
+	// filterRule{Active,Inactive} draw the line separating the inline filter
+	// row from the content. The active one is used while the filter has
+	// input — an inline filter has no border of its own to light up, so the
+	// prompt and this rule carry that signal instead.
+	filterRuleActive   lipgloss.Style
+	filterRuleInactive lipgloss.Style
+
 	// Viewport tracking for ViewportChangedMsg. vpFirst/Last/Total start at
 	// -1 sentinels so the first real viewport always registers as a change.
 	// vpPending is set by noteViewport when the tuple changes and cleared
@@ -560,12 +567,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // View stacks filter (if filterable) and the body pane.
-func (m Model) View() string {
-	if m.filterable {
-		return m.filter.View() + "\n" + m.body.View()
-	}
-	return m.body.View()
-}
+func (m Model) View() string { return m.body.View() }
 
 // Help returns the keys this table responds to.
 func (m Model) Help() []key.Binding {
@@ -599,14 +601,36 @@ func (m Model) Help() []key.Binding {
 // below it. Each child receives its own absolute rect so a click resolves to
 // the right one.
 func (m *Model) SetRect(r geom.Rect) {
-	body := r
+	m.body.SetRect(r)
 	if m.filterable {
-		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
-		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
+		// The filter is a row inside the body pane, not a pane beside it, so
+		// it reads as belonging to what it filters. Placing the pane first
+		// gives the header its width; setting the header then re-measures.
+		m.placeInlineFilter(r)
+		m.body.SetHeader(m.filterHeader())
+		m.placeInlineFilter(r)
 	}
-	m.body.SetRect(body)
 	m.recomputeWidths()
 	m.refresh()
+}
+
+// placeInlineFilter puts the filter on the pane's first inner row.
+func (m *Model) placeInlineFilter(r geom.Rect) {
+	inner := m.body.ContentRect()
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+}
+
+// filterHeader is the filter row plus a rule separating it from the content.
+func (m Model) filterHeader() string {
+	inner := m.body.ContentRect().W
+	if inner <= 0 {
+		return ""
+	}
+	rule := m.filterRuleInactive
+	if m.filter.Focused() {
+		rule = m.filterRuleActive
+	}
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
 }
 
 // SetRows replaces the row set, re-applies the current filter, redraws.
@@ -695,9 +719,6 @@ func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 // Without this guard it would snatch the highlight back to the body while the
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
-	if m.filterable && m.filter.Focused() {
-		return nil
-	}
 	m.body.SetFocused(true)
 	return nil
 }
@@ -709,6 +730,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.filterable {
 		m.filter.Blur()
+		m.body.SetHeader(m.filterHeader())
 	}
 }
 
@@ -723,8 +745,12 @@ func (m *Model) FocusFilter() tea.Cmd {
 	if !m.filterable {
 		return nil
 	}
-	m.body.SetFocused(false)
-	return m.filter.Focus()
+	// The filter lives inside the body pane, so the pane stays lit — it is
+	// the component that has focus. The filter row shows where input goes.
+	m.body.SetFocused(true)
+	cmd := m.filter.Focus()
+	m.body.SetHeader(m.filterHeader())
+	return cmd
 }
 
 // BlurFilter returns input from the filter to the body.
@@ -734,6 +760,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
+	m.body.SetHeader(m.filterHeader())
 }
 
 // SetActiveColor / SetInactiveColor update the body pane's border colors.
@@ -1435,11 +1462,8 @@ func (m Model) headerRows() int {
 // is the pinned header (line 1 too, with a rule); clicking there sorts by the
 // column under the pointer rather than selecting a row.
 func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
-	if row, ok := m.body.HandleScrollbar(e); ok {
-		if row < len(m.visible) {
-			m.cursor = row
-			m.refresh()
-		}
+	if target, ok := m.body.HandleScrollbar(e); ok {
+		m.scrollTo(target)
 		return m, m.flushMsgs()
 	}
 	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
@@ -1447,6 +1471,16 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
+	}
+
+	// Any press elsewhere in this component's pane hands input back to the
+	// body — the rule, the content, blank space below it, the scrollbar row,
+	// the borders. Leaving the filter focused after a click into the body is
+	// invisible and keeps swallowing keys. Scrollbar presses returned above,
+	// so dragging the bar leaves a query alive (rule 23: scrolling never
+	// claims the keyboard).
+	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+		m.BlurFilter()
 	}
 
 	line, inBody := m.body.RowAt(e.X, e.Y)
@@ -1539,6 +1573,25 @@ func (m Model) columnAt(x int) (int, bool) {
 	return 0, false
 }
 
+// scrollTo puts row at the top of the data area and moves the cursor onto
+// it. The table windows its own rows from viewStart, so setting both keeps
+// adjustViewStart from sliding the window back on the next refresh.
+func (m *Model) scrollTo(row int) {
+	n := len(m.visible)
+	if n == 0 {
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= n {
+		row = n - 1
+	}
+	m.cursor = row
+	m.viewStart = row
+	m.refresh()
+}
+
 // moveCursor steps the cursor by delta, clamped to the visible set.
 func (m *Model) moveCursor(delta int) {
 	next := m.cursor + delta
@@ -1607,6 +1660,9 @@ func (m *Model) refresh() {
 		} else {
 			b.WriteString(m.cellStyle.Render(row))
 		}
+	}
+	if m.filterable {
+		m.body.SetHeader(m.filterHeader())
 	}
 	m.body.SetContent(b.String())
 

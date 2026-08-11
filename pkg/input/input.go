@@ -22,7 +22,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
 
@@ -69,6 +71,24 @@ type Options struct {
 type Model struct {
 	input textinput.Model
 	pane  pane.Pane
+
+	// token is this input's stable identity for focus requests. Update takes
+	// a value receiver, so the model cannot name its own address.
+	token focus.Token
+}
+
+// FocusToken returns the input's stable focus identity. See focus.Identified.
+func (m Model) FocusToken() focus.Token { return m.token }
+
+// handleMouse claims a press inside the input, focusing it and asking the
+// group for the keyboard. Clicking a text field is the most direct way there
+// is to say "type here", so it works whether or not the field already has
+// focus.
+func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
+	if !e.IsPress() || !m.pane.Rect().Hit(e.X, e.Y) {
+		return m, nil
+	}
+	return m, tea.Batch(m.Focus(), focus.RequestSelf(m.token))
 }
 
 // New constructs an input. The cursor does not blink until Focus is called
@@ -113,7 +133,8 @@ func New(opts Options) Model {
 	})
 	p.SetContent(ti.View())
 
-	return Model{input: ti, pane: p}
+	return Model{
+		token: focus.NewToken(), input: ti, pane: p}
 }
 
 // Init returns nil. Use Focus to start the cursor blink.
@@ -123,6 +144,9 @@ func (m Model) Init() tea.Cmd { return nil }
 // commit/cancel semantics belong to the caller (see pkg/filter for the
 // "enter commits, esc clears" pattern).
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if e, ok := msg.(mouse.Msg); ok {
+		return m.handleMouse(e)
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	m.pane.SetContent(m.input.View())
@@ -144,6 +168,11 @@ func (m *Model) SetRect(r geom.Rect) {
 func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
 // SetTitle sets the title shown on the pane's top border.
+// SetTopRight writes into the pane's top-right border slot. Hosts use it for
+// a short annotation that belongs to the component as a whole — pkg/form
+// paints validation errors there. Pass "" to clear.
+func (m *Model) SetTopRight(s string) { m.pane.SetTopRight(s) }
+
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
 
 // Value returns the current text.

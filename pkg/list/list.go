@@ -184,6 +184,13 @@ type Model struct {
 	// is copied along with the model and stays constant.
 	token focus.Token
 
+	// filterRule{Active,Inactive} draw the line separating the inline filter
+	// row from the items. The active one is used while the filter has input —
+	// an inline filter has no border of its own to light up, so the prompt
+	// and this rule carry that signal instead.
+	filterRuleActive   lipgloss.Style
+	filterRuleInactive lipgloss.Style
+
 	// Focus tracking for SelectedChangedMsg. focusInit flips true after
 	// the first emit so an initially-empty list doesn't send an Empty
 	// message before any items exist. focusIdx / -Item hold the last
@@ -202,13 +209,15 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		token:         focus.NewToken(),
-		items:         append([]string(nil), opts.Items...),
-		filterable:    opts.Filterable,
-		selectedStyle: lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
-		hScrollbar:    opts.HScrollbar,
-		keys:          opts.Keys,
-		focusIdx:      -1,
+		token:              focus.NewToken(),
+		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
+		filterRuleInactive: lipgloss.NewStyle().Foreground(opts.InactiveColor),
+		items:              append([]string(nil), opts.Items...),
+		filterable:         opts.Filterable,
+		selectedStyle:      lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
+		hScrollbar:         opts.HScrollbar,
+		keys:               opts.Keys,
+		focusIdx:           -1,
 	}
 	m.visible = m.items
 	m.visibleIdx = identityIndex(len(m.items))
@@ -293,6 +302,9 @@ func (m *Model) refresh() {
 			b.WriteString("  " + it)
 		}
 		b.WriteString("\n")
+	}
+	if m.filterable {
+		m.body.SetHeader(m.filterHeader())
 	}
 	m.body.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.body.EnsureVisible(m.cursor)
@@ -397,7 +409,8 @@ func (m Model) IsActivate(msg tea.Msg) bool {
 // current frame, so a list hidden behind a modal or on an inactive tab
 // declines everything without knowing it is hidden.
 func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
-	if _, ok := m.body.HandleScrollbar(e); ok {
+	if target, ok := m.body.HandleScrollbar(e); ok {
+		m.scrollTo(target)
 		return m, m.flushMsgs()
 	}
 	// The filter pane owns its own rows; a click there focuses the filter
@@ -407,6 +420,16 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
+	}
+
+	// Any press elsewhere in this component's pane hands input back to the
+	// body — the rule, the content, blank space below it, the scrollbar row,
+	// the borders. Leaving the filter focused after a click into the body is
+	// invisible and keeps swallowing keys. Scrollbar presses returned above,
+	// so dragging the bar leaves a query alive (rule 23: scrolling never
+	// claims the keyboard).
+	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+		m.BlurFilter()
 	}
 
 	switch {
@@ -429,11 +452,6 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		if !ok {
 			return m, nil
 		}
-		// Clicking the body takes input back from the filter — otherwise it
-		// keeps swallowing keys with nothing on screen saying so.
-		if m.filterable && m.filter.Focused() {
-			m.filter.Blur()
-		}
 		m.body.SetFocused(true)
 		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
 		if row < len(m.visible) {
@@ -450,6 +468,31 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 	return m, nil
+}
+
+// scrollTo puts row at the top of the view and moves the cursor onto it.
+//
+// Moving the cursor is what makes the scroll stick. refresh re-asserts "the
+// cursor is visible" on every frame, and layout.Sized calls SetRect — hence
+// refresh — on every render, so a viewport moved on its own is undone one
+// frame later and the view snaps back to wherever the cursor still was.
+func (m *Model) scrollTo(row int) {
+	n := len(m.visible)
+	if n == 0 {
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= n {
+		row = n - 1
+	}
+	m.cursor = row
+	m.refresh()
+	// refresh pulled the viewport to the cursor; put the dragged row back
+	// at the top. The next frame's EnsureVisible is then a no-op, because
+	// the cursor is already the first visible row.
+	m.body.SetYOffset(row)
 }
 
 // moveCursor steps the cursor by delta, clamped to the visible set.
@@ -530,12 +573,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // View stacks filter (if filterable) and the body pane.
-func (m Model) View() string {
-	if m.filterable {
-		return m.filter.View() + "\n" + m.body.View()
-	}
-	return m.body.View()
-}
+func (m Model) View() string { return m.body.View() }
 
 // Selected returns the currently highlighted item. ok is false when the
 // visible set (post-filter) is empty.
@@ -614,13 +652,33 @@ func (m Model) Value() string {
 // offset below it; otherwise the body pane takes the whole rect. Each child
 // receives its own absolute rect so a click resolves to the right one.
 func (m *Model) SetRect(r geom.Rect) {
-	body := r
+	m.body.SetRect(r)
 	if m.filterable {
-		m.filter.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
-		body = geom.Rect{X: r.X, Y: r.Y + 3, W: r.W, H: max(0, r.H-3), Gen: r.Gen}
+		// The filter is a row inside the body pane, not a pane beside it, so
+		// it reads as belonging to the list it filters. Setting the header
+		// first would be circular — the header's width comes from the pane —
+		// so place the pane, measure, then fill the header and let the pane
+		// re-measure.
+		inner := m.body.ContentRect()
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
+		m.body.SetHeader(m.filterHeader())
+		inner = m.body.ContentRect()
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
 	}
-	m.body.SetRect(body)
 	m.refresh()
+}
+
+// filterHeader is the filter row plus a rule separating it from the items.
+func (m Model) filterHeader() string {
+	inner := m.body.ContentRect().W
+	if inner <= 0 {
+		return ""
+	}
+	rule := m.filterRuleInactive
+	if m.filter.Focused() {
+		rule = m.filterRuleActive
+	}
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
 }
 
 // SetItems replaces the item set, re-applies the current filter, and redraws.
@@ -685,6 +743,18 @@ func (m *Model) SetCursor(n int) {
 	m.refresh()
 }
 
+// Deselect moves the cursor off every row, so nothing is highlighted and
+// Selected reports ok=false. Use it for a list that must start with no
+// choice made — a form select that demands a deliberate pick.
+//
+// SetCursor deliberately does not accept -1: it clamps, so a stray negative
+// index cannot silently blank a list. Deselecting is a distinct intent and
+// gets a distinct call.
+func (m *Model) Deselect() {
+	m.cursor = -1
+	m.refresh()
+}
+
 // SetValue overwrites the filter text (no-op when not filterable). Useful
 // when rebuilding the list on theme swap / resize — carry the old Value().
 func (m *Model) SetValue(s string) {
@@ -704,9 +774,6 @@ func (m *Model) SetValue(s string) {
 // Without this guard that grant would snatch the highlight back to the body
 // while the filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
-	if m.filterable && m.filter.Focused() {
-		return nil
-	}
 	m.body.SetFocused(true)
 	return nil
 }
@@ -718,6 +785,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.filterable {
 		m.filter.Blur()
+		m.body.SetHeader(m.filterHeader())
 	}
 }
 
@@ -732,8 +800,12 @@ func (m *Model) FocusFilter() tea.Cmd {
 	if !m.filterable {
 		return nil
 	}
-	m.body.SetFocused(false)
-	return m.filter.Focus()
+	// The filter lives inside the body pane, so the pane stays lit — it is
+	// the component that has focus. The filter row shows where input goes.
+	m.body.SetFocused(true)
+	cmd := m.filter.Focus()
+	m.body.SetHeader(m.filterHeader())
+	return cmd
 }
 
 // BlurFilter returns input from the filter to the body.
@@ -743,11 +815,17 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
+	m.body.SetHeader(m.filterHeader())
 }
 
 // SetTitle updates the title rendered on the body pane's top border.
 // Useful when the list represents a slice that can change identity at
 // runtime (e.g. "detail · <selection>").
+// SetTopRight writes into the pane's top-right border slot. Hosts use it for
+// a short annotation that belongs to the component as a whole — pkg/form
+// paints validation errors there. Pass "" to clear.
+func (m *Model) SetTopRight(s string) { m.body.SetTopRight(s) }
+
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
 // SetActiveColor updates the body pane's active border color. Useful when

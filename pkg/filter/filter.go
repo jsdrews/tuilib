@@ -53,8 +53,32 @@ type Options struct {
 // embedded textinput (so keys route correctly) and the pane (so the border
 // color reflects focus) — toggle them together via Focus/Blur.
 type Model struct {
+	// inline is set when a host renders this filter inside its own pane;
+	// rect is then the host-assigned row rather than the filter's own pane.
+	inline bool
+	rect   geom.Rect
+
 	input textinput.Model
 	pane  pane.Pane
+
+	// basePrompt is the caller's prompt style; the foreground is swapped
+	// per focus state so an inline filter (one with no border of its own)
+	// still shows where input is going.
+	basePrompt    lipgloss.Style
+	activeColor   lipgloss.TerminalColor
+	inactiveColor lipgloss.TerminalColor
+}
+
+// applyPromptStyle tints the prompt by focus state. Inline filters have no
+// border to light up, so the prompt carries that signal instead.
+func (m *Model) applyPromptStyle() {
+	c := m.inactiveColor
+	if m.input.Focused() {
+		c = m.activeColor
+	}
+	if c != nil {
+		m.input.PromptStyle = m.basePrompt.Foreground(c)
+	}
 }
 
 // New constructs a filter. Call Update/View from the parent model; use
@@ -99,13 +123,23 @@ func New(opts Options) Model {
 	})
 	p.SetContent(ti.View())
 
-	return Model{input: ti, pane: p}
+	m := Model{
+		input:         ti,
+		pane:          p,
+		basePrompt:    opts.PromptStyle,
+		activeColor:   opts.ActiveColor,
+		inactiveColor: opts.InactiveColor,
+	}
+	m.applyPromptStyle()
+	m.pane.SetContent(m.input.View())
+	return m
 }
 
 // Focus grabs focus and returns the cursor-blink command. Always propagate
 // the cmd — without it the cursor won't blink.
 func (m *Model) Focus() tea.Cmd {
 	cmd := m.input.Focus()
+	m.applyPromptStyle()
 	m.pane.SetFocused(true)
 	m.pane.SetContent(m.input.View())
 	return cmd
@@ -114,6 +148,7 @@ func (m *Model) Focus() tea.Cmd {
 // Blur releases focus without touching the value. See Reset for clearing.
 func (m *Model) Blur() {
 	m.input.Blur()
+	m.applyPromptStyle()
 	m.pane.SetFocused(false)
 	m.pane.SetContent(m.input.View())
 }
@@ -152,6 +187,7 @@ func (m *Model) SetValue(s string) {
 func (m *Model) Reset() {
 	m.input.Reset()
 	m.input.Blur()
+	m.applyPromptStyle()
 	m.pane.SetFocused(false)
 	m.pane.SetContent(m.input.View())
 }
@@ -162,8 +198,35 @@ func (m *Model) SetRect(r geom.Rect) {
 	m.pane.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
 }
 
-// Rect returns the rect the filter was last placed at.
-func (m Model) Rect() geom.Rect { return m.pane.Rect() }
+// Rect returns the rect the filter was last placed at — its own pane's rect
+// normally, or the host-assigned row when inline.
+func (m Model) Rect() geom.Rect {
+	if m.inline {
+		return m.rect
+	}
+	return m.pane.Rect()
+}
+
+// SetInlineRect places the filter as a single row inside a host component's
+// pane, rather than as a pane of its own. The host renders InlineView into
+// its pane header; this call is what makes the filter's own hit-testing
+// agree with where the host actually drew it.
+func (m *Model) SetInlineRect(r geom.Rect) {
+	m.inline = true
+	m.rect = r
+	m.input.Width = max(0, r.W-lipgloss.Width(m.input.Prompt)-1)
+	m.pane.SetContent(m.input.View())
+}
+
+// InlineView renders just the input line — no border, no pane. Used by
+// components that host the filter inside their own pane so the filter reads
+// as part of the thing it filters instead of a sibling box floating above
+// it.
+func (m Model) InlineView() string { return m.input.View() }
+
+// Inline reports whether the filter is rendering as a row inside a host's
+// pane rather than as its own pane.
+func (m Model) Inline() bool { return m.inline }
 
 // SetBottomLeft / SetBottomRight write into the surrounding pane's bottom
 // border slots. Useful for hints, completion previews, or counts that
