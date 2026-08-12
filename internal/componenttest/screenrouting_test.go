@@ -7,6 +7,7 @@ import (
 
 	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
 	appmouse "github.com/jsdrews/tuilib/examples/app/mouse"
+	appoutput "github.com/jsdrews/tuilib/examples/app/output"
 	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
 	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -35,6 +36,7 @@ func TestScreensFanMouseOutToEveryComponent(t *testing.T) {
 		"app/filters":  appfilters.New,
 		"data/loading": dataloading.New,
 		"data/runlog":  datarunlog.New,
+		"app/output":   appoutput.New,
 	}
 
 	for name, build := range screens {
@@ -81,6 +83,10 @@ func TestClickOnUnfocusedPaneIsDelivered(t *testing.T) {
 		"app/filters":  appfilters.New,
 		"data/loading": dataloading.New,
 		"data/runlog":  datarunlog.New,
+		// app/output is deliberately absent: its right-hand side is a
+		// read-only pane.Pane, so there is no second focusable component
+		// for a click to be misrouted away from. It is covered by the
+		// fan-out test above, which is the general assertion.
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := build(theme.Dark())

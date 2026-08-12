@@ -10,10 +10,15 @@
 package app
 
 import (
+	"errors"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/config"
@@ -21,6 +26,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/output"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
@@ -76,6 +82,29 @@ type Options struct {
 	// to. Defaults to 6. The panel uses only as many rows as needed to
 	// fit every binding at the current width, up to this cap.
 	HelpMaxRows int
+
+	// OutputKey opens the app-wide output console (pkg/output) and is the
+	// single switch for the whole feature: leave it zero and no buffer, no
+	// statusbar badge and no console screen exist.
+	//
+	// Opt-in rather than on-by-default, for the same reason ThemeKey is: it
+	// claims a key permanently, in every app that links the shell, and a
+	// key the shell takes is a key no component may ever bind. Spending one
+	// should be a line the app author writes on purpose.
+	//
+	//	OutputKey: key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "output"))
+	//
+	// The console captures every Info/Error, every InfoDetail/ErrorDetail,
+	// runner.Result exit statuses, and everything runner.Capture streams.
+	// Capture itself works with this unset — the calling screen still
+	// receives every line; you lose the console, not the pipeline.
+	OutputKey key.Binding
+
+	// Output configures the console. Leave zero for output.OptionsFrom
+	// against the initial theme. Non-visual fields (MaxRecords, ExportDir,
+	// SourceWidth, Keys) survive theme swaps; colors come back from the
+	// theme, as everywhere else in the library.
+	Output output.Options
 
 	// HelpVerbose restores the legacy footer behavior: bindings are
 	// tight-packed inline in the statusbar's left slot until they
@@ -164,15 +193,26 @@ func SetTheme(name string) tea.Cmd {
 	return func() tea.Msg { return SetThemeMsg{Name: name} }
 }
 
-// StatusInfoMsg asks the app to show s as an info message in the statusbar's
-// center slot. The message auto-clears on the next KeyMsg (matching the
-// statusbar's own Update behavior). Emit via Info(s) from any screen.
-type StatusInfoMsg struct{ Text string }
+// StatusInfoMsg asks the app to show Text as an info message in the
+// statusbar's center slot. The message auto-clears on the next KeyMsg
+// (matching the statusbar's own Update behavior). Emit via Info(s) from any
+// screen.
+//
+// Body is the verbose half: it never touches the statusbar, and goes to the
+// output console (when OutputKey is set) as continuation lines under Text.
+// Emit via InfoDetail.
+type StatusInfoMsg struct {
+	Text string
+	Body string
+}
 
-// StatusErrorMsg asks the app to show s as an error message in the
-// statusbar's center slot. Same auto-clear semantics as StatusInfoMsg. Emit
-// via Error(s) from any screen.
-type StatusErrorMsg struct{ Text string }
+// StatusErrorMsg asks the app to show Text as an error message in the
+// statusbar's center slot. Same auto-clear and Body semantics as
+// StatusInfoMsg. Emit via Error(s) or ErrorDetail(summary, body).
+type StatusErrorMsg struct {
+	Text string
+	Body string
+}
 
 // StatusClearMsg asks the app to clear any active statusbar message
 // immediately. Useful for screens that want to wipe a stale message on a
@@ -193,6 +233,57 @@ func Error(s string) tea.Cmd {
 func ClearStatus() tea.Cmd {
 	return func() tea.Msg { return StatusClearMsg{} }
 }
+
+// InfoDetail posts an info message whose summary paints the statusbar, as
+// Info does, while body goes to the output console as continuation lines
+// beneath it.
+//
+// This is the channel for output that was never going to fit in a footer —
+// a command's stderr, a multi-line API response. An empty body behaves
+// exactly like Info, so migrating a call site is mechanical.
+func InfoDetail(summary, body string) tea.Cmd {
+	return func() tea.Msg { return StatusInfoMsg{Text: summary, Body: body} }
+}
+
+// ErrorDetail is InfoDetail's error counterpart. See InfoDetail.
+func ErrorDetail(summary, body string) tea.Cmd {
+	return func() tea.Msg { return StatusErrorMsg{Text: summary, Body: body} }
+}
+
+// ErrorOf posts err as an error message: err.Error() paints the statusbar
+// and the unwrapped %w chain goes to the console, one wrap per line.
+//
+// Without this the chain gets flattened to its outermost message, because
+// hand-formatting it at every call site is work nobody actually does. An
+// error that wraps nothing degrades to a plain Error, so there is no reason
+// to choose between them.
+func ErrorOf(err error) tea.Cmd {
+	if err == nil {
+		return nil
+	}
+	var chain []string
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		chain = append(chain, e.Error())
+	}
+	if len(chain) <= 1 {
+		return Error(err.Error())
+	}
+	return ErrorDetail(err.Error(), strings.Join(chain, "\n"))
+}
+
+// OutputClosed is the value the output console pops with, aliased from
+// pkg/output so a screen matching it in OnEnter needs only this import.
+//
+// A screen whose OnEnter kicks off a fetch should early-return on it —
+// otherwise glancing at the log silently refetches whatever was underneath:
+//
+//	func (s *Screen) OnEnter(result any) tea.Cmd {
+//	    if _, ok := result.(app.OutputClosed); ok {
+//	        return nil
+//	    }
+//	    return s.fetch()
+//	}
+type OutputClosed = output.Closed
 
 // Model is the app shell. Instantiate with New and pass to tea.NewProgram.
 type Model struct {
@@ -217,9 +308,27 @@ type Model struct {
 	helpExpanded bool
 	helpOverflow bool
 
+	// out* are nil/zero unless Options.OutputKey was set. outScreen is
+	// retained across opens rather than rebuilt, so the console keeps its
+	// scroll position and search query between visits.
+	outputKey key.Binding
+	outBuf    *output.Buffer
+	outOpts   output.Options
+	outScreen *output.Screen
+	// rightSlot is the composed statusbar right slot (badge + version).
+	// Cached because the inline-help budget is measured against it.
+	rightSlot string
+	badgeW    int
+	// msgReserve is the width held back from the help line for an active
+	// status message. See reserveForMessage.
+	msgReserve int
+
 	mouseMode MouseMode
 	mouse     mouse.Tracker
 }
+
+// outputEnabled reports whether the console exists for this app.
+func (m Model) outputEnabled() bool { return m.outBuf != nil }
 
 // New constructs an app shell. By default it reorders Themes via
 // theme.Resolve so Themes[0] reflects the user's config file (and
@@ -286,8 +395,33 @@ func New(opts Options) Model {
 		mouseMode:   opts.Mouse,
 		mouse:       mouse.NewTracker(opts.DoubleClickInterval),
 	}
+	if opts.OutputKey.Keys() != nil {
+		m.outputKey = opts.OutputKey
+		m.outOpts = mergeOutputOptions(opts.Output, t)
+		m.outBuf = output.NewBuffer(m.outOpts.MaxRecords)
+	}
 	m.apply()
 	return m
+}
+
+// mergeOutputOptions rebuilds the console's themed options while carrying
+// the caller's non-visual knobs across. Colors are the theme's job by
+// definition (CLAUDE.md rule 4), so this is also what runs on a theme swap.
+func mergeOutputOptions(prev output.Options, t theme.Theme) output.Options {
+	next := output.OptionsFrom(t)
+	if prev.MaxRecords != 0 {
+		next.MaxRecords = prev.MaxRecords
+	}
+	if prev.ExportDir != "" {
+		next.ExportDir = prev.ExportDir
+	}
+	if prev.SourceWidth != 0 {
+		next.SourceWidth = prev.SourceWidth
+	}
+	keys := prev.Keys
+	keys.FillDefaults()
+	next.Keys = keys
+	return next
 }
 
 // Init runs the root screen's Init + OnEnter(nil), and turns on mouse
@@ -302,6 +436,25 @@ func (m Model) Init() tea.Cmd {
 // theme returns the currently-active palette.
 func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
 
+// retheme pushes the current palette through the stack and the console, then
+// rebuilds the chrome.
+//
+// The console needs its own call: its options carry the badge styles and the
+// line colors, and its screen may be off the stack entirely (the buffer
+// outlives any particular visit), so stack.SetTheme alone would leave both
+// stale.
+func (m *Model) retheme() {
+	t := m.theme()
+	m.stack.SetTheme(t)
+	if m.outputEnabled() {
+		m.outOpts = mergeOutputOptions(m.outOpts, t)
+		if m.outScreen != nil && !m.outputOnTop() {
+			m.outScreen.SetTheme(t)
+		}
+	}
+	m.apply()
+}
+
 // apply rebuilds breadcrumb + statusbar from the current theme and stack.
 // Called on init, resize, theme swap, and any stack mutation so the
 // breadcrumb and help hints stay in sync. Any in-flight info/error message
@@ -309,6 +462,15 @@ func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
 // stack updates don't wipe a screen-emitted status message.
 func (m *Model) apply() {
 	t := m.theme()
+
+	// The right slot and the message allowance have to be computed first:
+	// the inline help budget is measured against what they leave, so a badge
+	// or a status message appearing mid-session has to be able to push the
+	// help line into overflow.
+	m.rightSlot, m.badgeW = m.composeRight()
+
+	prevMsg, prevKind := m.sb.Message()
+	m.msgReserve = m.reserveForMessage(prevMsg, prevKind)
 
 	bcOpts := t.Breadcrumb()
 	bcOpts.Width = m.w
@@ -319,7 +481,7 @@ func (m *Model) apply() {
 	helpOpts.Minimal = m.helpMinimal
 	m.help = help.New(helpOpts)
 	if cur := m.stack.Current(); cur != nil {
-		m.help.SetBindings(cur.Help())
+		m.help.SetBindings(m.helpBindings(cur))
 	}
 
 	// Probe the inline (collapsed) flow first to detect overflow: that's
@@ -336,8 +498,7 @@ func (m *Model) apply() {
 	m.help.SetExpanded(m.helpExpanded)
 	short, _, _ := m.helpStrip()
 
-	prevMsg, prevKind := m.sb.Message()
-	sbOpts := t.Statusbar(short, m.version)
+	sbOpts := t.Statusbar(short, m.rightSlot)
 	sbOpts.Width = m.w
 	m.sb = statusbar.New(sbOpts)
 	switch prevKind {
@@ -348,17 +509,108 @@ func (m *Model) apply() {
 	}
 }
 
+// composeRight builds the statusbar's right slot — the output badge ahead of
+// the version string — and reports the badge's visible width so clickChrome
+// can tell a click on the badge from one on the version.
+//
+// The badge goes right rather than left because the left slot is rendered
+// whole by pkg/help and its one clickable region is located by asking help
+// for a character offset. A second affordance in there would mean either
+// teaching pkg/help what a log is, or the shell doing its own span
+// arithmetic inside a string it did not lay out.
+func (m Model) composeRight() (slot string, badgeW int) {
+	if !m.outputEnabled() {
+		return m.version, 0
+	}
+	badge := m.outOpts.RenderBadge(m.outBuf)
+	if badge == "" {
+		return m.version, 0
+	}
+	badgeW = lipgloss.Width(badge)
+	if m.version == "" {
+		return badge, badgeW
+	}
+	return badge + " " + m.version, badgeW
+}
+
+// helpBindings returns the active screen's bindings plus the output key.
+//
+// The shell advertises this one itself rather than leaving it to screens.
+// Every other global follows the opposite convention — a screen lists q and t
+// in its own Help() — and that works because those keys are universal enough
+// that an author writing a screen already knows about them. The output key is
+// not: it is opt-in, so it exists in some apps and not others, and a screen
+// author copying an existing screen has no reason to add it. Left to the
+// screens it would be advertised on the one screen whose author remembered,
+// which is worse than not advertising it at all.
+//
+// While the console is open the same key closes it, so the description says
+// so; the key label stays whatever the app chose.
+//
+// It goes *first*, not last. The expanded panel is capped at HelpMaxRows, so
+// on a binding-heavy screen the tail of the list is simply not drawn — and a
+// binding appended at the end is the first thing dropped. That is how this
+// shipped broken: it rendered fine on a sparse screen at 120 columns and
+// vanished on a table at 80. Everything else in the list belongs to whatever
+// component is on screen and has some other route to discovery; the output
+// key has none, so it takes the slot that always survives.
+func (m Model) helpBindings(cur screen.Screen) []key.Binding {
+	own := cur.Help()
+	if !m.outputEnabled() || m.outputKey.Keys() == nil {
+		return own
+	}
+
+	b := m.outputKey
+	if m.outputOnTop() {
+		b = key.NewBinding(
+			key.WithKeys(b.Keys()...),
+			key.WithHelp(b.Help().Key, "close output"),
+		)
+	}
+
+	// Copy rather than prepend in place: the screen owns its slice.
+	out := make([]key.Binding, 0, len(own)+1)
+	out = append(out, b)
+	return append(out, own...)
+}
+
+// reserveForMessage returns the width the bar's center slot needs for an
+// active info/error message.
+//
+// The help line pads out to whatever budget it is given, so without this the
+// center slot is sized to zero and a message has nowhere to go. It used to
+// render anyway — lipgloss's Width is a minimum, not a maximum — by
+// overflowing and shoving the right slot off the end of the bar, which is
+// why a long error used to eat the version string. Now that the right slot
+// also carries the output badge, "the message hides the badge" is precisely
+// the wrong trade: the badge is what tells you the full text is recoverable.
+//
+// Capped at half the bar so a long message can never squeeze the help hints
+// out entirely; the message itself is cut to fit by the statusbar.
+func (m Model) reserveForMessage(msg string, kind statusbar.MessageKind) int {
+	if kind == statusbar.MessageNone || msg == "" {
+		return 0
+	}
+	const slotPadding = 2
+	want := lipgloss.Width(msg) + slotPadding
+	if half := m.w / 2; want > half {
+		want = half
+	}
+	return want
+}
+
 // shortViewBudget returns the visible width available to the statusbar's
-// left slot. Reserves room for the right slot (version string + the
-// left+right Padding(0,1) the bar adds around each slot) so the inline
-// help line can detect overflow before the bar truncates it visually.
+// left slot. Reserves room for the right slot (its content plus the
+// left+right Padding(0,1) the bar adds around each slot) and for any active
+// status message, so the inline help line can detect overflow before the bar
+// truncates it visually.
 func (m Model) shortViewBudget() int {
 	const slotPadding = 2 // left+right padding around the left slot
 	right := 0
-	if m.version != "" {
-		right = len(m.version) + 2 // matching padding around right slot
+	if m.rightSlot != "" {
+		right = lipgloss.Width(m.rightSlot) + 2 // matching padding around right slot
 	}
-	b := m.w - right - slotPadding
+	b := m.w - right - slotPadding - m.msgReserve
 	if b < 0 {
 		return 0
 	}
@@ -393,6 +645,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runner.Result, tea.ResumeMsg:
+		// A suspended subprocess owned the real TTY, so its output is gone —
+		// but the exit status isn't, and until now a failing subprocess
+		// produced nothing at all unless the screen author checked Err.
+		if r, ok := msg.(runner.Result); ok {
+			m.logResult(r)
+		}
 		// Both of these mean the terminal was handed away and given back: a
 		// subprocess taking it over, or the program being suspended and
 		// foregrounded. Either way mouse reporting is off, and bubbletea's
@@ -432,8 +690,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for i, t := range m.themes {
 			if t.Name == msg.Name {
 				m.themeIdx = i
-				m.stack.SetTheme(m.theme())
-				m.apply()
+				m.retheme()
 				break
 			}
 		}
@@ -441,15 +698,80 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StatusInfoMsg:
 		m.sb.SetInfo(msg.Text)
+		m.logEntry("", msg.Text, msg.Body, output.LevelInfo)
+		m.apply()
 		return m, nil
 
 	case StatusErrorMsg:
 		m.sb.SetError(msg.Text)
+		m.logEntry("", msg.Text, msg.Body, output.LevelError)
+		m.apply()
 		return m, nil
 
 	case StatusClearMsg:
 		m.sb.ClearMessage()
 		return m, nil
+
+	case output.Notice:
+		// The console's own screen can't return app.Info — pkg/app imports
+		// pkg/output, so it routes through here instead and lands in the
+		// buffer like any other message.
+		if msg.Level == output.LevelError {
+			m.sb.SetError(msg.Text)
+		} else {
+			m.sb.SetInfo(msg.Text)
+		}
+		m.logEntry("", msg.Text, "", msg.Level)
+		m.apply()
+		return m, nil
+
+	case runner.CaptureStarted:
+		// The badge counts this now rather than on completion: a five-minute
+		// build that signals nothing until it finishes turns "keep working
+		// while it runs" into "keep working, blind."
+		if m.outputEnabled() {
+			started := msg
+			m.outBuf.StartRun(msg.RunID, msg.Label, func() error { return runner.Kill(started) })
+			m.outBuf.Append(output.Record{
+				Level:  output.LevelInfo,
+				Source: msg.Label,
+				Text:   commandLine(msg.Cmd),
+				Head:   true,
+				RunID:  msg.RunID,
+			})
+		}
+		return m, m.forwardCapture(msg)
+
+	case runner.CapturedLine:
+		if m.outputEnabled() {
+			m.outBuf.Append(output.Record{
+				Level:  output.LevelInfo,
+				Source: msg.Label,
+				Text:   msg.Text,
+				Stderr: msg.Stderr,
+				RunID:  msg.RunID,
+			})
+		}
+		return m, m.forwardCapture(msg)
+
+	case runner.Captured:
+		if m.outputEnabled() {
+			m.outBuf.EndRun(msg.RunID)
+			// A continuation, not a head: one run is one event however many
+			// lines it emitted. Its level is what tints the badge, which is
+			// why stderr lines alone don't.
+			lvl, text := output.LevelInfo, msg.Label+" completed"
+			if msg.Err != nil {
+				lvl, text = output.LevelError, msg.Label+" failed: "+msg.Err.Error()
+			}
+			m.outBuf.Append(output.Record{
+				Level:  lvl,
+				Source: msg.Label,
+				Text:   text,
+				RunID:  msg.RunID,
+			})
+		}
+		return m, m.forwardCapture(msg)
 
 	case tea.KeyMsg:
 		cur := m.stack.Current()
@@ -460,8 +782,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.themeKey.Keys() != nil && key.Matches(msg, m.themeKey) {
 				m.themeIdx = (m.themeIdx + 1) % len(m.themes)
-				m.stack.SetTheme(m.theme())
-				m.apply()
+				m.retheme()
 				return m, nil
 			}
 			if m.helpKey.Keys() != nil && key.Matches(msg, m.helpKey) && m.helpOverflow {
@@ -472,7 +793,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.suspendKey.Keys() != nil && key.Matches(msg, m.suspendKey) {
 				return m, tea.Suspend
 			}
+			if m.outputEnabled() && key.Matches(msg, m.outputKey) {
+				return m, m.toggleOutput()
+			}
 			if m.autoEscPop && msg.String() == "esc" && m.stack.Depth() > 1 {
+				// esc closes the console too, and must close it the same way
+				// the key does — with the sentinel, or the screen underneath
+				// can't tell a glance at the log from a fresh activation.
+				if m.outputOnTop() {
+					return m, m.popOutput()
+				}
 				var cmd tea.Cmd
 				m.stack, cmd = m.stack.Update(screen.PopMsg{Result: nil})
 				m.apply()
@@ -485,6 +815,112 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.stack, cmd = m.stack.Update(msg)
 	m.apply()
 	return m, cmd
+}
+
+// forwardCapture passes a capture message on to the active screen and asks
+// for the next one.
+//
+// Both halves matter. The screen sees every line so a view that wants to
+// stream output in place can do it from the same pipeline the console uses,
+// instead of the library shipping two. And the read is chained here rather
+// than by the screen, unconditionally — including when the console is
+// disabled — because a capture nobody drains eventually stalls the
+// subprocess.
+func (m *Model) forwardCapture(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.stack, cmd = m.stack.Update(msg)
+	m.apply()
+	return tea.Batch(cmd, runner.Next(msg))
+}
+
+// logEntry appends a status message to the console: the summary as a head
+// record, the body (when there is one) as continuation lines beneath it.
+//
+// src empty means "attribute to the screen on top right now". That is
+// occasionally a lie — a fetch kicked off two screens ago that fails after
+// the user has navigated gets stamped with wherever they are standing — but
+// app.Info is a closure with no idea who created it, and a tea.Cmd cannot
+// introspect its creator. The line still carries its time, level and full
+// text; what's lost is a hint.
+func (m *Model) logEntry(src, text, body string, lvl output.Level) {
+	if !m.outputEnabled() {
+		return
+	}
+	if src == "" {
+		if cur := m.stack.Current(); cur != nil {
+			src = cur.Title()
+		}
+	}
+	recs := []output.Record{{Level: lvl, Source: src, Text: text, Head: true}}
+	if body != "" {
+		for _, line := range strings.Split(body, "\n") {
+			recs = append(recs, output.Record{Level: lvl, Source: src, Text: line})
+		}
+	}
+	m.outBuf.AppendAll(recs)
+}
+
+// logResult records a suspended subprocess's exit status.
+func (m *Model) logResult(r runner.Result) {
+	if !m.outputEnabled() || r.Cmd == nil {
+		return
+	}
+	label := filepath.Base(r.Cmd.Path)
+	if r.Err != nil {
+		m.logEntry(label, label+" failed: "+r.Err.Error(), "", output.LevelError)
+		return
+	}
+	m.logEntry(label, label+" completed", "", output.LevelInfo)
+}
+
+// commandLine renders the command a capture is running, as the head line of
+// its event.
+func commandLine(cmd *exec.Cmd) string {
+	if cmd == nil {
+		return "(no command)"
+	}
+	if len(cmd.Args) > 0 {
+		return "$ " + strings.Join(cmd.Args, " ")
+	}
+	return "$ " + cmd.Path
+}
+
+// outputOnTop reports whether the console is the active screen.
+func (m Model) outputOnTop() bool {
+	_, ok := m.stack.Current().(*output.Screen)
+	return ok
+}
+
+// toggleOutput opens the console, or closes it if it is already on top.
+//
+// The screen instance is retained rather than rebuilt so scroll position and
+// search query survive between visits; it is re-themed on the way in, since
+// stack-wide theme swaps can't reach it while it is off the stack.
+func (m *Model) toggleOutput() tea.Cmd {
+	if m.outputOnTop() {
+		return m.popOutput()
+	}
+	if m.outScreen == nil {
+		m.outScreen = output.NewScreen(m.outBuf, m.outOpts)
+	}
+	m.outScreen.SetTheme(m.theme())
+
+	var cmd tea.Cmd
+	m.stack, cmd = m.stack.Update(screen.PushMsg{Screen: m.outScreen})
+	m.apply()
+	return cmd
+}
+
+// popOutput closes the console, marking everything read on the way out.
+//
+// Read is marked on close rather than on open so records arriving while the
+// user sits on the screen don't come back as unread the moment they leave.
+func (m *Model) popOutput() tea.Cmd {
+	m.outBuf.MarkRead()
+	var cmd tea.Cmd
+	m.stack, cmd = m.stack.Update(screen.PopMsg{Result: output.Closed{}})
+	m.apply()
+	return cmd
 }
 
 // clickChrome handles clicks on the shell's own furniture — the breadcrumb
@@ -509,6 +945,13 @@ func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
 		// The current crumb — already here, nothing to do, but the click
 		// belongs to the breadcrumb and shouldn't fall through to the body.
 		return nil, true
+	}
+
+	if m.badgeW > 0 {
+		slot := m.sb.RightContentRect()
+		if slot.Hit(e.X, e.Y) && e.X-slot.X < m.badgeW {
+			return m.toggleOutput(), true
+		}
 	}
 
 	if m.helpOverflow && m.helpKey.Keys() != nil {
