@@ -83,6 +83,12 @@ func (s *Screen) OnEnter(any) tea.Cmd { return nil }
 func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
+	// The group needs *every* message, not just tab: it also grants the
+	// focus requests a clicked component sends. Feeding it only tab keys
+	// drops those, so a click lights a pane while the keyboard stays put.
+	var gcmd tea.Cmd
+	s.focus, gcmd = s.focus.Update(msg)
+
 	switch m := msg.(type) {
 	case listFetchedMsg:
 		s.list.SetItems(m.items)
@@ -97,37 +103,31 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		s.tree.SetLoading(false)
 		return s, nil
 	case tea.KeyMsg:
-		if !s.IsCapturingKeys() {
-			switch m.String() {
-			case "tab":
-				var cmd tea.Cmd
-				s.focus, cmd = s.focus.Update(msg)
-				return s, cmd
-			case "shift+tab":
-				var cmd tea.Cmd
-				s.focus, cmd = s.focus.Update(msg)
-				return s, cmd
-			case "r":
-				return s, s.startFetches()
-			}
+		if !s.IsCapturingKeys() && m.String() == "r" {
+			return s, s.startFetches()
 		}
 		// Key messages only reach the focused component — otherwise "/"
 		// would open three search inputs at once and h/l would scroll
-		// every pane in sync.
-		return s, s.routeKey(msg)
+		// every pane in sync. The group handled tab above.
+		return s, tea.Batch(gcmd, s.routeKey(msg))
 	}
 
-	// Non-key messages (spinner.TickMsg, fetched results, resize) fan
-	// out to all three so every spinner keeps animating.
-	var cmds []tea.Cmd
-	var cmd tea.Cmd
-	s.list, cmd = s.list.Update(msg)
-	cmds = append(cmds, cmd)
-	s.log, cmd = s.log.Update(msg)
-	cmds = append(cmds, cmd)
-	s.tree, cmd = s.tree.Update(msg)
-	cmds = append(cmds, cmd)
-	return s, tea.Batch(cmds...)
+	// Non-key messages (mouse, spinner.TickMsg, fetched results, resize)
+	// fan out to all three, so every spinner keeps animating and every
+	// component gets a chance to claim a click.
+	return s, tea.Batch(gcmd, s.forwardAll(msg))
+}
+
+// forwardAll hands a message to every component. Each tests the
+// position against its own rect and only the one it landed in acts, so
+// fanning out is safe — and necessary: a component that never receives the
+// click cannot claim focus or hand input back from its filter.
+func (s *Screen) forwardAll(msg tea.Msg) tea.Cmd {
+	var a, b, c tea.Cmd
+	s.list, a = s.list.Update(msg)
+	s.log, b = s.log.Update(msg)
+	s.tree, c = s.tree.Update(msg)
+	return tea.Batch(a, b, c)
 }
 
 func (s *Screen) routeKey(msg tea.Msg) tea.Cmd {

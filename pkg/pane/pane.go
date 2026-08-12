@@ -90,7 +90,10 @@ type Pane struct {
 	// drag can land anywhere, including outside the pane.
 	vDragging bool
 	hDragging bool
-	titlePos  BorderPosition
+
+	// header is pinned under the top border, above the scrolling content.
+	header   string
+	titlePos BorderPosition
 
 	loading      bool
 	spinner      spinner.Model
@@ -256,7 +259,11 @@ func (p Pane) View() string {
 	var body string
 	br := p.bottomRight
 	if p.loading {
-		body = lipgloss.Place(innerW, innerH, lipgloss.Center, lipgloss.Center, p.loadingView())
+		// The header is chrome, not content: a filter typed while data is
+		// in flight has to stay visible, so the spinner replaces only the
+		// scrolling area beneath it.
+		body = lipgloss.Place(innerW, max(0, innerH-p.headerRows()),
+			lipgloss.Center, lipgloss.Center, p.loadingView())
 	} else {
 		total, visible, offset := p.viewport.TotalLineCount(), p.viewport.VisibleLineCount(), p.viewport.YOffset
 		if p.virtualTotal > 0 {
@@ -287,6 +294,10 @@ func (p Pane) View() string {
 		BottomMiddleBorder: pad(p.bottomMid),
 		BottomRightBorder:  pad(br),
 	}
+	if p.header != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, p.header, body)
+	}
+
 	// Title overrides whichever slot it's assigned to.
 	if p.title != "" {
 		slots[p.titlePos] = pad(p.title)
@@ -369,9 +380,44 @@ func (p *Pane) SetContent(s string) {
 // mouse position back to a content row — see Rect and ContentRect.
 func (p *Pane) SetRect(r geom.Rect) {
 	p.rect = r
-	p.width, p.height = r.W, r.H
-	p.viewport.Width = max(0, r.W-2-ScrollbarWidth)
-	innerH := r.H - 2
+	p.applySize()
+}
+
+// SetHeader pins lines directly under the top border, above the scrolling
+// content. They never scroll, and the viewport shrinks to make room.
+//
+// This is how a component puts its own chrome inside its pane rather than
+// beside it — a filterable list draws its filter row here, so the filter is
+// visibly *inside* the thing it filters instead of floating above it as an
+// equal-weight sibling. Pass "" to remove it.
+//
+// The header is rendered as given; a component wanting a rule beneath it
+// should include one (the inner width is available from ContentRect).
+func (p *Pane) SetHeader(s string) {
+	if p.header == s {
+		return
+	}
+	p.header = s
+	p.applySize()
+}
+
+// Header returns the pinned header lines.
+func (p Pane) Header() string { return p.header }
+
+// headerRows is how many rows the pinned header consumes.
+func (p Pane) headerRows() int {
+	if p.header == "" {
+		return 0
+	}
+	return strings.Count(p.header, "\n") + 1
+}
+
+// applySize recomputes the viewport from the outer rect, the scrollbars, and
+// the pinned header. Called whenever any of those change.
+func (p *Pane) applySize() {
+	p.width, p.height = p.rect.W, p.rect.H
+	p.viewport.Width = max(0, p.rect.W-2-ScrollbarWidth)
+	innerH := p.rect.H - 2 - p.headerRows()
 	if p.hScrollbar {
 		innerH -= ScrollbarHeight
 	}
@@ -389,7 +435,7 @@ func (p Pane) Rect() geom.Rect { return p.rect }
 func (p Pane) ContentRect() geom.Rect {
 	r := geom.Rect{
 		X:   p.rect.X + 1,
-		Y:   p.rect.Y + 1,
+		Y:   p.rect.Y + 1 + p.headerRows(),
 		W:   p.viewport.Width,
 		H:   p.viewport.Height,
 		Gen: p.rect.Gen,
@@ -456,7 +502,13 @@ func (p *Pane) HandleScrollbar(e mouse.Msg) (row int, ok bool) {
 	if e.Action == tea.MouseActionRelease {
 		if p.vDragging || p.hDragging {
 			p.vDragging, p.hDragging = false, false
-			return 0, true
+			// Report where the scroll already is, not zero. The release ends
+			// the drag; it does not move anything. A caller that scrolls to
+			// the reported row would otherwise slam back to the top the
+			// instant the button came up — which is exactly what a dragged
+			// scrollbar snapping to the start looks like.
+			_, _, offset := p.scrollMetrics()
+			return offset, true
 		}
 		return 0, false
 	}

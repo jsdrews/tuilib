@@ -112,11 +112,8 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		return s, s.routeKey(msg)
 	}
 
-	// Spinner ticks, resize, etc. — fan out to both components.
-	var cc, dc tea.Cmd
-	s.cities, cc = s.cities.Update(msg)
-	s.detail, dc = s.detail.Update(msg)
-	return s, tea.Batch(cc, dc)
+	// Mouse events, spinner ticks, resize, etc. — fan out to both.
+	return s, s.forwardAll(msg)
 }
 
 // handleEnter drills in on the focused selection. Both branches mean
@@ -145,6 +142,17 @@ func (s *Screen) handleEnter() tea.Cmd {
 		return screen.Push(newAttrScreen(s.shown, s.attrs[idx], s.t))
 	}
 	return nil
+}
+
+// forwardAll hands a message to every component. Each tests the
+// position against its own rect and only the one it landed in acts, so
+// fanning out is safe — and necessary: a component that never receives the
+// click cannot claim focus or hand input back from its filter.
+func (s *Screen) forwardAll(msg tea.Msg) tea.Cmd {
+	var cc, dc tea.Cmd
+	s.cities, cc = s.cities.Update(msg)
+	s.detail, dc = s.detail.Update(msg)
+	return tea.Batch(cc, dc)
 }
 
 func (s *Screen) routeKey(msg tea.Msg) tea.Cmd {

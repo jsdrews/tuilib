@@ -21,6 +21,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -52,6 +53,24 @@ type Options struct {
 	// inline hints don't all fit in one row. Defaults to "?". Set to an
 	// empty binding (key.NewBinding()) to disable the panel.
 	HelpKey key.Binding
+
+	// SuspendKey suspends the program (ctrl+z semantics), returning to the
+	// shell until the user foregrounds it again. Defaults to "ctrl+z"; see
+	// DisableSuspend to turn it off.
+	//
+	// Bubbletea does not bind this itself — it delivers ctrl+z as an
+	// ordinary key and expects the app to ask for the suspend — so without
+	// this the key does nothing. Suspending is unsupported on Windows,
+	// where the request is ignored.
+	SuspendKey key.Binding
+
+	// DisableSuspend turns off the suspend key entirely.
+	//
+	// A zero SuspendKey means "unset" and gets the default, so it cannot
+	// also mean "disabled" — key.Binding has no way to tell an empty
+	// binding from an absent one. This flag is the explicit off switch,
+	// matching DisableAutoEscPop.
+	DisableSuspend bool
 
 	// HelpMaxRows caps how many rows the expanded help panel may grow
 	// to. Defaults to 6. The panel uses only as many rows as needed to
@@ -186,6 +205,7 @@ type Model struct {
 	stack screen.Stack
 
 	quitKey, themeKey, helpKey key.Binding
+	suspendKey                 key.Binding
 	helpMaxRows                int
 	helpMinimal                bool
 	autoEscPop                 bool
@@ -228,6 +248,15 @@ func New(opts Options) Model {
 			key.WithHelp("?", "help"),
 		)
 	}
+	if opts.SuspendKey.Keys() == nil {
+		opts.SuspendKey = key.NewBinding(
+			key.WithKeys("ctrl+z"),
+			key.WithHelp("^z", "suspend"),
+		)
+	}
+	if opts.DisableSuspend {
+		opts.SuspendKey = key.Binding{}
+	}
 	if opts.HelpMaxRows <= 0 {
 		opts.HelpMaxRows = 6
 	}
@@ -250,6 +279,7 @@ func New(opts Options) Model {
 		quitKey:     opts.QuitKey,
 		themeKey:    opts.ThemeKey,
 		helpKey:     opts.HelpKey,
+		suspendKey:  opts.SuspendKey,
 		helpMaxRows: opts.HelpMaxRows,
 		helpMinimal: !opts.HelpVerbose,
 		autoEscPop:  !opts.DisableAutoEscPop,
@@ -362,6 +392,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, nil
 
+	case runner.Result, tea.ResumeMsg:
+		// Both of these mean the terminal was handed away and given back: a
+		// subprocess taking it over, or the program being suspended and
+		// foregrounded. Either way mouse reporting is off, and bubbletea's
+		// RestoreTerminal does not bring it back — it restores the alt
+		// screen, bracketed paste and focus reporting, but has no notion of
+		// mouse state. Nothing else would ever re-enable it, so the TUI
+		// comes back mouse-dead until restart.
+		if enable := m.mouseMode.enableCmd(); enable != nil {
+			var cmd tea.Cmd
+			m.stack, cmd = m.stack.Update(msg)
+			m.apply()
+			return m, tea.Batch(cmd, enable)
+		}
+
 	case tea.MouseMsg:
 		// Screens never see the raw event. Resolving the click count here
 		// keeps double-click timing in one place instead of duplicating a
@@ -423,6 +468,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.helpExpanded = !m.helpExpanded
 				m.apply()
 				return m, nil
+			}
+			if m.suspendKey.Keys() != nil && key.Matches(msg, m.suspendKey) {
+				return m, tea.Suspend
 			}
 			if m.autoEscPop && msg.String() == "esc" && m.stack.Depth() > 1 {
 				var cmd tea.Cmd

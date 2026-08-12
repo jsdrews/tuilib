@@ -193,6 +193,14 @@ func (g Group) Update(msg tea.Msg) (Group, tea.Cmd) {
 		return g, nil
 
 	case tea.KeyMsg:
+		// A component that owns the keyboard sees its keys first. Cycling
+		// out of a focused text field with tab would both strand a
+		// half-typed filter and steal bindings the field itself uses —
+		// pkg/table completes a key:value term on tab. Leave the field with
+		// enter or esc, then cycle.
+		if g.IsCapturingKeys() {
+			return g, nil
+		}
 		switch {
 		case key.Matches(msg, g.keys.Next):
 			return g.step(1)

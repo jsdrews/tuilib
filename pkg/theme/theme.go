@@ -499,6 +499,8 @@ func (t Theme) Form() form.Options {
 			Selected:     lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 			PaneActive:   t.BorderActive,
 			PaneInactive: t.BorderInactive,
+			ErrorColor:   t.ErrorBG,
+			ErrorText:    lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
 			Submit:       lipgloss.NewStyle().Foreground(t.BarFG),
 			SubmitActive: lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
 		},

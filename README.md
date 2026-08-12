@@ -311,7 +311,7 @@ demo uses.
 | Layouts | Five sub-screens, each with a different `layout.Node` tree |
 | Stack   | Parent→child via constructor, child→parent via `Pop(result)` + `OnEnter` |
 | Focus   | Multi-component focus cycling — tab/shift-tab between input + list + toggle, with `Help()` updating per focused component |
-| Gate    | A root screen that pushes a login form on first OnEnter; submit pops back with creds, `L` re-pushes for logout |
+| Prescreen | Pushing a screen in front of another on first OnEnter and taking a result back on Pop — the "log in first" shape. `L` re-pushes for logout |
 | Tabs    | Three sub-screens (filterable list / streaming logview / counter) behind one tab strip; switch via shift+arrows or 1/2/3. Each body keeps its own state across switches; the logview keeps streaming while you're on another tab |
 | Status  | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s; the shell mirrors the result into the statusbar's center slot. Auto-clears on the next keypress |
 | Confirm | A `pkg/confirm` modal overlaid on a list via `ZStack` + `Center`. Press `d` on a file to bring up the dialog; on confirm the file is removed and the outcome is reported via `app.Info`. Demonstrates the message-driven result flow |
