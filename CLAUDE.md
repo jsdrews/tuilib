@@ -26,7 +26,7 @@ example in `examples/`.
 
    A rect carries absolute position as well as size, which is what lets
    components answer mouse events without any marker injection — see
-   rule 26.
+   rule 28.
 
 3. **Always start from a `theme` builder.** Every component has a
    `th.Component()` method on `Theme` that returns a pre-styled `Options`.
@@ -50,7 +50,7 @@ example in `examples/`.
    guard — check `Filtering()`/`Focused()` only where *your* screen's
    own shortcuts would otherwise collide with input.
 
-   A screen using a `focus.Group` (rule 25) usually just delegates:
+   A screen using a `focus.Group` (rule 27) usually just delegates:
    `return s.focus.IsCapturingKeys()`. Every component that swallows
    printables implements `IsCapturingKeys()` itself — true while a text
    field is focused or a filter is engaged — so the Group can answer
@@ -68,7 +68,7 @@ example in `examples/`.
    since each tests the position against its own rect and only the one
    it landed in acts. `pkg/tab` inverts the second half: mouse goes to
    the *active body only*, because hidden bodies aren't on screen
-   (rule 19).
+   (rule 21).
 
 7. **Pass data through the stack, not globals.** Parent → child: construct
    the child with what it needs (`screen.Push(newDetail(city, s.t))`).
@@ -105,7 +105,7 @@ example in `examples/`.
    One border says it unambiguously, and costs 2 fewer rows.
 
    A component owns its *geometry* as well as its pane: it stores the
-   rect `SetRect` gave it and does its own mouse hit-testing (rule 26).
+   rect `SetRect` gave it and does its own mouse hit-testing (rule 28).
    Nothing outside the component knows where its rows, glyphs or buttons
    are, which is exactly why the component has to be the one to decide a
    click was its own.
@@ -167,7 +167,73 @@ example in `examples/`.
     component, decide on an explicit cap if the default isn't right;
     only set `-1` (unbounded) when the producer is itself bounded.
 
-14. **Enter means "open the focused selection."** In multi-pane screens
+14. **Verbose output belongs in the console, not the statusbar.** The
+    statusbar's center slot holds one truncated line and `statusbar.Update`
+    wipes it on the next `tea.KeyMsg`. Anything a user might want to read
+    twice — a command's stderr, a `%w` chain, an API response body — needs
+    `pkg/output`, the app-wide console. Set `app.Options.OutputKey` to turn
+    it on (the whole feature hangs off that one field; there is no default,
+    because the shell claiming a letter takes it from every component in
+    every downstream app, which is exactly why `ThemeKey` is opt-in too).
+
+    Four things feed it, and the first is free: every `app.Info` /
+    `app.Error` is captured automatically, so existing call sites become
+    recoverable with no change. Then `app.InfoDetail(summary, body)` /
+    `app.ErrorDetail` put the summary on the bar and the body only in the
+    log; `app.ErrorOf(err)` does that with the unwrapped `%w` chain, one
+    wrap per line; and `runner.Capture` streams a subprocess into it.
+
+    Reading it is a pushed screen (`o`, esc, or the statusbar badge), which
+    means **the pop carries a sentinel**. `screen.Pop` fires `OnEnter` on
+    whatever it uncovers, and rule 7 makes `OnEnter` the place to start a
+    fetch — so a screen that fetches must say it doesn't want this one:
+
+    ```go
+    func (s *Screen) OnEnter(result any) tea.Cmd {
+        if _, closed := result.(app.OutputClosed); closed {
+            return nil   // a glance at the log is not a fresh activation
+        }
+        return s.fetch()
+    }
+    ```
+
+    The badge counts **events, not lines** — one `Info`, or one whole
+    capture however many lines it emitted. It tints red from a run's exit
+    status, never from stderr: plenty of well-behaved tools log progress
+    there, and folding that into severity leaves the badge permanently red.
+
+    **Don't list the output key in your screen's `Help()`.** This is the
+    one global the shell advertises for you, and it would otherwise show
+    up twice. It is the exception because it is *opt-in* — `q` and `t`
+    exist in every app, so an author writing a screen already knows to
+    list them, while the output key exists only where someone set
+    `OutputKey`. Left to the screens it would be advertised on the one
+    screen whose author happened to remember. The hint flips to "close
+    output" while the console is open, since the same key does both.
+    See `examples/app/output` and rule 15.
+
+15. **Capture a subprocess with `runner.Capture`, hand it the terminal with
+    `runner.Run`.** They are counterparts, not modes of each other.
+    `Run` suspends the TUI and gives away the real TTY — right for `$EDITOR`,
+    `less`, `htop`, and the reason its output is unrecoverable (the shell
+    logs the exit status and nothing more). `Capture` pipes stdout/stderr
+    while the TUI stays live, so the user keeps working while a build runs.
+    Teeing a full-screen program would be meaningless, which is why one call
+    cannot serve both.
+
+    The sequence is `CaptureStarted`, a `CapturedLine` per line, then one
+    `Captured`. Under the app shell you don't drive it — the shell chains
+    the reads and forwards every message on to your screen, so a view that
+    wants the output on screen *as well as* in the console just matches
+    `CapturedLine`. Outside the shell, chain it yourself with
+    `runner.Next(msg)`; a capture nobody drains eventually stalls the
+    subprocess rather than growing without bound.
+
+    Don't hand-roll the `io.Pipe` + goroutine + `bufio.Scanner` dance any
+    more. `examples/data/runlog` still shows it because it predates this,
+    but new code has no reason to repeat it.
+
+16. **Enter means "open the focused selection."** In multi-pane screens
     with focus cycling, enter should have a single conceptual meaning
     across the whole screen — open whatever is highlighted in the
     focused pane. The *side effect* differs per pane: on a master list
@@ -203,7 +269,7 @@ example in `examples/`.
     *single* click only focuses and moves the cursor — it must always be
     safe to explore with.
 
-15. **Use `SetLoading(b bool) tea.Cmd` while data is in flight.** Any
+17. **Use `SetLoading(b bool) tea.Cmd` while data is in flight.** Any
     component that owns a pane (`list`, `logview`, `tree`, …) inherits a
     loading state from `pane.Pane`. Calling `SetLoading(true)` returns a
     `tea.Cmd` you must batch into your screen's command stream — that's
@@ -216,7 +282,7 @@ example in `examples/`.
     from `Theme.Accent`; override only when you need a different color.
     See `examples/data/loading/loading.go`.
 
-16. **Trust the pane to handle long lines.** `pane.Pane` truncates each
+18. **Trust the pane to handle long lines.** `pane.Pane` truncates each
     line to the inner width on `SetContent` (ANSI-aware via
     `x/ansi.Cut`) and exposes left/right (and `h`/`l`) for horizontal
     scroll, with an optional thin scrollbar via `Options.HScrollbar`.
@@ -227,7 +293,7 @@ example in `examples/`.
     `theme.Logview()` enables `HScrollbar` by default since long log
     lines are common.
 
-17. **Color cells in a table row with `ansi.CellColor`, not full lipgloss
+19. **Color cells in a table row with `ansi.CellColor`, not full lipgloss
     backgrounds.** `pkg/table` applies the row's `SelectedStyle` (which
     typically sets `Background`) on top of cell content. A cell that
     contains its own `lipgloss.Render` with a full `\x1b[0m` reset will
@@ -255,7 +321,7 @@ example in `examples/`.
     pulls the URL back out when the screen needs to handle "open in
     browser" programmatically rather than via terminal click.
 
-18. **Send transient feedback through `app.Info` / `app.Error` /
+20. **Send transient feedback through `app.Info` / `app.Error` /
     `app.ClearStatus`.** Screens don't touch the statusbar directly — they
     return one of these `tea.Cmd`s from `Update` and the shell paints the
     bar's center slot. Use `Info` for successful operations ("Run
@@ -270,7 +336,7 @@ example in `examples/`.
     `pkg/app`; the shell rebuilds the statusbar on every update and only
     preserves message state through `Message()` round-trips.
 
-19. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
+21. **For tabbed sub-screens, use `pkg/tab`.** A `tab.Model` hosts multiple
     `screen.Screen` bodies behind a one-row strip and lives entirely inside
     one host screen — it never touches the screen stack. The host forwards
     `Update` / `OnEnter` / `IsCapturingKeys` / `SetTheme` / `Help` to
@@ -308,7 +374,7 @@ example in `examples/`.
     shapes where the primary content is above the fold and tab switching
     is a secondary affordance.
 
-20. **For yes/no modals, use `pkg/confirm`.** A `confirm.Model` renders a
+22. **For yes/no modals, use `pkg/confirm`.** A `confirm.Model` renders a
     bordered titled pane with two buttons and resolves via
     `confirm.ConfirmedMsg` / `confirm.CancelledMsg` posted as `tea.Cmd`s.
     The parent screen owns show/hide state, gates `IsCapturingKeys()`
@@ -324,13 +390,13 @@ example in `examples/`.
     what `pkg/confirm` already gets right (selection movement, y/n/esc
     shortcuts, theme-aware styling).
 
-21. **For "stop and acknowledge" modals, use `pkg/alert`.** Same shape as
+23. **For "stop and acknowledge" modals, use `pkg/alert`.** Same shape as
     `pkg/confirm` but with a single OK button and an `alert.DismissedMsg`
     result. Reach for it when the user *must* see and dismiss something
     before continuing — surfaced errors, destructive-action results,
     blocking notices. For passive feedback (success notices, transient
     warnings) prefer the lighter `app.Info` / `app.Error` statusbar
-    messages from rule 18; the modal is heavier and breaks flow. The
+    messages from rule 20; the modal is heavier and breaks flow. The
     chrome from `theme.Alert()` is intentionally neutral: for an
     error-tinted look, override `ActiveColor` with `t.ErrorBG` (and
     optionally `OKStyle` foreground with the same) — the component is
@@ -339,15 +405,15 @@ example in `examples/`.
     multi-line API responses) set `Options.Autosize = true`: the modal
     word-wraps at 80% terminal width (40-col floor), caps height at
     60%, and scrolls the message region internally with the OK button
-    pinned to the last inner row (scroll keys per rule 23:
+    pinned to the last inner row (scroll keys per rule 25:
     `↑↓`/`j`/`k`, `g`/`G`, `ctrl+u/d`, `PgUp/PgDn`). In autosize the
     host composes with `layout.Sized(&s.modal)` alone — the modal
     centers itself inside whatever bounds it gets, so the outer
     `layout.Center(w, h, ...)` wrapper is redundant. Hosting,
     `IsCapturingKeys`, `Help()` composition, and ZStack placement all
-    follow rule 20. See `examples/data/alert`.
+    follow rule 22. See `examples/data/alert`.
 
-22. **For auto-refresh, use `pkg/poll` + keyed rows.** When data backing a
+24. **For auto-refresh, use `pkg/poll` + keyed rows.** When data backing a
     view changes over time (k8s deployments, Prefect runs, REST endpoints),
     drive the cadence with `poll.New(poll.Options{Interval: 2*time.Second})`,
     batch its `Init()` into your screen's Init, and forward every `tea.Msg`
@@ -369,13 +435,13 @@ example in `examples/`.
     `SetFields` (preserves expansion + cursor by row path), so its
     auto-refresh is just "fetch new fields, call SetFields."
 
-    The `app.Info` / `app.Error` statusbar (rule 18) is the right place
+    The `app.Info` / `app.Error` statusbar (rule 20) is the right place
     for transient refresh feedback ("refreshed 14 deployments"); the
     statusbar auto-clears so it doesn't accumulate. For a persistent
     "last refreshed Xs ago" indicator, mutate the component's title via
     `SetTitle` from a periodic UI tick — see `examples/data/poll`.
 
-23. **Reserve arrows + hjkl for scroll, library-wide.** Every component
+25. **Reserve arrows + hjkl for scroll, library-wide.** Every component
     that scrolls in a given axis uses the same bindings on that axis,
     and arrow keys are aliases for hjkl (not separate verbs):
 
@@ -404,7 +470,7 @@ example in `examples/`.
     keystrokes (`space` then `↓`/`j`), which keeps the scroll convention
     consistent across the library.
 
-24. **Override component keybindings via `Options.Keys`.** Every
+26. **Override component keybindings via `Options.Keys`.** Every
     interactive component (`list`, `table`, `logview`, `tree`,
     `inspector`) exposes a `Keys` struct as `Options.Keys` plus a
     `DefaultKeys()` builder. Each binding carries both `WithKeys(...)`
@@ -426,9 +492,9 @@ example in `examples/`.
     live here: the double-click threshold is a per-machine preference,
     so it sits on `config.Config` (`double_click_ms`) with an
     `app.Options.DoubleClickInterval` override, and no component carries
-    mouse configuration at all (rule 26).
+    mouse configuration at all (rule 28).
 
-25. **Compose multi-component focus with `pkg/focus`, not an int.** A
+27. **Compose multi-component focus with `pkg/focus`, not an int.** A
     screen with more than one interactive component holds a
     `focus.Group` over them in tab order:
 
@@ -489,7 +555,7 @@ example in `examples/`.
       the borders. Leaving the filter focused after a click into the
       body is invisible and keeps swallowing keys. The exception is the
       scrollbar, which returns earlier: scrolling never claims the
-      keyboard however it is expressed (rule 23), so dragging the bar
+      keyboard however it is expressed (rule 25), so dragging the bar
       leaves a half-typed query alive.
 
     `Group.Update` also declines to cycle while `IsCapturingKeys()` is
@@ -498,7 +564,7 @@ example in `examples/`.
     field with enter or esc, then cycle. `examples/app/filters` is the
     two-filterable-pane screen these rules exist for.
 
-26. **Mouse support comes from rects, not from markers.** `pkg/layout`
+28. **Mouse support comes from rects, not from markers.** `pkg/layout`
     hands every node a `geom.Rect` — absolute position *and* size — and
     `layout.Sized(&c)` passes it to the component's `SetRect`. A
     component stores that rect and answers mouse events by testing
@@ -523,10 +589,10 @@ example in `examples/`.
 
     - **Click** focuses the component (via `focus.RequestSelf`) and
       moves the cursor to the clicked row.
-    - **Double-click** does what enter does (rule 14) — components emit
+    - **Double-click** does what enter does (rule 16) — components emit
       an `ActivatedMsg` and the screen decides what "open" means.
     - **Wheel** does what `↓`/`j` does for the component *under the
-      pointer*, focused or not (rule 23). Scrolling is navigation, not a
+      pointer*, focused or not (rule 25). Scrolling is navigation, not a
       claim on the keyboard.
     - **Library-drawn chrome is clickable**: table headers sort, tree
       and inspector `▸`/`▾` glyphs toggle on a single click, modal
@@ -603,7 +669,7 @@ example in `examples/`.
 - **Don't roll your own alert modal.** `pkg/alert` covers the
   acknowledgement case (single OK button, `DismissedMsg`); use it for
   blocking errors and notices. For passive feedback prefer
-  `app.Info` / `app.Error` (rule 18) — modals break flow, statusbar
+  `app.Info` / `app.Error` (rule 20) — modals break flow, statusbar
   doesn't.
 - **Don't roll your own log viewer.** Use `pkg/logview` for any append-
   mostly text stream that needs search / jump / filter / auto-follow.
@@ -627,6 +693,29 @@ example in `examples/`.
   `runner.Run(*exec.Cmd)` — it sets `Stdin/Stdout/Stderr` + `LINES`/
   `COLUMNS` and returns a typed `runner.Result` your `Update` can match
   on. Bypassing it loses those defenses and the consistent result type.
+- **Don't hand-roll the `io.Pipe` + goroutine + `bufio.Scanner` dance.**
+  `runner.Capture` is that pattern, moved out of an example and into the
+  library, with the app shell already chaining the reads. Rolling it again
+  per command gets you a second subprocess pipeline that the console can't
+  see. `examples/data/runlog` still shows the manual form because it
+  predates `Capture`; it is not the recommended path any more.
+- **Don't use the statusbar as a log.** Its center slot is one truncated
+  line and it is wiped by the next `tea.KeyMsg`. If the user might want to
+  read it twice, it belongs in `pkg/output` — `app.ErrorDetail` for a
+  summary plus a body, `app.ErrorOf` for a `%w` chain. Cramming a stack
+  trace into `app.Error` produces exactly the sliver-of-footer problem the
+  console exists to fix.
+- **Don't treat stderr as an error level.** Plenty of well-behaved tools
+  write progress there (`go build`, `git`, `curl`), so mapping stderr onto
+  `LevelError` leaves the console badge permanently red and the tint stops
+  meaning anything. Severity comes from the run's exit status;
+  `Record.Stderr` carries the stream distinction on its own.
+- **Don't forget the `OutputClosed` guard in `OnEnter`.** A screen that
+  fetches on activation will silently refetch every time the user glances
+  at the console, because `screen.Pop` fires `OnEnter` either way and
+  nothing else distinguishes the two. It is one branch (rule 14) and the
+  symptom — an invisible, possibly slow, possibly billable refresh — is
+  the kind you find in a bill rather than in a test.
 - **Don't leave a streaming buffer uncapped.** `pkg/logview` defaults to
   `DefaultMaxLines = 10000`. Override only when you have a real reason —
   passing `-1` opts out of the cap entirely and makes the buffer grow
@@ -643,7 +732,7 @@ example in `examples/`.
 - **Don't write per-component reset codes.** If bar colors drift between
   embedded segments, the fix is usually "make sure every embedded style
   sets the same `Background()`," not a manual `\x1b[0m`.
-- **Don't hand-roll a focus index.** `focus.Group` (rule 25) owns
+- **Don't hand-roll a focus index.** `focus.Group` (rule 27) owns
   cycling, the blur-all-focus-one dance, click-to-focus grants, and
   `IsCapturingKeys` delegation. An int plus an `applyFocus` helper gets
   the first of those right and silently misses the rest — most visibly,
@@ -652,7 +741,7 @@ example in `examples/`.
   encode position *inside the rendered string*, and this library rewrites
   strings freely — `pane` truncates with `ansi.Cut`, `table` cuts cells,
   `ZStack` splices three fragments per row. `layout` already computes
-  every rect; use it (rule 26). ZStack in particular duplicates any
+  every rect; use it (rule 28). ZStack in particular duplicates any
   escape it carries across the splice, so a marked region on a row
   crossed by a modal registers twice and the wrong copy wins.
 - **Don't compute a component's scroll window in two places.** If
@@ -668,7 +757,7 @@ example in `examples/`.
   the cursor still was. Move the cursor as well: `list`, `table`, `tree`
   and `inspector` all expose `scrollTo(row)`, which sets the cursor *and*
   the window start so the next frame's cursor-visible pass is a no-op.
-  The wheel already worked this way (rule 23); the scrollbar had to
+  The wheel already worked this way (rule 25); the scrollbar had to
   follow.
 - **Don't let an event that ends a gesture report a position.** A mouse
   release finishes a scrollbar drag; it does not move anything.
@@ -676,7 +765,7 @@ example in `examples/`.
   than zero, because a caller that scrolls to the reported row would
   slam back to the top the instant the button came up.
 - **Don't feed `focus.Group` only the keys it cycles on.** It needs
-  *every* message (rule 25), because click-to-focus works by a
+  *every* message (rule 27), because click-to-focus works by a
   `focus.RequestMsg` the clicked component sends back — a screen that
   calls `Group.Update` inside its tab branch alone silently drops those.
   The symptom is nasty: the clicked pane lights up, because the component
@@ -730,7 +819,7 @@ layout.VStack(                                   // stack children top-to-bottom
 - `RenderFunc(func(r geom.Rect) string)` — escape hatch; render inline at
   `r.W` × `r.H`.
 - `ZStack(base, overlay)` composites overlay over base. Both layers get
-  the same rect; occluding the base is the host screen's job (rule 20).
+  the same rect; occluding the base is the host screen's job (rule 22).
 - `Center(w, h, node)` renders `node` at a fixed size, centered in the
   parent's rect — the standard modal pattern (use inside a `ZStack`).
   The child's rect is offset to where it is actually drawn, so a
@@ -819,12 +908,12 @@ path.
   satisfies, and the optional `Capturer` that answers rule 5. Components
   identify themselves in focus requests by `Token` rather than by
   pointer — bubbletea's value receiver on `Update` means a component
-  cannot name its own address. See rule 25 and `examples/app/focus`.
+  cannot name its own address. See rule 27 and `examples/app/focus`.
 - **Mouse:** `pkg/mouse` is the `Msg` components actually handle
   (bubbletea's event plus a resolved `Clicks` count) and the `Tracker`
   that counts rapid repeat presses in the same cell. The app shell owns
   one tracker, so no component carries mouse state or a threshold. See
-  rule 26 and `examples/app/mouse`; run the launcher to try it, since
+  rule 28 and `examples/app/mouse`; run the launcher to try it, since
   `app.Options.Mouse` is set there for the whole suite.
 - **Help footer + expanded panel:** the statusbar's left slot renders the
   active screen's `Help()` bindings as `key desc  •  key desc  •  …`. When
@@ -848,17 +937,17 @@ path.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
-  `tea.KeyMsg`. See `examples/app/status` and rule 18.
+  `tea.KeyMsg`. See `examples/app/status` and rule 20.
 - **Confirm modal:** `pkg/confirm` is a yes/no dialog meant to live in a
   ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
   as `tea.Cmd`s the parent matches in its own `Update`. See
-  `examples/data/confirm` and rule 20.
+  `examples/data/confirm` and rule 22.
 - **Alert modal:** `pkg/alert` is the acknowledgement counterpart to
   confirm — a single OK button, `alert.DismissedMsg` result, identical
   hosting pattern. Override `ActiveColor` with `t.ErrorBG` for an
   error-tinted look. Use it for "stop and acknowledge" feedback; prefer
   `app.Info` / `app.Error` for passive notices. See `examples/data/alert`
-  and rule 21.
+  and rule 23.
 - **Atomic screen swap:** `screen.Replace(s)` swaps the active top of the
   stack in one tick. Use it for "fresh instance of this view" (reset
   filter, reset scroll, refetch from scratch) — pop+push flickers and
@@ -928,7 +1017,7 @@ path.
   `SetSort(col, desc)` the same way you carry `Cursor()`/`Value()`. For
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
   `lipgloss.Render` so the selected-row background passes through
-  unbroken (rule 17). Internal separators are configurable via
+  unbroken (rule 19). Internal separators are configurable via
   `Options.Borders{Vertical, HeaderRule}` — both fields are pre-styled
   glyph strings (use `pkg/ansi.CellColor` so the selected-row bg passes
   through). `Vertical` replaces the inter-column space with `" <glyph> "`;
@@ -943,13 +1032,13 @@ path.
   `Wrap` (default true) word-wraps against the pane's inner width via
   ANSI-aware `x/ansi.Wrap`; toggle at runtime with `w`. When wrap is
   off, the pane's built-in truncation + horizontal scroll takes over
-  (rule 16). `Searchable=true` embeds the same filter pattern as
+  (rule 18). `Searchable=true` embeds the same filter pattern as
   logview: `/` focuses, typing highlights case-insensitive substring
   matches, enter blurs (query stays for `n`/`N` stepping), esc clears.
   No follow, no filter mode, no `MaxLines` — for the streaming case
   reach for `pkg/logview`. Same nav vocabulary as list/table/logview
   (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
-  rule 23). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
+  rule 25). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
   rebuilds via `SetContent`/`SetQuery`/`SetWrap` — the theme swap
   pattern from rule 4. See `examples/data/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
@@ -964,7 +1053,7 @@ path.
   converter. Same nav verbs as `pkg/tree` (`g`/`G`, `ctrl+u`/`ctrl+d`,
   `↑↓`/`j`/`k`, `space` to toggle the cursor row, `E`/`C` to
   expand/collapse all — arrows + hjkl are reserved for scroll per
-  rule 23), same `Filterable` story (`/` searches both Label and Value;
+  rule 25), same `Filterable` story (`/` searches both Label and Value;
   `\` toggles filter mode that hides non-matching subtrees while
   keeping ancestors visible; `n`/`N` step matches). `SetFields` swaps
   the record while preserving expansion state by row path and pinning
@@ -980,13 +1069,13 @@ path.
   max, width)` for fixed-width progress bars, `Spark(values, width)` for
   8-step block sparklines that resample to fit. All four return ANSI
   foreground-only strings via `pkg/ansi.CellColor`, so embedding them in
-  a `pkg/table` cell keeps the selected-row background intact (rule 17).
+  a `pkg/table` cell keeps the selected-row background intact (rule 19).
   The package is rendering-only — callers own any history buffer (e.g.
   for `Spark`, append each tick's value and trim to a fixed window). For
   non-severity colorization (e.g. CPU usage that should always be blue
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
-  `examples/data/metrics` and rule 22 (auto-refresh).
+  `examples/data/metrics` and rule 24 (auto-refresh).
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options
   {Interval: d})`, batch `m.poll.Init()` into the screen's Init, and
@@ -1000,7 +1089,40 @@ path.
   stale RefreshMsg. Pair with the keyed-row APIs on `pkg/list` /
   `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor
   + expansion state survive every swap. See `examples/data/poll` and
-  rule 22.
+  rule 24.
+- **Output console:** `pkg/output` is the app-wide log — `Record` (one
+  flat line's worth of structure: time, level, source, text, head/body,
+  stderr, run id), `Buffer` (the ring, the unread accounting, the
+  in-flight run registry), and `Screen` (a logview over the buffer with
+  clear / kill / export). Turn it on with `app.Options.OutputKey`; there
+  is no default key, because the shell claiming a letter takes it from
+  every component in every downstream app.
+
+  Two things about it are worth knowing before reading the code. Records
+  are rendered at view time rather than stored pre-rendered, so a theme
+  swap re-colors the whole log instead of leaving a stratigraphy of old
+  palettes (rule 4). And trimming is event-aware: whole events go off the
+  front, so a surviving body line always still has the head naming the
+  command it came from — which is what makes logview's filter mode usable
+  on it.
+
+  Options come from `output.OptionsFrom(t)` rather than a `theme.Output()`
+  method, the one place the library breaks the `th.Component()` convention
+  of rule 3. `Screen` implements `screen.Screen`, `pkg/screen` imports
+  `pkg/theme` for `SetTheme`, so a `Theme` method returning
+  `output.Options` would close an import cycle. Inverting the dependency
+  is what keeps the screen in its own package and testable without an app
+  shell. See `examples/app/output` and rules 14 and 15.
+- **Capturing subprocesses:** `runner.Capture(cmd)` /
+  `runner.CaptureWith(runner.CaptureOptions{Cmd, Label})` run a
+  subprocess without suspending the TUI, posting `CaptureStarted`, a
+  `CapturedLine` per line, then one `Captured`. `runner.Next(msg)` asks
+  for the next message and `runner.Kill(started)` stops the process — the
+  app shell does both for you, and forwards every message to the active
+  screen besides. `pkg/runner` imports nothing from tuilib, so these
+  messages are deliberately neutral: `pkg/app` is what turns them into log
+  records, because the log format, the source attribution and the
+  read-marker are shell knowledge. See rule 15.
 
 When in doubt: read the nearest example and copy its structure. The
 examples are maintained as the source of truth for idiomatic composition.

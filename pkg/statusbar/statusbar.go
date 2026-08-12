@@ -9,8 +9,12 @@
 package statusbar
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+
 	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
@@ -118,18 +122,57 @@ func (m Model) View() string {
 	right := m.rightStyle.Render(m.right)
 	middleW := max(0, m.width-lipgloss.Width(left)-lipgloss.Width(right))
 
-	var middle string
-	switch m.middleKind {
-	case MessageInfo:
-		middle = m.infoStyle.Width(middleW).Render(m.middle)
-	case MessageError:
-		middle = m.errorStyle.Width(middleW).Render(m.middle)
-	default:
-		middle = m.neutralStyle.Width(middleW).Render("")
+	row := left + m.renderMiddle(middleW) + right
+	return lipgloss.NewStyle().Inline(true).MaxWidth(m.width).Width(m.width).Render(row)
+}
+
+// renderMiddle fills the center slot in exactly w cells.
+//
+// The "exactly" is the point, and lipgloss will not do it on its own. Width
+// is a minimum, so a message longer than the slot overflows and shoves the
+// right slot off the end of the bar; and a style with Padding(0,1) renders
+// two cells even for empty content, so a slot sized to zero still costs two.
+// Either way the outer MaxWidth then clips the right-hand end — which used
+// to cost a couple of characters of the version string and now costs the
+// output badge, the one thing on the bar saying the full text is still
+// readable.
+func (m Model) renderMiddle(w int) string {
+	if w <= 0 {
+		return ""
 	}
 
-	row := left + middle + right
-	return lipgloss.NewStyle().Inline(true).MaxWidth(m.width).Width(m.width).Render(row)
+	style, text := m.neutralStyle, ""
+	switch m.middleKind {
+	case MessageInfo:
+		style, text = m.infoStyle, m.middle
+	case MessageError:
+		style, text = m.errorStyle, m.middle
+	}
+
+	// Too narrow for the style's own padding: fill with bar background
+	// rather than let the padding alone overrun the slot.
+	if w <= style.GetHorizontalPadding() {
+		return lipgloss.NewStyle().Background(m.barBG).Render(strings.Repeat(" ", w))
+	}
+	return style.Width(w).Render(fit(text, w, style))
+}
+
+// fit cuts s to the space the middle slot actually has.
+//
+// lipgloss's Width is a minimum, not a maximum, so a message longer than the
+// slot pushes the right slot off the end of the bar and the outer MaxWidth
+// then clips it away entirely. That used to cost only the version string.
+// It now costs the output-log badge as well — which is the one piece of the
+// bar you most need when a long error message is on screen.
+func fit(s string, slotW int, style lipgloss.Style) string {
+	avail := slotW - style.GetHorizontalPadding()
+	if avail <= 0 {
+		return ""
+	}
+	if xansi.StringWidth(s) <= avail {
+		return s
+	}
+	return xansi.Cut(s, 0, avail)
 }
 
 func (m *Model) SetRect(r geom.Rect) { m.rect = r; m.width = r.W }
@@ -148,6 +191,27 @@ func (m Model) LeftContentRect() geom.Rect {
 		Gen: m.rect.Gen,
 	}
 }
+
+// RightContentRect returns the rect covering the right slot's text, excluding
+// the style's own padding — the mirror of LeftContentRect.
+//
+// The right slot is flush to the bar's right edge (View sizes the middle to
+// fill whatever the two ends leave), so the slot's position is derived from
+// its own rendered width rather than tracked. The app shell uses this to
+// hit-test the output-log affordance it composes into the slot ahead of the
+// version string.
+func (m Model) RightContentRect() geom.Rect {
+	w := lipgloss.Width(m.right)
+	slot := m.rightStyle.GetPaddingLeft() + w + m.rightStyle.GetPaddingRight()
+	return geom.Rect{
+		X:   m.rect.X + m.rect.W - slot + m.rightStyle.GetPaddingLeft(),
+		Y:   m.rect.Y,
+		W:   w,
+		H:   1,
+		Gen: m.rect.Gen,
+	}
+}
+
 func (m *Model) SetLeft(s string)  { m.left = s }
 func (m *Model) SetRight(s string) { m.right = s }
 
