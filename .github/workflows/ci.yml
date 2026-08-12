@@ -12,7 +12,9 @@
 #   - starts at v0.1.0 if no tags exist
 # Tags are emitted as vX.Y.Z (Go's module system requires the "v" prefix
 # for `go get`). Pre-existing bare-semver tags are still considered when
-# computing the next version.
+# computing the next version. Prerelease and build-metadata tags
+# (v1.2.3-rc.1, v1.2.3+build) are ignored: they are not releases, so they
+# never become the base for the next version.
 
 name: CI
 
@@ -55,30 +57,57 @@ jobs:
           git fetch --tags --force
           # Consider both v-prefixed and legacy bare-semver tags when
           # picking the previous version. --sort=-v:refname ignores a
-          # leading 'v', so the comparison is apples-to-apples.
-          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
-          if [ -z "$LATEST" ]; then
-            NEXT="v0.1.0"
-            BUMP="initial"
+          # leading 'v', so the comparison is apples-to-apples. The glob
+          # is only a prefilter -- it ends in '*', so it also matches
+          # v1.2.3-rc.1, whose "3-rc.1" patch component is not arithmetic.
+          # The regex is what defines a release tag.
+          SEMVER='^v?[0-9]+\.[0-9]+\.[0-9]+$'
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+            grep -E "$SEMVER" | head -n1 || true)
+          RELEASED=$(git tag --points-at HEAD | grep -E "$SEMVER" | head -n1 || true)
+          if [ -n "$RELEASED" ]; then
+            # A re-run over an already-tagged commit reuses its tag instead
+            # of cutting a second version -- the push can succeed and the
+            # release call still fail, and that is the case worth retrying.
+            NEXT="$RELEASED"
+            echo "HEAD is already tagged $NEXT"
           else
-            VERSION=${LATEST#v}
-            MAJOR=${VERSION%%.*}
-            REST=${VERSION#*.}
-            MINOR=${REST%%.*}
-            PATCH=${REST#*.}
-            if echo "$COMMIT_MSG" | grep -Eiq '\b(bug|bugfix|fix)\b'; then
-              PATCH=$((PATCH + 1))
-              BUMP="patch"
+            if [ -z "$LATEST" ]; then
+              NEXT="v0.1.0"
+              BUMP="initial"
             else
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              BUMP="minor"
+              VERSION=${LATEST#v}
+              MAJOR=${VERSION%%.*}
+              REST=${VERSION#*.}
+              MINOR=${REST%%.*}
+              PATCH=${REST##*.}
+              # 10# so a zero-padded component (v0.08.0) reads as decimal
+              # rather than as an invalid octal literal.
+              MAJOR=$((10#$MAJOR))
+              MINOR=$((10#$MINOR))
+              PATCH=$((10#$PATCH))
+              if echo "$COMMIT_MSG" | grep -Eiq '\b(bug|bugfix|fix)\b'; then
+                PATCH=$((PATCH + 1))
+                BUMP="patch"
+              else
+                MINOR=$((MINOR + 1))
+                PATCH=0
+                BUMP="minor"
+              fi
+              NEXT="v${MAJOR}.${MINOR}.${PATCH}"
             fi
-            NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+            echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
+            if git rev-parse -q --verify "refs/tags/$NEXT" >/dev/null; then
+              echo "::error::$NEXT already exists and does not point at HEAD."
+              exit 1
+            fi
+            git tag -a "$NEXT" -m "Release $NEXT"
+            git push origin "$NEXT"
           fi
-          echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
-          git tag -a "$NEXT" -m "Release $NEXT"
-          git push origin "$NEXT"
-          gh release create "$NEXT" \
-            --title "$NEXT" \
-            --generate-notes
+          if gh release view "$NEXT" >/dev/null 2>&1; then
+            echo "Release $NEXT is already published -- nothing to do."
+          else
+            gh release create "$NEXT" \
+              --title "$NEXT" \
+              --generate-notes
+          fi
