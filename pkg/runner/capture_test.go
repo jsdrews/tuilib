@@ -179,3 +179,82 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// A shell that backgrounds work and exits leaves a grandchild holding the
+// pipe's write end. The process is gone, so the run is over — but nothing
+// will ever close that pipe, and a capture that waits for EOF before
+// reporting Captured would leave the run wedged "in flight" forever: still
+// counted by the statusbar badge, and no longer killable, because the only
+// process the consumer has a handle for is already dead.
+//
+// This is what failed on Linux CI. macOS reaches it via the explicit orphan
+// below rather than through `sh -c "sleep 30"`, whose shell execs.
+func TestCaptureFinishesWhenADescendantHoldsThePipe(t *testing.T) {
+	start := time.Now()
+	_, lines, done := drain(t, Capture(exec.Command("sh", "-c",
+		`echo before-orphan; sleep 30 & exit 0`)))
+
+	if done.Err != nil {
+		t.Errorf("Captured.Err = %v, want nil for a clean exit", done.Err)
+	}
+	if elapsed := time.Since(start); elapsed > drainGrace+5*time.Second {
+		t.Errorf("took %v to report Captured — the orphan is gating the run", elapsed)
+	}
+	// Output written before the shell exited must survive the grace path.
+	var got []string
+	for _, l := range lines {
+		got = append(got, l.Text)
+	}
+	if strings.Join(got, ",") != "before-orphan" {
+		t.Errorf("lines = %v, want the output written before the orphan", got)
+	}
+}
+
+// Killing a capture has to stop what the capture spawned. A shell wrapping a
+// build forwards nothing, so signalling only the shell leaves the real work
+// running — holding the pipe, off the badge, with no handle left to stop it.
+func TestKillStopsDescendantsNotJustTheShell(t *testing.T) {
+	cmd := exec.Command("sh", "-c", `sleep 30 & sleep 30 & wait`)
+	started := Capture(cmd)().(CaptureStarted)
+
+	// Let the shell actually spawn its children before signalling.
+	time.Sleep(200 * time.Millisecond)
+	if err := Kill(started); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+
+	start := time.Now()
+	deadline := time.After(10 * time.Second)
+	next := Next(started)
+	for {
+		ch := make(chan tea.Msg, 1)
+		go func(c tea.Cmd) { ch <- c() }(next)
+		select {
+		case m := <-ch:
+			switch v := m.(type) {
+			case Captured:
+				if elapsed := time.Since(start); elapsed > drainGrace+3*time.Second {
+					t.Errorf("took %v to finish — descendants survived the kill", elapsed)
+				}
+				return
+			case CapturedLine:
+				next = Next(v)
+			default:
+				t.Fatalf("unexpected %T", m)
+			}
+		case <-deadline:
+			t.Fatal("killed run never reported Captured; its children outlived the signal")
+		}
+	}
+}
+
+// Pressing "x" on a run that finished a moment earlier is not a failure —
+// the user got what they asked for, and "process already finished" is not
+// something they can act on.
+func TestKillOfAnAlreadyFinishedRunIsNotAnError(t *testing.T) {
+	started, _, _ := drain(t, Capture(exec.Command("sh", "-c", "exit 0")))
+
+	if err := Kill(started); err != nil {
+		t.Errorf("Kill after exit = %v, want nil", err)
+	}
+}

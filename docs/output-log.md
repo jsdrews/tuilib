@@ -462,6 +462,28 @@ columns, gone on a table at 80.
 `TestOutputKeySurvivesACappedHelpPanel` sweeps four widths against a
 24-binding screen.
 
+**6. `Capture` needed process-group kill and a bounded drain.** Found by CI on
+Linux, where `TestKillStopsALongRun` hung; macOS never reproduced it. Two
+distinct defects behind one symptom, both about a descendant outliving the
+process we started and keeping the pipe's write end open:
+
+- **Kill only killed the process we started.** Captures are typically a shell
+  wrapping real work, and the shell forwards nothing — so the build kept
+  running, unreachable, with the consumer's only handle already dead. Fixed by
+  putting the child in its own process group (`Setpgid`) and signalling the
+  group. Windows has no portable equivalent; `capture_windows.go` says so.
+- **`Captured` could never fire.** With `io.Pipe`, `os/exec` spawns a copy
+  goroutine and `Wait` blocks on it until *every* writer closes — so one
+  lingering grandchild wedged the run permanently: still counted by the badge,
+  no longer killable. Fixed by using real `os.Pipe`s (exec hands an `*os.File`
+  straight to the child, so `Wait` tracks only the process) plus a
+  `drainGrace` after which the read ends are closed out from under whatever
+  still holds them.
+
+Also: killing a run that had just exited surfaced "process already finished"
+as a failed kill. `ignoreDone` maps that to success — the user got what they
+asked for and can't act on the difference.
+
 ## Tests
 
 - `pkg/output/buffer_test.go` — trim cuts on event boundaries, oversized events
@@ -473,7 +495,10 @@ columns, gone on a table at 80.
   scoping + `# filter:` header + plain text.
 - `pkg/runner/capture_test.go` — real subprocesses: stdout/stderr split,
   non-zero exit, a binary that never starts, more lines than the channel
-  buffer (backpressure), kill.
+  buffer (backpressure), kill, kill-after-exit, and the two orphan cases from
+  item 6 (a descendant holding the pipe, and a kill that has to reach
+  descendants). Both orphan tests assert an elapsed-time bound, so a
+  regression fails rather than hangs.
 - `pkg/app/output_test.go` — opt-in, auto-capture, detail bodies, `ErrorOf`,
   badge states, toggle + sentinel on both `o` and esc, read-on-close, stderr
   not tinting, one-event-per-capture, footer fit.

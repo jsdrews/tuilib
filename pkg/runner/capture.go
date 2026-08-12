@@ -2,11 +2,14 @@ package runner
 
 import (
 	"bufio"
+	"errors"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -73,14 +76,33 @@ func CaptureWith(opts CaptureOptions) tea.Cmd {
 			return st.started()
 		}
 
-		outR, outW := io.Pipe()
-		errR, errW := io.Pipe()
+		// Real OS pipes rather than io.Pipe, because os/exec hands an
+		// *os.File straight to the child instead of spawning a copy
+		// goroutine — and Wait blocks on those goroutines. With io.Pipe, a
+		// descendant that outlives the process keeps the write end open, the
+		// copy never reaches EOF, and Wait never returns: the run would sit
+		// in the badge forever, reported as still in flight.
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			st.finish(err)
+			return st.started()
+		}
+		errR, errW, err := os.Pipe()
+		if err != nil {
+			outR.Close()
+			outW.Close()
+			st.finish(err)
+			return st.started()
+		}
 		cmd.Stdout = outW
 		cmd.Stderr = errW
+		setProcessGroup(cmd)
 
 		if err := cmd.Start(); err != nil {
 			outW.Close()
 			errW.Close()
+			outR.Close()
+			errR.Close()
 			// Report it as a run that started and immediately ended, so a
 			// consumer's start/end bookkeeping stays symmetric and the
 			// failure still reaches the log.
@@ -88,23 +110,65 @@ func CaptureWith(opts CaptureOptions) tea.Cmd {
 			return st.started()
 		}
 
+		// Drop our copies of the write ends. The child holds its own; the
+		// scanners only see EOF once every copy is closed, so holding these
+		// would mean never finishing.
+		outW.Close()
+		errW.Close()
+
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go st.scan(outR, false, &wg)
 		go st.scan(errR, true, &wg)
 
 		go func() {
-			// Wait returns once the copy goroutines exec created for our
-			// non-*os.File writers have drained, so closing the writers
-			// afterwards is what gives the scanners their EOF.
 			err := cmd.Wait()
-			outW.Close()
-			errW.Close()
-			wg.Wait()
+
+			// The process is gone; anything still holding the pipe is
+			// something it spawned. Give the scanners a moment to drain what
+			// is already buffered, then take the read ends away so the run
+			// is always reported as finished.
+			//
+			// This can only discard bytes sitting unread in the kernel
+			// buffer, which after a grace period means a lingering
+			// descendant. A consumer that is merely slow blocks the scanners
+			// on the channel instead, and that keeps working — the wait
+			// below just takes longer.
+			if !waitFor(&wg, drainGrace) {
+				outR.Close()
+				errR.Close()
+				wg.Wait()
+			}
 			st.finish(err)
 		}()
 
 		return st.started()
+	}
+}
+
+// ignoreDone maps "the process already exited" onto success, so a kill that
+// raced a normal exit doesn't surface as a failure the user can do nothing
+// about.
+func ignoreDone(err error) error {
+	if errors.Is(err, os.ErrProcessDone) {
+		return nil
+	}
+	return err
+}
+
+// drainGrace bounds how long a finished process's output is waited on before
+// the pipes are closed out from under whatever is still holding them.
+const drainGrace = 2 * time.Second
+
+// waitFor reports whether wg finished within d.
+func waitFor(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
 	}
 }
 
@@ -176,14 +240,22 @@ func (s *stream) next() tea.Cmd {
 	}
 }
 
-// Kill signals the subprocess behind a CaptureStarted. Safe to call on a run
-// that never started or has already exited — both report nil, since in either
-// case there is nothing left to stop.
+// Kill stops the subprocess behind a CaptureStarted, and everything it
+// spawned.
+//
+// The "and everything it spawned" is the part that matters. Captures are
+// usually a shell wrapping a build, and killing the shell alone leaves the
+// compiler running — still writing into a pipe nobody reads, with no handle
+// left to stop it by. On Unix the whole process group is signalled; see
+// setProcessGroup, and capture_windows.go for what Windows can't do here.
+//
+// Safe to call on a run that never started or has already exited — both
+// report nil, since in either case there is nothing left to stop.
 func Kill(m CaptureStarted) error {
 	if m.Cmd == nil || m.Cmd.Process == nil {
 		return nil
 	}
-	return m.Cmd.Process.Kill()
+	return killProcess(m.Cmd)
 }
 
 // stream is the live side of a capture: a bounded channel the reader
