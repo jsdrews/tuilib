@@ -202,6 +202,20 @@ example in `examples/`.
     status, never from stderr: plenty of well-behaved tools log progress
     there, and folding that into severity leaves the badge permanently red.
 
+    There are three ways in: the key, the statusbar badge, and **clicking
+    the status message itself** — the sliver is a truncated echo of what
+    the log holds in full, so "show me the rest" is the obvious thing to
+    want from it, and the colored band it renders as spans the whole
+    center slot. The message opens but never toggles: the console raises
+    messages of its own, and clicking one to close the view that produced
+    it would be backwards.
+
+    Opening the console **clears the statusbar message**. The message is a
+    truncated echo of something the log is about to show in full, so
+    leaving it up puts a stale sliver under the view that supersedes it.
+    Closing does not clear, so a notice the console itself raised (the
+    path `w` reports after an export) survives the trip out.
+
     **Don't list the output key in your screen's `Help()`.** This is the
     one global the shell advertises for you, and it would otherwise show
     up twice. It is the exception because it is *opt-in* — `q` and `t`

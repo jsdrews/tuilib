@@ -900,6 +900,21 @@ func (m *Model) toggleOutput() tea.Cmd {
 	if m.outputOnTop() {
 		return m.popOutput()
 	}
+
+	// Opening retires the statusbar message. It is a truncated echo of
+	// something the console is about to show in full, so leaving it up means
+	// a stale sliver sitting under the very log that supersedes it.
+	//
+	// Doing it here rather than relying on the statusbar's own KeyMsg
+	// auto-clear is what makes the two entry points agree: the key path was
+	// already clearing as a side effect of being a keypress, while clicking
+	// the badge left the message behind.
+	//
+	// Only on the way in. Closing must not clear, or a notice raised *by*
+	// the console — the path "w" reports after an export — would be wiped on
+	// the way out by a user who clicked the badge to leave.
+	m.sb.ClearMessage()
+
 	if m.outScreen == nil {
 		m.outScreen = output.NewScreen(m.outBuf, m.outOpts)
 	}
@@ -950,6 +965,24 @@ func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
 	if m.badgeW > 0 {
 		slot := m.sb.RightContentRect()
 		if slot.Hit(e.X, e.Y) && e.X-slot.X < m.badgeW {
+			return m.toggleOutput(), true
+		}
+	}
+
+	// Clicking the status message opens the console. The message is a
+	// truncated echo of something the log holds in full, so "show me the
+	// rest" is the obvious thing to want from it — and the colored band it
+	// renders as spans the whole center slot, which makes the target
+	// something the user can actually see.
+	//
+	// Open, never toggle. The console raises messages of its own (the export
+	// path), and clicking one of those to *close* the view that produced it
+	// would be backwards.
+	if m.outputEnabled() && m.sb.MessageKind() != statusbar.MessageNone {
+		if m.sb.MiddleContentRect().Hit(e.X, e.Y) {
+			if m.outputOnTop() {
+				return nil, true
+			}
 			return m.toggleOutput(), true
 		}
 	}

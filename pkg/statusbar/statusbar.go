@@ -212,6 +212,27 @@ func (m Model) RightContentRect() geom.Rect {
 	}
 }
 
+// MiddleContentRect returns the rect covering the center slot — the message
+// region — derived the same way View sizes it, from whatever the two ends
+// leave.
+//
+// The whole slot is the target, not just the text: an active message is
+// rendered with Width(slot), so its background fills the full span and the
+// colored band the user sees *is* the slot. Callers should gate on
+// MessageKind, since a neutral slot is indistinguishable from bar padding
+// and clicking it should mean nothing.
+func (m Model) MiddleContentRect() geom.Rect {
+	left := lipgloss.Width(m.leftStyle.Render(m.left))
+	right := lipgloss.Width(m.rightStyle.Render(m.right))
+	return geom.Rect{
+		X:   m.rect.X + left,
+		Y:   m.rect.Y,
+		W:   max(0, m.rect.W-left-right),
+		H:   1,
+		Gen: m.rect.Gen,
+	}
+}
+
 func (m *Model) SetLeft(s string)  { m.left = s }
 func (m *Model) SetRight(s string) { m.right = s }
 
