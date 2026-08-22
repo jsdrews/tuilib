@@ -28,7 +28,9 @@
 // is mid-typing a "key:val" term the filter pane's bottom-left slot lists
 // the column's distinct values matching val, and tab completes val to the
 // longest common prefix of the remaining candidates — regex terms skip
-// the hint since enumerating regex matches isn't useful.
+// the hint since enumerating regex matches isn't useful. The grammar
+// itself lives in pkg/query, so a caller translating the same filter into
+// a remote request gets the identical parse without importing this package.
 //
 // Horizontal nav: ←/→ (or h/l) scroll by HScrollStep cells; 0/home jump
 // to the leftmost edge; $/end jump to the rightmost edge; shift+←/shift+→
@@ -42,11 +44,30 @@
 // override per-column with Column.Less for numeric, date, or unit-aware
 // sort. SortColumn() / SortDescending() / SetSort(col, desc) carry sort
 // state across SetTheme rebuilds the same way Cursor / Value do.
+//
+// Remote sources: Options.FilterMode and Options.SortMode decide whether
+// the table answers the filter and sort itself or reports them for someone
+// else to answer. Under FilterRemote / SortRemote the table displays its
+// rows exactly as given and emits QueryChangedMsg when the user commits a
+// filter or requests a sort; the screen turns that into a request and
+// pushes the result back through SetRows / SetKeyedRows. Filter hints come
+// from SetDistinct rather than from the rows on screen, since a single page
+// of a larger set completes to values that are wrong rather than merely
+// incomplete. The two modes are independent — a table can sort remotely
+// while filtering the page it holds, or the reverse.
+//
+// SetWindow(rows, offset, total) is the other half: the table holds only
+// the logical indices [offset, offset+len(rows)) of a set total rows long,
+// while the cursor, the scrollbar and the counters all work against total.
+// Indices the window doesn't hold render as Options.Placeholder and report
+// ok=false from Selected, so scrolling past the loaded range shows filler
+// rather than wrong data and a screen can't act on a row it never
+// received. Pair it with ViewportChangedMsg, which reports the logical
+// range now on screen — that is the signal to fetch the next window.
 package table
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -61,6 +82,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/query"
 )
 
 // Column declares one column's title, width (in visible cells), and cell
@@ -179,6 +201,66 @@ type ViewportChangedMsg struct {
 	TotalRows int
 }
 
+// FilterMode selects who applies the filter the user types.
+type FilterMode int
+
+const (
+	// FilterLocal applies the filter to the rows the table holds. This is
+	// the zero value, so existing tables keep filtering themselves.
+	FilterLocal FilterMode = iota
+	// FilterRemote stops the table filtering its own rows and makes it
+	// report committed queries as QueryChangedMsg instead. The rows the
+	// table holds are already the answer to the last query, so they are
+	// displayed as given.
+	FilterRemote
+)
+
+// SortMode selects who applies the sort.
+type SortMode int
+
+const (
+	// SortLocal reorders the rows the table holds. Zero value.
+	SortLocal SortMode = iota
+	// SortRemote leaves row order alone and reports the requested sort as
+	// QueryChangedMsg. The ▲/▼ header marker still tracks the active
+	// column, so the user sees what they asked for while it is in flight.
+	SortRemote
+)
+
+// QueryChangedMsg is emitted when the query a remote source should answer
+// changes — a filter the user committed, or a sort they requested. It only
+// fires when FilterMode is FilterRemote or SortMode is SortRemote;
+// a fully local table never emits it.
+//
+// Filters are reported on commit, not per keystroke: enter, esc, or the
+// filter losing focus. Typing is not a query, and a request per keystroke
+// is a request storm. Tab completion is likewise silent — it edits the
+// in-progress term without committing it.
+//
+// The message does not move the cursor. A screen answering it typically
+// resets cursor and offset to the top, since row 40 of the previous result
+// set means nothing in the next one — but doing that here would jump the
+// cursor through stale rows a frame before the new ones land, so it is the
+// screen's call. Consecutive duplicate queries are elided, and the
+// state-restoration setters (SetSort, SetValue) adopt their new state
+// silently, so a SetTheme rebuild never reads as a user-driven change.
+type QueryChangedMsg struct {
+	// Raw is the committed filter text exactly as typed. Empty when the
+	// filter is empty or FilterMode is FilterLocal.
+	Raw string
+	// Terms is Raw parsed against the column titles. Scoped terms carry
+	// the resolved Title, so building "?region=europe" needs no lookup.
+	// Nil when Raw is empty.
+	Terms []query.Term
+	// Sort is the active sort column's title, or "" when nothing is
+	// sorted or SortMode is SortLocal.
+	Sort string
+	// SortColumn is that column's index, or -1.
+	SortColumn int
+	// Desc reverses the sort. False when SortColumn is -1.
+	Desc bool
+}
+
 // Options configures a new table. Theme.Table() returns this pre-styled —
 // set Title/Columns/Rows/Filterable/Filter on the returned value.
 type Options struct {
@@ -195,6 +277,19 @@ type Options struct {
 	// "key:value" column scope, "~regex" prefix, and the distinct-value
 	// hint + tab completion that fires while typing a "key:" term.
 	Filterable bool
+
+	// FilterMode selects who applies the filter. Defaults to FilterLocal.
+	// FilterRemote requires Filterable — without a filter bar there is no
+	// query to report.
+	FilterMode FilterMode
+	// SortMode selects who applies the sort. Defaults to SortLocal.
+	SortMode SortMode
+	// Placeholder is the cell text drawn for a row inside the logical
+	// range that the current window doesn't hold — see SetWindow.
+	// Defaults to "·". Pre-style it foreground-only (pkg/ansi.CellColor)
+	// if you want it dimmed, the same way Borders glyphs are styled, so
+	// the selected-row background passes through unbroken.
+	Placeholder string
 
 	// Pane pass-throughs.
 	ActiveColor    lipgloss.TerminalColor
@@ -349,6 +444,27 @@ type Model struct {
 
 	filter     filter.Model
 	filterable bool
+	filterMode FilterMode
+	sortMode   SortMode
+
+	// Query tracking for QueryChangedMsg. qRaw/qSortCol/qSortDesc hold the
+	// last emitted query, which doubles as the committed filter text while
+	// the user is mid-edit. qSortCol starts at -1 to match "no sort", so a
+	// freshly built table doesn't emit before the user touches anything.
+	qRaw      string
+	qSortCol  int
+	qSortDesc bool
+	qPending  bool
+
+	// Windowing. When windowed, rows holds only [winStart, winStart+len)
+	// of a logical set winTotal long (-1 when the source can't say), and
+	// every cursor / scroll / count reads through rowCount and rowAt
+	// rather than touching visible directly.
+	windowed    bool
+	winStart    int
+	winTotal    int
+	placeholder Row
+	phGlyph     string
 
 	// sortCol is the active sort column index (-1 = no sort).
 	// sortDesc reverses the comparator when true.
@@ -418,7 +534,12 @@ func New(opts Options) Model {
 		cols:          cols,
 		rows:          append([]Row(nil), opts.Rows...),
 		filterable:    opts.Filterable,
+		filterMode:    opts.FilterMode,
+		sortMode:      opts.SortMode,
 		sortCol:       -1,
+		qSortCol:      -1,
+		winTotal:      -1,
+		phGlyph:       opts.Placeholder,
 		headerStyle:   opts.HeaderStyle,
 		selectedStyle: opts.SelectedStyle,
 		cellStyle:     opts.CellStyle,
@@ -432,6 +553,10 @@ func New(opts Options) Model {
 		vpTotal:       -1,
 		focusIdx:      -1,
 	}
+	if m.phGlyph == "" {
+		m.phGlyph = "·"
+	}
+	m.rebuildPlaceholder()
 	m.visible = m.rows
 	m.visibleIdx = identityIndex(len(m.rows))
 	m.rebuildDistinct()
@@ -509,17 +634,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.Down):
-		if m.cursor < len(m.visible)-1 {
+		if m.cursor < m.rowCount()-1 {
 			m.cursor++
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.Top):
-		if m.cursor != 0 && len(m.visible) > 0 {
+		if m.cursor != 0 && m.rowCount() > 0 {
 			m.cursor = 0
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.Bottom):
-		if last := len(m.visible) - 1; last >= 0 && m.cursor != last {
+		if last := m.rowCount() - 1; last >= 0 && m.cursor != last {
 			m.cursor = last
 			m.refresh()
 		}
@@ -529,7 +654,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.HalfDown):
-		if last := len(m.visible) - 1; last >= 0 && m.cursor < last {
+		if last := m.rowCount() - 1; last >= 0 && m.cursor < last {
 			m.cursor = min(last, m.cursor+m.halfPage())
 			m.refresh()
 		}
@@ -573,7 +698,7 @@ func (m Model) View() string { return m.body.View() }
 func (m Model) Help() []key.Binding {
 	if m.filterable && m.filter.Focused() {
 		out := m.filter.Help()
-		if _, _, _, ok := m.activeKeyTerm(); ok {
+		if _, ok := m.activeTerm(); ok {
 			out = append(out, key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "complete")))
 		}
 		return out
@@ -633,11 +758,108 @@ func (m Model) filterHeader() string {
 	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
 }
 
+// rowCount is the number of rows the cursor can reach — the logical total
+// when windowed (which is larger than what is resident), otherwise the
+// post-filter visible count. Every bounds check goes through here; using
+// len(visible) in windowed mode would pin the cursor to the page.
+func (m Model) rowCount() int {
+	if !m.windowed {
+		return len(m.visible)
+	}
+	if m.winTotal >= 0 {
+		return m.winTotal
+	}
+	// Unknown total: the user can reach the end of what has loaded, and
+	// arriving there is what asks the source for more.
+	return m.winStart + len(m.rows)
+}
+
+// rowAt returns the row at logical index i. ok is false when i is out of
+// range, and also when the index is inside the logical range but outside
+// the resident window — callers that need something to draw substitute
+// the placeholder, callers that need real data must not.
+func (m Model) rowAt(i int) (Row, bool) {
+	if i < 0 || i >= m.rowCount() {
+		return nil, false
+	}
+	if !m.windowed {
+		return m.visible[i], true
+	}
+	if j := i - m.winStart; j >= 0 && j < len(m.rows) {
+		return m.rows[j], true
+	}
+	return nil, false
+}
+
+// rebuildPlaceholder caches the filler row drawn for unresident indices,
+// one glyph per column. Rebuilt whenever the column set changes.
+func (m *Model) rebuildPlaceholder() {
+	row := make(Row, len(m.cols))
+	for i := range row {
+		row[i] = m.phGlyph
+	}
+	m.placeholder = row
+}
+
+// SetWindow installs a sparse window: rows are the logical indices
+// [offset, offset+len(rows)) of a set total rows long. Pass total < 0 when
+// the source can't say (cursor-paginated APIs); the table then treats the
+// end of what has loaded as the end, which grows as more arrives.
+//
+// The cursor is a logical index and does not move when a window lands, so
+// scrolling to row 800 and having that window arrive leaves the cursor on
+// row 800. Indices the window doesn't hold render as Placeholder and
+// report ok=false from Selected, so a screen can't act on a row it hasn't
+// actually received.
+//
+// Windowing implies the rows are the source's answer: filter and sort are
+// never applied locally to a window, whatever FilterMode / SortMode say,
+// because filtering one page of a larger set is not filtering. Pair it
+// with FilterRemote / SortRemote so the query the user builds actually
+// reaches the source. Prefer fixed or Flex column widths too —
+// content-auto sizes to the widest resident cell, so columns reflow every
+// time the window swaps.
+func (m *Model) SetWindow(rows []Row, offset, total int) {
+	if offset < 0 {
+		offset = 0
+	}
+	m.windowed = true
+	m.winStart = offset
+	m.winTotal = total
+	m.rows = append([]Row(nil), rows...)
+	m.rowKeys = nil
+	m.rebuildDistinct()
+	m.recomputeWidths()
+	m.applyFilter()
+	m.refresh()
+}
+
+// Window reports the resident window: the logical index of its first row,
+// how many rows are resident, and the logical total (-1 when unknown).
+// A coordinator turning ViewportChangedMsg into fetches reads this to
+// decide whether the rows on screen are already in hand.
+func (m Model) Window() (offset, count, total int) {
+	if !m.windowed {
+		return 0, len(m.rows), len(m.rows)
+	}
+	return m.winStart, len(m.rows), m.winTotal
+}
+
+// clearWindow returns the table to holding its whole row set, so the
+// non-windowed setters undo a previous SetWindow rather than leaving a
+// stale offset behind.
+func (m *Model) clearWindow() {
+	m.windowed = false
+	m.winStart = 0
+	m.winTotal = -1
+}
+
 // SetRows replaces the row set, re-applies the current filter, redraws.
 // Cursor is preserved by visible index — fine for static datasets, but
 // callers polling a live source should prefer SetKeyedRows so the cursor
 // rebinds to the same logical row even when neighbours come and go.
 func (m *Model) SetRows(rows []Row) {
+	m.clearWindow()
 	m.rows = append([]Row(nil), rows...)
 	m.rowKeys = nil
 	m.rebuildDistinct()
@@ -654,6 +876,7 @@ func (m *Model) SetRows(rows []Row) {
 // sort state are preserved across the swap. This is the primitive
 // pkg/poll uses to keep the user's place across periodic refreshes.
 func (m *Model) SetKeyedRows(rows []KeyedRow) {
+	m.clearWindow()
 	prevKey, hadKey := m.SelectedKey()
 	prevCursor := m.cursor
 
@@ -688,6 +911,7 @@ func (m *Model) SetKeyedRows(rows []KeyedRow) {
 // effective widths recompute on the next refresh.
 func (m *Model) SetColumns(cols []Column) {
 	m.cols = append([]Column(nil), cols...)
+	m.rebuildPlaceholder()
 	m.rebuildDistinct()
 	m.recomputeWidths()
 	m.refresh()
@@ -695,11 +919,15 @@ func (m *Model) SetColumns(cols []Column) {
 
 // SetCursor moves the cursor (clamped) and scrolls to keep it on screen.
 func (m *Model) SetCursor(n int) {
-	m.cursor = max(0, min(n, len(m.visible)-1))
+	m.cursor = max(0, min(n, m.rowCount()-1))
 	m.refresh()
 }
 
-// SetValue overwrites the filter text (no-op when not filterable).
+// SetValue overwrites the filter text (no-op when not filterable). Under
+// FilterRemote this adopts the new text as the committed baseline without
+// emitting QueryChangedMsg — it is the setter a SetTheme rebuild uses, and
+// a rebuild is not a new query. Call Query() yourself if you set a filter
+// programmatically and want it fetched.
 func (m *Model) SetValue(s string) {
 	if !m.filterable {
 		return
@@ -707,6 +935,24 @@ func (m *Model) SetValue(s string) {
 	m.filter.SetValue(s)
 	m.applyFilter()
 	m.refresh()
+	m.syncQuery()
+}
+
+// SetDistinct supplies the candidate values behind col's filter hint and
+// tab completion. This is the FilterRemote counterpart to scraping them
+// from resident rows: feed it a facet endpoint, an enum, or a schema, and
+// completion suggests values the source actually has rather than the
+// handful that happen to be on this page. Values are normalized on the way
+// in, so pass them however the server spells them.
+//
+// Under FilterLocal the candidates are recomputed from the rows on the next
+// row or column change, which will overwrite anything set here.
+func (m *Model) SetDistinct(col int, values []string) {
+	if col < 0 || col >= len(m.cols) {
+		return
+	}
+	m.ensureDistinct()
+	m.distinct[col] = query.NormalizeValues(values)
 }
 
 // SetTitle updates the title rendered on the body pane's top border.
@@ -774,18 +1020,23 @@ func (m *Model) SetSelectedStyle(s lipgloss.Style) { m.selectedStyle = s; m.refr
 func (m *Model) SetCellStyle(s lipgloss.Style)     { m.cellStyle = s; m.refresh() }
 
 // Selected returns the currently highlighted row. ok is false when the
-// visible set (post-filter) is empty.
+// visible set (post-filter) is empty, and — under SetWindow — when the
+// cursor sits on a logical index the resident window doesn't hold, so a
+// screen never acts on a row it hasn't received.
 func (m Model) Selected() (Row, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.visible) {
-		return nil, false
-	}
-	return m.visible[m.cursor], true
+	return m.rowAt(m.cursor)
 }
 
 // SelectedIndex returns the highlighted row's index into the original
 // (pre-filter) Rows() slice. Use this when callers maintain a parallel
 // source slice and need to identify which source row is selected.
 func (m Model) SelectedIndex() (int, bool) {
+	if m.windowed {
+		if m.cursor < 0 || m.cursor >= m.rowCount() {
+			return 0, false
+		}
+		return m.cursor, true
+	}
 	if m.cursor < 0 || m.cursor >= len(m.visibleIdx) {
 		return 0, false
 	}
@@ -837,6 +1088,8 @@ func (m Model) SortDescending() bool { return m.sortDesc }
 // SetSort sets the sort column and direction. col == -1 disables sort;
 // otherwise col must reference a Sortable column. Use this on rebuild
 // (theme swap) to carry SortColumn/SortDescending across the new model.
+// Under SortRemote it adopts the sort silently, for the same reason
+// SetValue does: restoring state is not the user asking for a new sort.
 func (m *Model) SetSort(col int, desc bool) {
 	if col < 0 || col >= len(m.cols) || !m.cols[col].Sortable {
 		m.sortCol = -1
@@ -847,6 +1100,7 @@ func (m *Model) SetSort(col int, desc bool) {
 	}
 	m.applyFilter()
 	m.refresh()
+	m.syncQuery()
 }
 
 // Value returns the current filter text.
@@ -873,7 +1127,7 @@ func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }
 // ---- internals -------------------------------------------------------------
 
 func (m *Model) applyFilter() {
-	if !m.filterable {
+	if !m.filterable || m.filterMode == FilterRemote || m.windowed {
 		m.visible = append([]Row(nil), m.rows...)
 		m.visibleIdx = identityIndex(len(m.rows))
 	} else {
@@ -882,11 +1136,11 @@ func (m *Model) applyFilter() {
 			m.visible = append([]Row(nil), m.rows...)
 			m.visibleIdx = identityIndex(len(m.rows))
 		} else {
-			terms := m.parseFilter(q)
+			terms := query.Parse(q, m.columnTitles())
 			out := make([]Row, 0, len(m.rows))
 			idx := make([]int, 0, len(m.rows))
 			for i, r := range m.rows {
-				if rowMatchesAll(r, terms) {
+				if query.MatchAll(r, terms) {
 					out = append(out, r)
 					idx = append(idx, i)
 				}
@@ -896,14 +1150,17 @@ func (m *Model) applyFilter() {
 		}
 	}
 	m.applySort()
-	if m.cursor >= len(m.visible) {
-		m.cursor = max(0, len(m.visible)-1)
+	if m.cursor >= m.rowCount() {
+		m.cursor = max(0, m.rowCount()-1)
 	}
 }
 
 // applySort sorts visible (and visibleIdx in lockstep) by the active
 // sort column. No-op when sortCol is unset, out of range, or not Sortable.
 func (m *Model) applySort() {
+	if m.sortMode == SortRemote || m.windowed {
+		return
+	}
 	if m.sortCol < 0 || m.sortCol >= len(m.cols) {
 		return
 	}
@@ -1020,107 +1277,24 @@ func (m *Model) toggleSortDir() bool {
 	return true
 }
 
-// filterTerm is one space-separated clause from the filter input. col == -1
-// matches any cell ("bare" term); col >= 0 matches only that column's cell.
-// When re is non-nil the term matches via regex; otherwise value (already
-// lowercased) is matched as a substring against the lowercased cell text.
-type filterTerm struct {
-	col   int
-	value string
-	re    *regexp.Regexp
-}
-
-// parseFilter splits the filter string into AND-ed terms. A term shaped
-// "key:value" is column-scoped when key (case-insensitively) is a prefix
-// of exactly one column title; otherwise the whole term (key:value) is
-// treated as a bare any-cell substring so the user can search for literal
-// colons. A term whose value starts with "~" is compiled as a
-// case-insensitive regex (e.g. "~^new", "region:~^euro"); on compile error
-// or a lone "~" the term falls back to a literal substring including the
-// tilde, so the parser never refuses input.
-func (m Model) parseFilter(q string) []filterTerm {
-	parts := strings.Fields(q)
-	out := make([]filterTerm, 0, len(parts))
-	for _, p := range parts {
-		if i := strings.Index(p, ":"); i > 0 && i < len(p)-1 {
-			key, val := p[:i], p[i+1:]
-			if col := m.columnByPrefix(key); col >= 0 {
-				out = append(out, compileTerm(col, val))
-				continue
-			}
-		}
-		out = append(out, compileTerm(-1, p))
+// columnTitles returns the column titles in column order — the shape
+// pkg/query resolves "key:value" scopes against. Hidden columns are
+// included: they are filterable even though they aren't drawn.
+func (m Model) columnTitles() []string {
+	out := make([]string, len(m.cols))
+	for i, c := range m.cols {
+		out[i] = c.Title
 	}
 	return out
 }
 
-// compileTerm builds a filterTerm from a raw clause. A leading "~" requests
-// regex matching; on compile failure the raw text (including the tilde) is
-// kept as a literal substring so the user always sees results for what
-// they typed.
-func compileTerm(col int, raw string) filterTerm {
-	if strings.HasPrefix(raw, "~") && len(raw) > 1 {
-		if re, err := regexp.Compile("(?i)" + raw[1:]); err == nil {
-			return filterTerm{col: col, re: re}
-		}
+// activeTerm reports the in-progress "key:val" term in the filter input,
+// or ok=false when the table isn't filterable or nothing is being typed.
+func (m Model) activeTerm() (query.Active, bool) {
+	if !m.filterable {
+		return query.Active{}, false
 	}
-	return filterTerm{col: col, value: strings.ToLower(raw)}
-}
-
-// columnByPrefix returns the index of the unique column whose Title starts
-// with key (case-insensitive). Returns -1 when there is no match or when
-// the prefix is ambiguous across multiple columns.
-func (m Model) columnByPrefix(key string) int {
-	key = strings.ToLower(key)
-	match := -1
-	for i, c := range m.cols {
-		if strings.HasPrefix(strings.ToLower(c.Title), key) {
-			if match >= 0 {
-				return -1
-			}
-			match = i
-		}
-	}
-	return match
-}
-
-// rowMatchesAll returns true when every term matches r. Bare terms (col<0)
-// match any cell; column-scoped terms match only that column. Cells are
-// ANSI-stripped before matching; substring terms also lowercase, regex
-// terms rely on the (?i) flag set during compile.
-func rowMatchesAll(r Row, terms []filterTerm) bool {
-	for _, t := range terms {
-		if t.col >= 0 {
-			cell := ""
-			if t.col < len(r) {
-				cell = r[t.col]
-			}
-			if !t.matches(cell) {
-				return false
-			}
-			continue
-		}
-		hit := false
-		for _, cell := range r {
-			if t.matches(cell) {
-				hit = true
-				break
-			}
-		}
-		if !hit {
-			return false
-		}
-	}
-	return true
-}
-
-// matches reports whether the (ANSI-stripped) cell satisfies the term.
-func (t filterTerm) matches(cell string) bool {
-	stripped := ansi.Strip(cell)
-	if t.re != nil {
-		return t.re.MatchString(stripped)
-	}
-	return strings.Contains(strings.ToLower(stripped), t.value)
+	return query.ActiveTerm(m.filter.Value(), m.columnTitles())
 }
 
 // halfPage is the cursor step for ctrl+u/ctrl+d — half the viewport
@@ -1300,15 +1474,16 @@ func (m *Model) recomputeWidths() {
 // meaningful window exists.
 func (m Model) viewport() (first, last, total int, valid bool) {
 	dr := m.dataRows()
-	if dr <= 0 || len(m.visible) == 0 {
+	n := m.rowCount()
+	if dr <= 0 || n == 0 {
 		return 0, 0, 0, false
 	}
 	first = m.viewStart
 	last = first + dr - 1
-	if last >= len(m.visible) {
-		last = len(m.visible) - 1
+	if last >= n {
+		last = n - 1
 	}
-	total = len(m.visible)
+	total = n
 	return first, last, total, true
 }
 
@@ -1367,8 +1542,8 @@ func rowCellsEqual(a, b []string) bool {
 // emitted a non-empty focus — an initially-empty table skips the msg so
 // parents don't get an Empty ping before any rows exist.
 func (m *Model) noteFocus() {
-	empty := len(m.visible) == 0 || m.cursor < 0 || m.cursor >= len(m.visible)
-	if empty {
+	cur, resident := m.rowAt(m.cursor)
+	if !resident {
 		if !m.focusInit || m.focusIdx == -1 {
 			return
 		}
@@ -1377,7 +1552,7 @@ func (m *Model) noteFocus() {
 		m.focusPending = true
 		return
 	}
-	cells := []string(m.visible[m.cursor])
+	cells := []string(cur)
 	if m.focusInit && m.focusIdx == m.cursor && rowCellsEqual(m.focusCells, cells) {
 		return
 	}
@@ -1386,11 +1561,82 @@ func (m *Model) noteFocus() {
 	m.focusPending = true
 }
 
-// flushMsgs batches every pending emit (viewport, focus) into a single
-// tea.Cmd. Update return paths call this so callers don't need to know
-// which specific subset changed on any given tick.
+// flushMsgs batches every pending emit (viewport, focus, query) into a
+// single tea.Cmd. Update return paths call this so callers don't need to
+// know which specific subset changed on any given tick.
 func (m *Model) flushMsgs() tea.Cmd {
-	return tea.Batch(m.flushViewport(), m.flushFocus())
+	return tea.Batch(m.flushViewport(), m.flushFocus(), m.flushQuery())
+}
+
+// currentQuery samples the query a remote source should be answering. A
+// focused filter reports its last committed text rather than what is being
+// typed, so a sort change mid-edit doesn't leak a half-written filter.
+func (m Model) currentQuery() (raw string, sortCol int, sortDesc bool) {
+	sortCol = -1
+	if m.sortMode == SortRemote {
+		sortCol, sortDesc = m.sortCol, m.sortDesc
+	}
+	if m.filterMode == FilterRemote && m.filterable {
+		if m.filter.Focused() {
+			raw = m.qRaw
+		} else {
+			raw = strings.TrimSpace(m.filter.Value())
+		}
+	}
+	return raw, sortCol, sortDesc
+}
+
+// noteQuery marks a QueryChangedMsg when the committed query differs from
+// the last emitted one. Called from refresh, so every state change samples
+// it; duplicates are elided here rather than at the call sites.
+func (m *Model) noteQuery() {
+	if m.filterMode != FilterRemote && m.sortMode != SortRemote {
+		return
+	}
+	raw, sortCol, sortDesc := m.currentQuery()
+	if raw == m.qRaw && sortCol == m.qSortCol && sortDesc == m.qSortDesc {
+		return
+	}
+	m.qRaw, m.qSortCol, m.qSortDesc = raw, sortCol, sortDesc
+	m.qPending = true
+}
+
+// syncQuery adopts the current query as the emitted baseline without
+// emitting. The state-restoration setters use it so a SetTheme rebuild —
+// which replays the filter text and sort onto a fresh model (rule 4) —
+// doesn't read as a user-driven change and trigger a refetch.
+func (m *Model) syncQuery() {
+	m.qRaw, m.qSortCol, m.qSortDesc = m.currentQuery()
+	m.qPending = false
+}
+
+// flushQuery returns a tea.Cmd carrying the pending QueryChangedMsg and
+// clears the pending flag, or nil when the query hasn't changed.
+func (m *Model) flushQuery() tea.Cmd {
+	if !m.qPending {
+		return nil
+	}
+	m.qPending = false
+	msg := m.Query()
+	return func() tea.Msg { return msg }
+}
+
+// Query returns the query a remote source should currently be answering.
+// Screens call it for the first fetch, before the user has touched
+// anything, so the initial load runs through the same code path as every
+// QueryChangedMsg that follows.
+func (m Model) Query() QueryChangedMsg {
+	raw, sortCol, sortDesc := m.currentQuery()
+	out := QueryChangedMsg{Raw: raw, SortColumn: -1}
+	if raw != "" {
+		out.Terms = query.Parse(raw, m.columnTitles())
+	}
+	if sortCol >= 0 && sortCol < len(m.cols) {
+		out.Sort = m.cols[sortCol].Title
+		out.SortColumn = sortCol
+		out.Desc = sortDesc
+	}
+	return out
 }
 
 // flushFocus returns a tea.Cmd carrying the pending RowFocusedMsg and
@@ -1503,12 +1749,12 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		}
 		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
 		row := m.viewStart + (line - m.headerRows())
-		if row >= 0 && row < len(m.visible) {
+		if row >= 0 && row < m.rowCount() {
 			m.cursor = row
 			m.refresh()
-			if e.IsDoubleClick() {
+			if cur, resident := m.rowAt(m.cursor); resident && e.IsDoubleClick() {
 				idx, tok := m.cursor, m.token
-				cells := append([]string(nil), m.visible[idx]...)
+				cells := append([]string(nil), cur...)
 				cmds = append(cmds, func() tea.Msg {
 					return ActivatedMsg{Row: idx, Cells: cells, Token: tok}
 				})
@@ -1577,7 +1823,7 @@ func (m Model) columnAt(x int) (int, bool) {
 // it. The table windows its own rows from viewStart, so setting both keeps
 // adjustViewStart from sliding the window back on the next refresh.
 func (m *Model) scrollTo(row int) {
-	n := len(m.visible)
+	n := m.rowCount()
 	if n == 0 {
 		return
 	}
@@ -1595,7 +1841,7 @@ func (m *Model) scrollTo(row int) {
 // moveCursor steps the cursor by delta, clamped to the visible set.
 func (m *Model) moveCursor(delta int) {
 	next := m.cursor + delta
-	if next < 0 || next >= len(m.visible) {
+	if next < 0 || next >= m.rowCount() {
 		return
 	}
 	m.cursor = next
@@ -1627,7 +1873,7 @@ func (m *Model) adjustViewStart() {
 	if m.cursor >= m.viewStart+dr {
 		m.viewStart = m.cursor - dr + 1
 	}
-	maxStart := max(0, len(m.visible)-dr)
+	maxStart := max(0, m.rowCount()-dr)
 	if m.viewStart > maxStart {
 		m.viewStart = maxStart
 	}
@@ -1641,9 +1887,10 @@ func (m *Model) refresh() {
 	header := m.headerStyle.Render(renderRow(m.headerCells(), m.cols, m.widths, m.colSep))
 
 	dr := m.dataRows()
+	n := m.rowCount()
 	end := m.viewStart + dr
-	if end > len(m.visible) {
-		end = len(m.visible)
+	if end > n {
+		end = n
 	}
 
 	var b strings.Builder
@@ -1654,7 +1901,11 @@ func (m *Model) refresh() {
 	}
 	for i := m.viewStart; i < end; i++ {
 		b.WriteByte('\n')
-		row := renderRow([]string(m.visible[i]), m.cols, m.widths, m.colSep)
+		cells, resident := m.rowAt(i)
+		if !resident {
+			cells = m.placeholder
+		}
+		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
 		if i == m.cursor {
 			b.WriteString(m.selectedStyle.Render(row))
 		} else {
@@ -1669,96 +1920,66 @@ func (m *Model) refresh() {
 	// Drive the pane's right-edge scrollbar from our logical row counts so
 	// the thumb reflects position within the dataset, not within the
 	// pane's in-viewport slice (which is always one window's worth).
-	m.body.SetVirtualScroll(len(m.visible), dr, m.viewStart)
+	m.body.SetVirtualScroll(n, dr, m.viewStart)
 
 	if m.filterable {
-		m.body.SetBottomLeft(fmt.Sprintf("%d / %d", len(m.visible), len(m.rows)))
+		// Windowed, the interesting ratio is how much of the set is in
+		// hand; otherwise it's how much of it survived the filter.
+		held := len(m.visible)
+		if m.windowed {
+			held = len(m.rows)
+		}
+		m.body.SetBottomLeft(fmt.Sprintf("%d / %s", held, m.totalLabel()))
 		m.filter.SetBottomLeft(m.filterHint())
 	}
-	if len(m.visible) > 0 {
-		m.body.SetBottomRight(fmt.Sprintf("%d / %d", m.cursor+1, len(m.visible)))
+	if n > 0 {
+		m.body.SetBottomRight(fmt.Sprintf("%d / %s", m.cursor+1, m.totalLabel()))
 	} else {
 		m.body.SetBottomRight("")
 	}
 
 	m.noteViewport()
 	m.noteFocus()
+	m.noteQuery()
 }
 
-// rebuildDistinct populates m.distinct[i] with the sorted unique
-// (lowercased, ANSI-stripped) values appearing in column i. Cheap to
-// recompute; called only on row/column mutations, not per keystroke.
+// totalLabel renders the logical row count for the pane's border slots.
+// A window whose source didn't report a total gets a trailing "+", since
+// what the table can currently reach is a floor, not the total.
+func (m Model) totalLabel() string {
+	if m.windowed && m.winTotal < 0 {
+		return fmt.Sprintf("%d+", m.rowCount())
+	}
+	return fmt.Sprintf("%d", m.rowCount())
+}
+
+// rebuildDistinct recomputes the per-column candidate sets backing the
+// filter hint and tab completion. Cheap to recompute; called only on
+// row/column mutations, not per keystroke.
 func (m *Model) rebuildDistinct() {
-	m.distinct = make([][]string, len(m.cols))
-	for i := range m.cols {
-		seen := make(map[string]struct{}, len(m.rows))
-		vals := make([]string, 0, len(m.rows))
-		for _, r := range m.rows {
-			if i >= len(r) {
-				continue
-			}
-			v := strings.ToLower(ansi.Strip(r[i]))
-			if v == "" {
-				continue
-			}
-			if _, ok := seen[v]; ok {
-				continue
-			}
-			seen[v] = struct{}{}
-			vals = append(vals, v)
-		}
-		sort.Strings(vals)
-		m.distinct[i] = vals
+	if m.filterMode == FilterRemote || m.windowed {
+		// Candidates come from SetDistinct, not from resident rows: one page
+		// of a larger set completes to answers that are wrong rather than
+		// merely incomplete. Keep whatever was fed, resized to the columns.
+		m.ensureDistinct()
+		return
 	}
+	raw := make([][]string, len(m.rows))
+	for i, r := range m.rows {
+		raw[i] = r
+	}
+	m.distinct = query.Distinct(raw, len(m.cols))
 }
 
-// activeKeyTerm inspects the filter value and returns the column index +
-// in-progress value of the trailing `key:val` term, when one is being
-// typed. ok is false when the filter is empty, the trailing token isn't a
-// resolvable key:val term, or the value is a regex (`~…` — enumerating
-// regex matches isn't a useful hint).
-func (m Model) activeKeyTerm() (col int, key, val string, ok bool) {
-	if !m.filterable {
-		return 0, "", "", false
+// ensureDistinct resizes the candidate table to the current column count,
+// preserving the entries that survive the resize.
+func (m *Model) ensureDistinct() {
+	if len(m.distinct) == len(m.cols) {
+		return
 	}
-	v := m.filter.Value()
-	if v == "" || strings.HasSuffix(v, " ") || strings.HasSuffix(v, "\t") {
-		return 0, "", "", false
-	}
-	tok := v
-	if i := strings.LastIndexAny(v, " \t"); i >= 0 {
-		tok = v[i+1:]
-	}
-	i := strings.Index(tok, ":")
-	if i <= 0 {
-		return 0, "", "", false
-	}
-	key = tok[:i]
-	val = tok[i+1:]
-	if strings.HasPrefix(val, "~") {
-		return 0, "", "", false
-	}
-	col = m.columnByPrefix(key)
-	if col < 0 {
-		return 0, "", "", false
-	}
-	return col, key, val, true
-}
-
-// hintCandidates returns the distinct values for col whose lowercased form
-// starts with the lowercased prefix.
-func (m Model) hintCandidates(col int, prefix string) []string {
-	if col < 0 || col >= len(m.distinct) {
-		return nil
-	}
-	prefix = strings.ToLower(prefix)
-	var out []string
-	for _, v := range m.distinct[col] {
-		if strings.HasPrefix(v, prefix) {
-			out = append(out, v)
-		}
-	}
-	return out
+	next := make([][]string, len(m.cols))
+	copy(next, m.distinct)
+	m.distinct = next
 }
 
 // filterHint formats the hint string written into the filter pane's
@@ -1768,11 +1989,11 @@ func (m Model) filterHint() string {
 	if !m.filter.Focused() {
 		return ""
 	}
-	col, _, val, ok := m.activeKeyTerm()
+	act, ok := m.activeTerm()
 	if !ok {
 		return ""
 	}
-	cands := m.hintCandidates(col, val)
+	cands := query.Candidates(m.distinct, act.Column, act.Value)
 	if len(cands) == 0 {
 		return ""
 	}
@@ -1787,50 +2008,18 @@ func (m Model) filterHint() string {
 }
 
 // completeFilterTerm extends the in-progress key:val term to the longest
-// common prefix of its remaining hint candidates and writes it back into
-// the filter. Returns true when the value actually changed.
+// common prefix of its remaining candidates and writes it back into the
+// filter. Returns true when the value actually changed.
 func (m *Model) completeFilterTerm() bool {
-	col, key, val, ok := m.activeKeyTerm()
+	if !m.filterable {
+		return false
+	}
+	next, ok := query.Complete(m.filter.Value(), m.columnTitles(), m.distinct)
 	if !ok {
 		return false
 	}
-	cands := m.hintCandidates(col, val)
-	if len(cands) == 0 {
-		return false
-	}
-	common := longestCommonPrefix(cands)
-	if len(common) <= len(val) {
-		return false
-	}
-	v := m.filter.Value()
-	tokStart := 0
-	if i := strings.LastIndexAny(v, " \t"); i >= 0 {
-		tokStart = i + 1
-	}
-	newVal := v[:tokStart] + key + ":" + common
-	if newVal == v {
-		return false
-	}
-	m.filter.SetValue(newVal)
+	m.filter.SetValue(next)
 	return true
-}
-
-func longestCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	prefix := strs[0]
-	for _, s := range strs[1:] {
-		n := 0
-		for n < len(prefix) && n < len(s) && prefix[n] == s[n] {
-			n++
-		}
-		prefix = prefix[:n]
-		if prefix == "" {
-			break
-		}
-	}
-	return prefix
 }
 
 func (m Model) headerCells() []string {

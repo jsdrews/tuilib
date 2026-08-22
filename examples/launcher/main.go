@@ -39,6 +39,7 @@ import (
 	datametrics "github.com/jsdrews/tuilib/examples/data/metrics"
 	datapoll "github.com/jsdrews/tuilib/examples/data/poll"
 	datapolltable "github.com/jsdrews/tuilib/examples/data/polltable"
+	dataremote "github.com/jsdrews/tuilib/examples/data/remote"
 	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
 	datarunner "github.com/jsdrews/tuilib/examples/data/runner"
 	datatable "github.com/jsdrews/tuilib/examples/data/table"
@@ -69,6 +70,7 @@ var entries = []entry{
 	{"Inspector — structured record viewer", "A two-column label/value viewer for a synthetic k8s-pod payload, fed through inspector.FromAny so the example shows the typical json.Unmarshal → FromMap path. Sibling labels auto-align per group, ▸/▾ expand nested objects/arrays, / searches labels and values, \\ hides non-matching subtrees while keeping ancestors visible.", datainspector.New},
 	{"Poll — auto-refresh with keyed cursor", "pkg/poll drives a 2s tick that mutates a synthetic job list (status flips, new jobs appear, finished ones drop, ordering changes); SetKeyedItems keeps the cursor pinned to the same job ID across every refresh. p pauses, r refreshes now, +/- adjust cadence. Title shows \"refreshed Xs ago\".", datapoll.New},
 	{"PollTable — deployments table auto-refresh", "pkg/poll + pkg/table SetKeyedRows: a synthetic deployments table whose Sync/Health/Replicas drift each tick and dirty rows float to the top. The cursor stays on the same deployment ID even as ordering changes. p pauses, r refreshes now, +/- adjust cadence; standard filter (env:prod, health:~degraded) and sort ([/]/s) still work.", datapolltable.New},
+	{"Remote — paged source behind a sparse table", "The whole windowed-source loop: pkg/source coordinating a pkg/table in FilterRemote/SortRemote over a simulated 5,000-row API that answers one 100-row page at a time with 250ms of latency. Scroll faster than it answers and you see the \"·\" placeholders the table draws for rows it hasn't received; the cursor stays put and the data arrives under it. / filters at the source (enter commits — one request, not one per keystroke), [/]/s sorts there too, r refetches the current window. Tab-completion candidates come from SetDistinct, since one page can't know every region.", dataremote.New},
 	{"Metrics — inline Badge/Ratio/Bar/Spark", "pkg/metrics inline primitives composed into a polled deployments table: Ratio for replica counts (\"6/6\" green / \"3/4\" yellow), Badge for pod-state breakdown (\"6✓ 1⚠ 2✗\"), Bar+percent for CPU, Spark for 24s CPU history. Same poll cadence + keyed cursor as PollTable. Demonstrates that metrics primitives compose cleanly into existing components — no new screens, no new layout.", datametrics.New},
 	{"Themes — live palette picker", "Cursor re-skins the whole app; enter shows a theme's field palette.", themecheck.New},
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
