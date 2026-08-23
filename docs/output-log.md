@@ -484,6 +484,30 @@ Also: killing a run that had just exited surfaced "process already finished"
 as a failed kill. `ignoreDone` maps that to success — the user got what they
 asked for and can't act on the difference.
 
+**7. Opening the console clears the statusbar message.** Not in the design.
+The message is a truncated echo of something the log is about to show in
+full, so leaving it up parks a stale sliver under the view that supersedes
+it. Doing it explicitly on open is also what makes the two entry points
+agree: the key path was already clearing, but only as a side effect of being
+a keypress (`statusbar.Update` wipes on any `KeyMsg`), so clicking the badge
+behaved differently for the same action.
+
+Deliberately on open only. Closing must not clear, or a notice the console
+itself raised — the path `w` reports after an export — is wiped on the way
+out by a user who clicked the badge to leave.
+
+**8. The status message is clickable too.** Not in the design, which gave the
+console two entry points (key, badge). The sliver is a truncated echo of what
+the log holds in full, so it is the most natural thing in the footer to click,
+and an active message renders with `Width(slot)` — its background fills the
+whole center slot, so the target is something the user can actually see.
+Needed `statusbar.MiddleContentRect`, the third of the slot rects.
+
+Gated on `MessageKind != MessageNone`: a neutral center slot is
+indistinguishable from bar padding, and clicking blank footer space must not
+navigate. And it opens rather than toggles, or clicking the export notice
+would close the console that produced it.
+
 ## Tests
 
 - `pkg/output/buffer_test.go` — trim cuts on event boundaries, oversized events

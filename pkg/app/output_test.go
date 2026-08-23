@@ -12,9 +12,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/output"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -425,5 +428,164 @@ func TestOutputKeySurvivesACappedHelpPanel(t *testing.T) {
 		if !strings.Contains(stripANSI(m.View()), "o output") {
 			t.Errorf("w=%d: output key dropped off the end of the capped help panel", w)
 		}
+	}
+}
+
+// openConsole opens the console either by key or by clicking the badge, so
+// tests can assert the two entry points agree.
+func openConsole(t *testing.T, m Model, byMouse bool) Model {
+	t.Helper()
+	if !byMouse {
+		return send(t, m, typeKey("o"))
+	}
+	m.placeChrome()
+	slot := m.sb.RightContentRect()
+	return send(t, m, tea.MouseMsg{
+		X: slot.X, Y: slot.Y,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+}
+
+// The statusbar message is a truncated echo of what the console shows in
+// full, so opening the console retires it. Both entry points must agree —
+// the key path cleared only as a side effect of being a keypress, which left
+// clicking the badge behaving differently for the same action.
+func TestOpeningTheConsoleClearsTheStatusMessage(t *testing.T) {
+	for _, byMouse := range []bool{false, true} {
+		m := newOutputApp(t, &stubScreen{name: "Deploy"})
+		m = send(t, m, StatusErrorMsg{Text: "deploy failed: exit 1"})
+		if _, kind := m.sb.Message(); kind == statusbar.MessageNone {
+			t.Fatalf("byMouse=%v: message never showed", byMouse)
+		}
+
+		m = openConsole(t, m, byMouse)
+		if !m.outputOnTop() {
+			t.Fatalf("byMouse=%v: console did not open", byMouse)
+		}
+		if _, kind := m.sb.Message(); kind != statusbar.MessageNone {
+			t.Errorf("byMouse=%v: stale message left under the console", byMouse)
+		}
+	}
+}
+
+// Closing must not clear, or a notice the console itself raised — the path
+// "w" reports after an export — is wiped on the way out by a user who
+// clicked the badge to leave.
+func TestClosingTheConsoleKeepsANoticeItRaised(t *testing.T) {
+	m := newOutputApp(t, &stubScreen{name: "Deploy"})
+	// The badge only exists once there is something to look at, so give the
+	// buffer a record before trying to click it.
+	m = send(t, m, StatusInfoMsg{Text: "deployment triggered"})
+
+	m = openConsole(t, m, true)
+	if !m.outputOnTop() {
+		t.Fatal("badge click did not open the console")
+	}
+
+	m = send(t, m, output.Notice{Text: "wrote /tmp/output-20260812-142301.log"})
+	if _, kind := m.sb.Message(); kind == statusbar.MessageNone {
+		t.Fatal("export notice never showed")
+	}
+
+	m = openConsole(t, m, true) // same affordance, now closes
+	if m.outputOnTop() {
+		t.Fatal("badge click did not close the console")
+	}
+	if msg, kind := m.sb.Message(); kind == statusbar.MessageNone {
+		t.Error("export path wiped on the way out; the user never got to read it")
+	} else if !strings.Contains(msg, "output-20260812") {
+		t.Errorf("statusbar shows %q, want the export path", msg)
+	}
+}
+
+// middleSlot places the shell's chrome and returns the statusbar's center
+// slot. Placing first is required: View sizes the bars on a copy of the
+// Model (its receiver is by value), so the real rects come only from
+// placeChrome.
+func middleSlot(t *testing.T, m *Model) geom.Rect {
+	t.Helper()
+	m.placeChrome()
+	r := m.sb.MiddleContentRect()
+	if r.W <= 0 {
+		t.Fatalf("center slot has no width to click: %+v", r)
+	}
+	return r
+}
+
+// pressChrome sends a press straight at clickChrome and reports whether the
+// shell consumed it. Going through the shell's own handler rather than
+// Update is what makes "the click landed" observable — asserting only on
+// what changed afterwards passes just as well when the click missed.
+func pressChrome(t *testing.T, m *Model, x, y int) (tea.Cmd, bool) {
+	t.Helper()
+	return m.clickChrome(mouse.Msg{
+		MouseMsg: tea.MouseMsg{
+			X: x, Y: y,
+			Action: tea.MouseActionPress,
+			Button: tea.MouseButtonLeft,
+		},
+		Clicks: 1,
+	})
+}
+
+// The message is a truncated echo of something the log holds in full, so
+// clicking it is the obvious way to ask for the rest.
+func TestClickingTheStatusMessageOpensTheConsole(t *testing.T) {
+	m := newOutputApp(t, &stubScreen{name: "Deploy"})
+	m = send(t, m, StatusErrorMsg{Text: "deploy failed", Body: "the full stderr"})
+
+	slot := middleSlot(t, &m)
+	cmd, handled := pressChrome(t, &m, slot.X+slot.W/2, slot.Y)
+	if !handled {
+		t.Fatal("shell did not consume a click on the status message")
+	}
+	if cmd != nil {
+		m = send(t, m, cmd())
+	}
+
+	if !m.outputOnTop() {
+		t.Error("clicking the status message did not open the console")
+	}
+}
+
+// Only while a message is up. A neutral center slot looks exactly like bar
+// padding, and clicking blank footer space must not navigate anywhere.
+func TestClickingABlankCenterSlotDoesNothing(t *testing.T) {
+	m := newOutputApp(t, &stubScreen{name: "Deploy"})
+	m = send(t, m, StatusInfoMsg{Text: "hello"}) // gives the buffer a record
+	m = send(t, m, ClearStatus()())
+
+	slot := middleSlot(t, &m)
+	if _, handled := pressChrome(t, &m, slot.X+slot.W/2, slot.Y); handled {
+		t.Error("shell claimed a click on an empty center slot")
+	}
+	if m.outputOnTop() {
+		t.Error("clicking an empty center slot opened the console")
+	}
+}
+
+// The console raises messages of its own — the path "w" reports after an
+// export. Clicking one of those to close the view that produced it would be
+// backwards, so the message opens and never toggles.
+func TestClickingAMessageRaisedByTheConsoleDoesNotCloseIt(t *testing.T) {
+	m := newOutputApp(t, &stubScreen{name: "Deploy"})
+	m = send(t, m, typeKey("o"))
+	if !m.outputOnTop() {
+		t.Fatal("console did not open")
+	}
+
+	m = send(t, m, output.Notice{Text: "wrote /tmp/output-20260812-142301.log"})
+
+	slot := middleSlot(t, &m)
+	cmd, handled := pressChrome(t, &m, slot.X+slot.W/2, slot.Y)
+	if !handled {
+		t.Fatal("shell did not consume the click; the rest of this proves nothing")
+	}
+	if cmd != nil {
+		m = send(t, m, cmd())
+	}
+
+	if !m.outputOnTop() {
+		t.Error("clicking the export notice closed the console that produced it")
 	}
 }

@@ -202,6 +202,20 @@ example in `examples/`.
     status, never from stderr: plenty of well-behaved tools log progress
     there, and folding that into severity leaves the badge permanently red.
 
+    There are three ways in: the key, the statusbar badge, and **clicking
+    the status message itself** — the sliver is a truncated echo of what
+    the log holds in full, so "show me the rest" is the obvious thing to
+    want from it, and the colored band it renders as spans the whole
+    center slot. The message opens but never toggles: the console raises
+    messages of its own, and clicking one to close the view that produced
+    it would be backwards.
+
+    Opening the console **clears the statusbar message**. The message is a
+    truncated echo of something the log is about to show in full, so
+    leaving it up puts a stale sliver under the view that supersedes it.
+    Closing does not clear, so a notice the console itself raised (the
+    path `w` reports after an export) survives the trip out.
+
     **Don't list the output key in your screen's `Help()`.** This is the
     one global the shell advertises for you, and it would otherwise show
     up twice. It is the exception because it is *opt-in* — `q` and `t`
@@ -611,6 +625,61 @@ example in `examples/`.
     rendering, or a click lands on a different row than the one under
     the pointer.
 
+29. **Back a table with a remote source via `pkg/source`, and let
+    scrolling be the pagination.** When the rows live behind an API,
+    three pieces divide the work and none of them does the others' job:
+
+    - **`pkg/table`** reports and displays. `FilterMode: FilterRemote`
+      and `SortMode: SortRemote` stop it answering the filter and sort
+      itself; it emits `QueryChangedMsg` instead. `SetWindow(rows,
+      offset, total)` makes it sparse — it holds one window, draws
+      `Placeholder` elsewhere, and runs the cursor, scrollbar and
+      counters against `total`.
+    - **`pkg/source`** decides *what to ask for*. It owns offset/limit
+      (or the cursor token), the held window, the logical total, and a
+      generation per request. It does no I/O, exactly as `pkg/poll`
+      touches no data.
+    - **Your screen** does the fetch. That is the whole reason the
+      coordinator is a separate package: every component here is
+      synchronous, and a component owning a context, a retry policy and
+      an in-flight request would drag all three into a value-receiver
+      `Update`.
+
+    The loop is five lines of routing:
+
+    ```go
+    func (s *Screen) Init() tea.Cmd { return s.src.Init() }
+
+    case table.ViewportChangedMsg:
+        return s, s.src.Viewport(m.FirstVisible, m.LastVisible)
+    case table.QueryChangedMsg:
+        return s, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc)
+    case source.RequestMsg:
+        return s, s.fetch(m.Query)          // your HTTP call
+    case fetchedMsg:
+        if !s.src.Deliver(m.page) {
+            return s, nil                   // stale; drop the rows
+        }
+        s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total)
+    ```
+
+    `SetWindow` makes the table emit a fresh `ViewportChangedMsg`, which
+    is what closes the loop — a short page that still doesn't cover the
+    screen asks for the rest by itself, and a covered viewport asks for
+    nothing. `Init` exists because an empty component reports no
+    viewport, so nothing else would ever request the first page.
+
+    **Check what `Deliver` returns.** Every request carries its own
+    generation and only the newest is accepted, which is what stops a
+    slow reply to the previous filter painting itself under the current
+    one, and stops out-of-order window replies fighting. A screen that
+    ignores the bool re-introduces both races.
+
+    Pagination is a wire protocol, not a UI. The user scrolls; windows
+    arrive under them. Don't add `n`/`p` page keys — they collide with
+    rule 25's reservations and impose a second navigation model on a
+    component that already scrolls. See `examples/data/remote`.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -705,6 +774,40 @@ example in `examples/`.
   summary plus a body, `app.ErrorOf` for a `%w` chain. Cramming a stack
   trace into `app.Error` produces exactly the sliver-of-footer problem the
   console exists to fix.
+- **Don't paginate by swapping `SetRows` per page.** That is a page
+  control bolted onto a component that already scrolls: two navigation
+  models, `n`/`p` colliding with keys rule 25 reserves, and a cursor that
+  resets to the top on every page. `SetWindow` makes scrolling *be* the
+  pagination — the wire protocol stays offset/limit, but the user just
+  scrolls and windows arrive under them. Discrete pages are the special
+  case (a window that never prefetches), not the default.
+- **Don't read a placeholder row as data.** Under `SetWindow`, `Selected`
+  returns `ok=false` for an index the window doesn't hold, and
+  double-click emits no `ActivatedMsg` there — check the bool rather than
+  indexing the row, or a drilldown will happily open `·`. `RowFocusedMsg`
+  reports `Empty` for the same reason: nothing is focused until the row
+  actually arrives.
+- **Don't give a windowed table content-auto column widths.** Widths are
+  computed from the resident window, so every swap reflows the columns
+  under the user. Use fixed `Width` or `Flex` when the rows are paged in.
+- **Don't scrape filter completions from a remote table's rows.** Under
+  `FilterRemote` the rows on screen are one page of a larger set, so
+  values scraped from them complete to answers that are *wrong*, not
+  merely incomplete — the user tabs to `region:eu` and gets `europe`
+  because that page happened to hold no `eu-west`. The table stops
+  scraping in remote mode for exactly this reason; feed `SetDistinct`
+  from whatever the source can actually enumerate, or accept no hints.
+- **Don't emit a query per keystroke.** A remote filter that fires on
+  every character is a request storm, and the responses race — the reply
+  to `eu` can land after the reply to `euro`. `pkg/table` reports on
+  commit, and a screen driving its own filter should debounce or wait
+  for enter rather than reacting to every `Value()` change.
+- **Don't let a state-restoration setter look like a user action.**
+  `SetSort` / `SetValue` exist so a `SetTheme` rebuild can replay state
+  onto a fresh model (rule 4); if they emitted `QueryChangedMsg` every
+  theme swap would refetch. They adopt their new state silently — call
+  `Query()` yourself when you set a filter or sort programmatically and
+  do want it fetched.
 - **Don't treat stderr as an error level.** Plenty of well-behaved tools
   write progress there (`go build`, `git`, `curl`), so mapping stderr onto
   `LevelError` leaves the console badge permanently red and the tint stops
@@ -903,6 +1006,34 @@ path.
   is why it exists as its own package rather than living in `layout`.
   `CenterIn` mirrors `lipgloss.Place`'s centering exactly, so a
   component that draws itself centered can hit-test where it landed.
+- **Filter grammar:** `pkg/query` is the second leaf — `Term`, `Parse`,
+  `ColumnByPrefix`, `Match`/`MatchAll`, plus the completion half
+  (`Distinct`, `ActiveTerm`, `Candidates`, `Complete`). It owns the
+  "bare substring / `key:value` column scope / `~regex`" syntax
+  `pkg/table`'s filter bar exposes, and it imports nothing from tuilib
+  for the same reason `pkg/geom` doesn't: the component that applies a
+  filter to rows it holds and a coordinator that turns the same filter
+  into a remote request need the identical parse, and neither should
+  import the other to get it. `Term.Title` carries the resolved column
+  title (not the prefix the user typed) so a scoped term maps onto a
+  query parameter directly. `Parse` never fails — an unresolvable key or
+  an uncompilable regex degrades to a literal substring, so the filter
+  bar never refuses input. Feeding `Distinct` values scraped from one
+  page of a paged source produces completions that are *wrong* rather
+  than merely incomplete; a remote caller should pass facet values
+  instead.
+- **Remote paging:** `pkg/source` is the coordinator between "the user
+  scrolled here" and "ask the server for that range" — `Query`,
+  `RequestMsg`, `Page`, and a `Model` that owns the held window, the
+  logical total, and a generation per request. `ByOffset` (default)
+  addresses rows numerically and can jump anywhere; `ByCursor` walks an
+  opaque continuation token forward only, accumulating into one growing
+  window at offset 0. `Options.PageSize` sets the window size requests
+  align to (so scrolling within a page asks for nothing); `Prefetch`
+  pulls extra pages ahead of the screen to hide the placeholder flash at
+  boundaries. It imports `pkg/query` and nothing else from tuilib —
+  deliberately not `pkg/table`, so the dependency points one way and the
+  screen does the translating. See rule 29 and `examples/data/remote`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
   cycling, click grants), the `Focusable` interface every component
   satisfies, and the optional `Capturer` that answers rule 5. Components
@@ -1025,7 +1156,35 @@ path.
   between header and data rows. `theme.Table()` ships with subdued
   light-line defaults (`│` and `─` in palette index 240); override per
   screen for a different glyph or color, or set fields to `""` to
-  disable. See `examples/data/table` and `theme.Table()`.
+  disable. `Options.FilterMode` / `Options.SortMode` decide who answers
+  the filter and the sort: the defaults (`FilterLocal` / `SortLocal`)
+  keep today's behavior, while `FilterRemote` / `SortRemote` make the
+  table display its rows exactly as given and emit `QueryChangedMsg`
+  instead. The two are independent — sort remotely while filtering the
+  page you hold, or the reverse. The message carries the raw text, the
+  parsed `[]query.Term` (each scoped term already resolved to its column
+  Title, so `?region=europe` needs no lookup), and the active sort;
+  `Query()` returns the same value on demand, which is how the first
+  fetch runs through the same path as every later change. Filters report
+  on **commit** — enter, esc, or losing focus — never per keystroke, and
+  tab completion is silent because it edits a term rather than
+  submitting one. `SetDistinct(col, values)` feeds completion candidates
+  from a facet endpoint, since remote mode deliberately stops scraping
+  them from resident rows. `SetWindow(rows, offset, total)` makes the
+  table sparse: it holds the logical indices `[offset, offset+len(rows))`
+  of a set `total` rows long, while the cursor, the scrollbar and the
+  counters all work against `total`. Pass `total < 0` when the source
+  can't say (cursor-paginated APIs) — the counter then reads `20+` and
+  grows as pages land. Indices outside the window render as
+  `Options.Placeholder` (default `·`) and report `ok=false` from
+  `Selected`, so scrolling ahead of the data shows filler instead of
+  wrong rows and a screen cannot act on one it never received. The cursor
+  is a logical index and does not move when a window arrives, so
+  scrolling to row 800 and waiting leaves you on row 800.
+  `Window()` reports `(offset, count, total)`; `ViewportChangedMsg`
+  reports the logical range on screen, which is the signal to fetch.
+  `SetRows` / `SetKeyedRows` leave windowed mode. See
+  `examples/data/table` and `theme.Table()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`
   (or `SetContent(s)` at runtime — replaces + resets scroll to top).
