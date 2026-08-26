@@ -1,7 +1,30 @@
-// Package runner runs an interactive subprocess from inside a Bubble Tea
-// program: it suspends the TUI (releasing the terminal so the subprocess
-// can take over stdin/stdout/stderr), executes the command, then re-enters
-// the alt-screen once the subprocess exits.
+// Package runner runs work from inside a Bubble Tea program, in three shapes
+// that differ in what happens to the terminal and to the output.
+//
+//   - Run hands the real TTY to a subprocess, suspending the TUI for the
+//     duration. Right for $EDITOR, less, htop — and the reason its output is
+//     unrecoverable, since the subprocess owns the screen.
+//   - Capture runs a subprocess without suspending anything, streaming its
+//     stdout and stderr back as messages while the TUI stays live.
+//   - Go does the same for work that is not a subprocess at all — an HTTP
+//     call, an API request, a file write — streaming whatever the function
+//     writes to an io.Writer.
+//
+// Capture and Go emit the identical message sequence, so everything
+// downstream handles them the same way: the app shell logs both into the
+// output console, counts each as one event, and offers both in the kill
+// picker. See capture.go and gofunc.go.
+//
+// This package imports nothing from tuilib, which is what makes it safe for
+// anything to depend on. Its messages are deliberately neutral; pkg/app is
+// what turns them into log records, because the log format and the source
+// attribution are shell knowledge.
+//
+// # Run
+//
+// Run suspends the TUI (releasing the terminal so the subprocess can take
+// over stdin/stdout/stderr), executes the command, then re-enters the
+// alt-screen once the subprocess exits.
 //
 // Use it for editors ($EDITOR), pagers (less, man), full-screen TUIs
 // (htop, k9s), or one-shot interactive commands (ssh, kubectl exec). For

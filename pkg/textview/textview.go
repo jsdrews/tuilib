@@ -687,7 +687,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
-		if e.IsPress() {
+		if e.IsPointPress() {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token))
 		}
 		return m, nil
@@ -699,7 +699,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// invisible and keeps swallowing keys. Scrollbar presses returned above,
 	// so dragging the bar leaves a query alive (rule 23: scrolling never
 	// claims the keyboard).
-	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+	if e.IsPointPress() && m.body.Rect().Hit(e.X, e.Y) {
 		m.BlurFilter()
 	}
 
@@ -711,7 +711,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.refreshStatus()
 		return m, nil
 
-	case e.IsPress():
+	case e.IsPointPress():
 		if !m.body.Rect().Hit(e.X, e.Y) {
 			return m, nil
 		}

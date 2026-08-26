@@ -53,6 +53,19 @@ type Options struct {
 	// SelectedColor foregrounds the highlighted row (bold).
 	SelectedColor lipgloss.TerminalColor
 
+	// Markable adds a mark column and binds space / ctrl+a, so the user can
+	// build a multi-selection the screen reads back with Selection().
+	//
+	// Off by default, and it costs a row nothing when off: the gutter stays
+	// two cells wide. Marking requires keyed items (SetKeyedItems) — see
+	// mark.go for why holding marks by index is not an option.
+	Markable bool
+
+	// MarkStyle colors the ✓ on a marked row that isn't under the cursor.
+	// The cursor row is drawn as one styled run instead, so its highlight
+	// cannot be broken mid-row (rule 19).
+	MarkStyle lipgloss.Style
+
 	// SpinnerStyle is applied to the spinner glyph rendered while the list
 	// is in its loading state (see SetLoading). Pass via theme.List() for
 	// a sensible default.
@@ -80,6 +93,7 @@ type Keys struct {
 	Top, Bottom      key.Binding
 	HalfUp, HalfDown key.Binding
 	Filter           key.Binding
+	Mark, MarkAll    key.Binding
 	Pane             pane.Keys
 }
 
@@ -94,7 +108,12 @@ func DefaultKeys() Keys {
 		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
 		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Pane:     pane.DefaultKeys(),
+		// space already means "toggle" in tree, inspector and toggle, so
+		// marking extends the existing vocabulary rather than inventing one.
+		// Neither list nor table bound it.
+		Mark:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
+		MarkAll: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "mark all")),
+		Pane:    pane.DefaultKeys(),
 	}
 }
 
@@ -123,6 +142,12 @@ func (k *Keys) fillDefaults() {
 	}
 	if len(k.Filter.Keys()) == 0 {
 		k.Filter = d.Filter
+	}
+	if len(k.Mark.Keys()) == 0 {
+		k.Mark = d.Mark
+	}
+	if len(k.MarkAll.Keys()) == 0 {
+		k.MarkAll = d.MarkAll
 	}
 	k.Pane.FillDefaults()
 }
@@ -177,6 +202,11 @@ type Model struct {
 	selectedStyle lipgloss.Style
 	hScrollbar    bool
 
+	// marks holds the multi-selection by item key. See mark.go.
+	markable  bool
+	marks     map[string]bool
+	markStyle lipgloss.Style
+
 	keys Keys
 
 	// token is this list's stable identity for focus requests. Update takes
@@ -217,6 +247,9 @@ func New(opts Options) Model {
 		selectedStyle:      lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
 		hScrollbar:         opts.HScrollbar,
 		keys:               opts.Keys,
+		markable:           opts.Markable,
+		marks:              map[string]bool{},
+		markStyle:          opts.MarkStyle,
 		focusIdx:           -1,
 	}
 	m.visible = m.items
@@ -296,10 +329,15 @@ func (m Model) halfPage() int {
 func (m *Model) refresh() {
 	var b strings.Builder
 	for i, it := range m.visible {
-		if i == m.cursor {
-			b.WriteString(m.selectedStyle.Render("▸ " + it))
-		} else {
-			b.WriteString("  " + it)
+		switch {
+		case i == m.cursor:
+			// One styled run over the whole row: a nested mark style would
+			// close the highlight at its first reset (rule 19).
+			b.WriteString(m.selectedStyle.Render(m.prefixFor(i) + it))
+		case m.markable && m.isMarkedAt(i):
+			b.WriteString(" " + m.markStyle.Render(markGlyph) + " " + it)
+		default:
+			b.WriteString(m.prefixFor(i) + it)
 		}
 		b.WriteString("\n")
 	}
@@ -416,7 +454,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// The filter pane owns its own rows; a click there focuses the filter
 	// rather than moving the cursor.
 	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
-		if e.IsPress() {
+		if e.IsPointPress() {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
@@ -428,7 +466,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// invisible and keeps swallowing keys. Scrollbar presses returned above,
 	// so dragging the bar leaves a query alive (rule 23: scrolling never
 	// claims the keyboard).
-	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+	if e.IsPointPress() && m.body.Rect().Hit(e.X, e.Y) {
 		m.BlurFilter()
 	}
 
@@ -447,7 +485,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.moveCursor(1)
 		return m, m.flushMsgs()
 
-	case e.IsPress():
+	case e.IsPointPress():
 		row, ok := m.body.RowAt(e.X, e.Y)
 		if !ok {
 			return m, nil
@@ -456,6 +494,16 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
 		if row < len(m.visible) {
 			m.cursor = row
+			// Clicking the ✓ column toggles the mark, the way a tree's ▸
+			// toggles on a single click — library-drawn chrome is clickable
+			// (rule 28). It returns before the activate branch: a double
+			// click on the mark column would otherwise toggle twice and open
+			// the row as well, which is nobody's intent.
+			if e.IsPress() && m.markable && m.onMarkColumn(e.X) {
+				m.toggleMarkAt(row)
+				cmds = append(cmds, m.flushMsgs())
+				return m, tea.Batch(cmds...)
+			}
 			m.refresh()
 			if e.IsDoubleClick() {
 				idx, item, tok := m.cursor, m.visible[m.cursor], m.token
@@ -564,6 +612,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cursor = min(last, m.cursor+m.halfPage())
 			m.refresh()
 		}
+	case m.markable && key.Matches(km, m.keys.Mark):
+		m.ToggleMark()
+	case m.markable && key.Matches(km, m.keys.MarkAll):
+		m.ToggleMarkAll()
 	default:
 		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
@@ -574,6 +626,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 // View stacks filter (if filterable) and the body pane.
 func (m Model) View() string { return m.body.View() }
+
+// Rect is the area the list occupies, for a caller that needs to test a
+// position against it before acting — deciding whether a right-click landed
+// on this list, say. Matches the accessor input, toggle, form and confirm
+// already expose.
+func (m Model) Rect() geom.Rect { return m.body.Rect() }
 
 // Selected returns the currently highlighted item. ok is false when the
 // visible set (post-filter) is empty.
@@ -635,6 +693,10 @@ func (m Model) Help() []key.Binding {
 	}
 	if m.filterable {
 		out = append(out, m.keys.Filter)
+	}
+	if m.markable {
+		out = append(out, m.keys.Mark, m.keys.MarkAll,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
 	}
 	return out
 }

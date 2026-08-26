@@ -2,17 +2,30 @@ package runner
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// commandLine renders the command a capture is running, as its head line.
+func commandLine(cmd *exec.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	if len(cmd.Args) > 0 {
+		return "$ " + strings.Join(cmd.Args, " ")
+	}
+	return "$ " + cmd.Path
+}
 
 // Capture runs cmd without handing the terminal over, streaming its stdout
 // and stderr back as messages while the TUI stays live.
@@ -53,6 +66,9 @@ type CaptureOptions struct {
 	// line's Source — for captured output the honest answer to "what
 	// produced this line" is the command, not the screen that launched it.
 	Label string
+	// Tag is an opaque correlation token echoed on every message. See
+	// CaptureStarted.Tag.
+	Tag string
 }
 
 // CaptureWith runs a subprocess with the given options. See Capture.
@@ -65,10 +81,12 @@ func CaptureWith(opts CaptureOptions) tea.Cmd {
 		}
 
 		st := &stream{
-			runID: captureSeq.Add(1),
-			label: label,
-			cmd:   cmd,
-			ch:    make(chan tea.Msg, captureBuffer),
+			runID:  captureSeq.Add(1),
+			label:  label,
+			detail: commandLine(cmd),
+			tag:    opts.Tag,
+			cmd:    cmd,
+			ch:     make(chan tea.Msg, captureBuffer),
 		}
 
 		if cmd == nil {
@@ -185,6 +203,25 @@ type CaptureStarted struct {
 	Label string
 	Cmd   *exec.Cmd
 
+	// Tag is an opaque token the caller chose, echoed on every message from
+	// this run.
+	//
+	// It exists because a consumer tracking in-flight work needs to match a
+	// finished run back to whatever it launched it *for*, and neither Label
+	// nor RunID can do that: labels collide across targets, and the RunID is
+	// minted inside the command, after the caller has returned. The app shell
+	// uses it to release the right Exclusive gate.
+	Tag string
+
+	// Detail is the head line describing what is running: the command line
+	// for a subprocess, the label for a Go run.
+	//
+	// It exists because Cmd is nil for a Go run, and a consumer deriving the
+	// head from the command alone renders "(no command)" for every one of
+	// them. Empty on a message built by hand, so a consumer should fall back
+	// to whatever it did before.
+	Detail string
+
 	stream *stream
 }
 
@@ -192,6 +229,7 @@ type CaptureStarted struct {
 type CapturedLine struct {
 	RunID  int64
 	Label  string
+	Tag    string
 	Text   string
 	Stderr bool
 
@@ -204,6 +242,7 @@ type CapturedLine struct {
 type Captured struct {
 	RunID int64
 	Label string
+	Tag   string
 	Cmd   *exec.Cmd
 	Err   error
 
@@ -252,6 +291,12 @@ func (s *stream) next() tea.Cmd {
 // Safe to call on a run that never started or has already exited — both
 // report nil, since in either case there is nothing left to stop.
 func Kill(m CaptureStarted) error {
+	// A Go run is stopped by cancelling its context, which is cooperative:
+	// fn has to be watching ctx.Done(). One that ignores it keeps running,
+	// and no amount of API can fix that from out here.
+	if m.stream != nil && m.stream.cancel != nil {
+		m.stream.cancel()
+	}
 	if m.Cmd == nil || m.Cmd.Process == nil {
 		return nil
 	}
@@ -261,16 +306,34 @@ func Kill(m CaptureStarted) error {
 // stream is the live side of a capture: a bounded channel the reader
 // goroutines push into and Next pulls from.
 type stream struct {
-	runID int64
-	label string
-	cmd   *exec.Cmd
-	ch    chan tea.Msg
+	runID  int64
+	label  string
+	detail string
+	tag    string
+	cmd    *exec.Cmd
+	ch     chan tea.Msg
+
+	// cancel stops a Go run. Nil for a subprocess capture, which is stopped
+	// by signalling its process group instead.
+	cancel context.CancelFunc
 
 	once sync.Once
 }
 
 func (s *stream) started() CaptureStarted {
-	return CaptureStarted{RunID: s.runID, Label: s.label, Cmd: s.cmd, stream: s}
+	return CaptureStarted{
+		RunID: s.runID, Label: s.label, Detail: s.detail, Tag: s.tag,
+		Cmd: s.cmd, stream: s,
+	}
+}
+
+// line pushes one output line. It blocks when the buffer is full, which is
+// the backpressure a consumer that stops calling Next is meant to feel.
+func (s *stream) line(text string, stderr bool) {
+	s.ch <- CapturedLine{
+		RunID: s.runID, Label: s.label, Tag: s.tag,
+		Text: text, Stderr: stderr, stream: s,
+	}
 }
 
 func (s *stream) scan(r io.Reader, stderr bool, wg *sync.WaitGroup) {
@@ -278,13 +341,7 @@ func (s *stream) scan(r io.Reader, stderr bool, wg *sync.WaitGroup) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
-		s.ch <- CapturedLine{
-			RunID:  s.runID,
-			Label:  s.label,
-			Text:   sc.Text(),
-			Stderr: stderr,
-			stream: s,
-		}
+		s.line(sc.Text(), stderr)
 	}
 }
 
@@ -297,6 +354,7 @@ func (s *stream) finish(err error) {
 			s.ch <- Captured{
 				RunID:  s.runID,
 				Label:  s.label,
+				Tag:    s.tag,
 				Cmd:    s.cmd,
 				Err:    err,
 				stream: s,

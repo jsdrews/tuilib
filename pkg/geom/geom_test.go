@@ -50,3 +50,51 @@ func TestInsetSkipsBorder(t *testing.T) {
 		t.Errorf("Inset(1) = %+v, want %+v", r, want)
 	}
 }
+
+func TestAnchorInPlacesAtThePoint(t *testing.T) {
+	outer := Rect{X: 0, Y: 0, W: 80, H: 24}
+	got := AnchorIn(outer, 10, 4, 20, 6)
+	if got.X != 10 || got.Y != 4 || got.W != 20 || got.H != 6 {
+		t.Errorf("AnchorIn = %+v, want a 20x6 box at (10,4)", got)
+	}
+}
+
+// A menu opened near the bottom-right must flip back inside rather than
+// hanging off the edge.
+func TestAnchorInPushesBackInsideTheFarEdge(t *testing.T) {
+	outer := Rect{X: 0, Y: 0, W: 80, H: 24}
+	got := AnchorIn(outer, 78, 23, 20, 6)
+	if got.X+got.W > 80 || got.Y+got.H > 24 {
+		t.Errorf("AnchorIn = %+v, which overflows an 80x24 outer", got)
+	}
+	if got.X != 60 || got.Y != 18 {
+		t.Errorf("AnchorIn = %+v, want (60,18)", got)
+	}
+}
+
+func TestAnchorInRespectsANonZeroOrigin(t *testing.T) {
+	outer := Rect{X: 5, Y: 3, W: 40, H: 10}
+	if got := AnchorIn(outer, 0, 0, 8, 4); got.X != 5 || got.Y != 3 {
+		t.Errorf("AnchorIn = %+v, want clamping to the outer origin (5,3)", got)
+	}
+	if got := AnchorIn(outer, 100, 100, 8, 4); got.X != 37 || got.Y != 9 {
+		t.Errorf("AnchorIn = %+v, want (37,9)", got)
+	}
+}
+
+// A child bigger than its bounds clamps to the origin, so it is clipped from
+// the far edge rather than sliding out of view at the near one.
+func TestAnchorInClampsAnOversizeChildToTheOrigin(t *testing.T) {
+	outer := Rect{X: 2, Y: 2, W: 10, H: 5}
+	got := AnchorIn(outer, 6, 4, 40, 20)
+	if got.X != 2 || got.Y != 2 {
+		t.Errorf("AnchorIn = %+v, want the outer origin (2,2)", got)
+	}
+}
+
+func TestAnchorInCarriesTheGeneration(t *testing.T) {
+	outer := Rect{X: 0, Y: 0, W: 80, H: 24, Gen: 99}
+	if got := AnchorIn(outer, 3, 3, 10, 4); got.Gen != 99 {
+		t.Errorf("Gen = %d, want 99 — a placed rect must stay hit-testable", got.Gen)
+	}
+}

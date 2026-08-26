@@ -63,11 +63,37 @@ func (m Msg) IsPress() bool {
 // maps it to the same verb as enter — open whatever is under the cursor.
 func (m Msg) IsDoubleClick() bool { return m.IsPress() && m.Clicks >= 2 }
 
+// IsRightPress reports whether this is a right-button press — the gesture
+// that asks "what can I do to this?" and opens the action menu.
+//
+// It carries no click count. Nothing in tuilib binds a right double click, and
+// the Tracker only counts left presses, so a second right press is simply
+// another right press.
+//
+// Worth knowing before you rely on it: whether this ever arrives is the
+// terminal's decision. Most emulators forward right presses once mouse
+// reporting is on, but some (macOS Terminal.app) always show their own context
+// menu instead. Right-click is therefore an accelerator on top of a keyboard
+// path, never the only way to reach something.
+func (m Msg) IsRightPress() bool {
+	return m.Action == tea.MouseActionPress && m.Button == tea.MouseButtonRight
+}
+
 // IsWheelUp / IsWheelDown report vertical wheel movement. Rule 23 makes the
 // wheel behave exactly as the up and down arrows do for the component under
 // the pointer.
 func (m Msg) IsWheelUp() bool   { return m.Button == tea.MouseButtonWheelUp }
 func (m Msg) IsWheelDown() bool { return m.Button == tea.MouseButtonWheelDown }
+
+// IsPointPress reports whether this press is pointing at something — either
+// button.
+//
+// Components use it where the verb is "focus this and put the cursor here",
+// which both buttons mean: a right-click opens a menu about the row under the
+// pointer, so that row has to become the selection first. Only IsPress may
+// *activate* something, which is what keeps a right-click from committing a
+// modal button or flipping a toggle.
+func (m Msg) IsPointPress() bool { return m.IsPress() || m.IsRightPress() }
 
 // Tracker converts tea.MouseMsg into Msg, counting rapid repeat presses in
 // the same cell as double clicks. The app shell owns one; callers running
