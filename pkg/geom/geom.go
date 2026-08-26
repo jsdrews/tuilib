@@ -103,6 +103,30 @@ func CenterIn(outer Rect, w, h int) Rect {
 	return Rect{X: outer.X + dx, Y: outer.Y + dy, W: w, H: h, Gen: outer.Gen}
 }
 
+// AnchorIn returns the rect a w×h child occupies when its top-left is placed
+// at (x, y) inside outer, pushed back inside outer when it would overflow.
+//
+// This is the positioned counterpart to CenterIn, and it is what a context
+// menu needs: opened by a right-click near the bottom-right corner, the box
+// flips up and to the left instead of hanging off the edge. A child larger
+// than outer clamps to outer's origin, so it is clipped from the far edge
+// rather than sliding out of view at the near one.
+func AnchorIn(outer Rect, x, y, w, h int) Rect {
+	if x+w > outer.X+outer.W {
+		x = outer.X + outer.W - w
+	}
+	if y+h > outer.Y+outer.H {
+		y = outer.Y + outer.H - h
+	}
+	if x < outer.X {
+		x = outer.X
+	}
+	if y < outer.Y {
+		y = outer.Y
+	}
+	return Rect{X: x, Y: y, W: w, H: h, Gen: outer.Gen}
+}
+
 var generation atomic.Uint64
 
 // NextGen advances the render generation and returns the new value. The root

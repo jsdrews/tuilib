@@ -18,6 +18,7 @@ package theme
 import (
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/alert"
 	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
@@ -307,6 +308,7 @@ func (t Theme) List() list.Options {
 		InactiveBorder: lipgloss.NormalBorder(),
 		SlotBrackets:   pane.SlotBracketsNone,
 		SelectedColor:  t.Accent,
+		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
@@ -373,6 +375,31 @@ func (t Theme) Alert() alert.Options {
 	}
 }
 
+// Actions returns action.Options pre-filled from the theme — the label in
+// BarFG, the gloss and the key column in Muted, the cursor row bold in Accent,
+// and disabled rows in Subtle so an unavailable verb reads as present but out
+// of reach rather than as ordinary text. Set Title and Set before passing to
+// action.New.
+//
+// Unlike pkg/output, this follows rule 3's th.Component() convention: a Menu
+// is a plain component rather than a screen.Screen, so pkg/action never
+// imports pkg/screen and there is no import cycle to invert.
+func (t Theme) Actions() action.Options {
+	return action.Options{
+		LabelStyle:     lipgloss.NewStyle().Foreground(t.BarFG),
+		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
+		KeyStyle:       lipgloss.NewStyle().Foreground(t.KeyFG),
+		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		DisabledStyle:  lipgloss.NewStyle().Foreground(t.Subtle),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   lipgloss.NormalBorder(),
+		InactiveBorder: lipgloss.NormalBorder(),
+		SlotBrackets:   pane.SlotBracketsNone,
+		Keys:           action.DefaultKeys(),
+	}
+}
+
 // Table returns table.Options pre-filled from the theme — header bold +
 // Current fg, selected row bold + Accent fg + Subtle bg, border colors
 // matching pane, HScrollbar enabled (wide tables are common), spinner in
@@ -383,6 +410,7 @@ func (t Theme) Table() table.Options {
 	return table.Options{
 		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
+		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   lipgloss.NormalBorder(),

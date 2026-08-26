@@ -309,6 +309,17 @@ type Options struct {
 	// SelectedStyle is applied to the highlighted row. theme.Table()
 	// uses bold + Accent fg + Subtle bg.
 	SelectedStyle lipgloss.Style
+
+	// Markable adds a mark gutter and binds space / ctrl+a, so the user can
+	// build a multi-selection the screen reads back with Selection().
+	//
+	// Off by default and free when off: the gutter takes no columns. Marking
+	// requires keyed rows (SetKeyedRows) and is inert on a windowed table —
+	// see mark.go.
+	Markable bool
+
+	// MarkStyle colors the ✓ on a marked row that isn't under the cursor.
+	MarkStyle lipgloss.Style
 	// CellStyle is applied to non-selected rows. Defaults to no style.
 	CellStyle lipgloss.Style
 
@@ -344,6 +355,7 @@ type Keys struct {
 	Top, Bottom        key.Binding
 	HalfUp, HalfDown   key.Binding
 	Filter             key.Binding
+	Mark, MarkAll      key.Binding
 	SortPrev, SortNext key.Binding
 	SortDir            key.Binding
 	ColPrev, ColNext   key.Binding
@@ -360,6 +372,8 @@ func DefaultKeys() Keys {
 		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
 		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
 		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Mark:     key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
+		MarkAll:  key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "mark all")),
 		SortPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "sort col-")),
 		SortNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "sort col+")),
 		SortDir:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort dir")),
@@ -394,6 +408,12 @@ func (k *Keys) fillDefaults() {
 	}
 	if len(k.Filter.Keys()) == 0 {
 		k.Filter = d.Filter
+	}
+	if len(k.Mark.Keys()) == 0 {
+		k.Mark = d.Mark
+	}
+	if len(k.MarkAll.Keys()) == 0 {
+		k.MarkAll = d.MarkAll
 	}
 	if len(k.SortPrev.Keys()) == 0 {
 		k.SortPrev = d.SortPrev
@@ -437,6 +457,9 @@ type Model struct {
 	widths     []int // effective per-column visible widths (base + flex share)
 	rows       []Row
 	rowKeys    []string
+	markable   bool
+	marks      map[string]bool
+	markStyle  lipgloss.Style
 	visible    []Row
 	visibleIdx []int
 	cursor     int
@@ -543,6 +566,9 @@ func New(opts Options) Model {
 		headerStyle:   opts.HeaderStyle,
 		selectedStyle: opts.SelectedStyle,
 		cellStyle:     opts.CellStyle,
+		markable:      opts.Markable,
+		marks:         map[string]bool{},
+		markStyle:     opts.MarkStyle,
 		hScrollbar:    opts.HScrollbar,
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
@@ -673,6 +699,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.applyFilter()
 			m.refresh()
 		}
+	case m.markable && key.Matches(km, m.keys.Mark):
+		m.ToggleMark()
+	case m.markable && key.Matches(km, m.keys.MarkAll):
+		m.ToggleMarkAll()
 	case key.Matches(km, m.keys.ColPrev):
 		cur := m.body.XOffset()
 		if e := m.prevColumnEdge(cur); e >= 0 {
@@ -717,6 +747,10 @@ func (m Model) Help() []key.Binding {
 	}
 	if m.filterable {
 		out = append(out, m.keys.Filter)
+	}
+	if m.markable {
+		out = append(out, m.keys.Mark, m.keys.MarkAll,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
 	}
 	return out
 }
@@ -1404,7 +1438,7 @@ func (m *Model) recomputeWidths() {
 	if !hasFlex {
 		return
 	}
-	inner := m.body.VisibleWidth()
+	inner := m.body.VisibleWidth() - m.gutterW()
 	if inner <= 0 {
 		return
 	}
@@ -1713,7 +1747,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		return m, m.flushMsgs()
 	}
 	if m.filterable && m.filter.Rect().Hit(e.X, e.Y) {
-		if e.IsPress() {
+		if e.IsPointPress() {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
@@ -1725,7 +1759,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// invisible and keeps swallowing keys. Scrollbar presses returned above,
 	// so dragging the bar leaves a query alive (rule 23: scrolling never
 	// claims the keyboard).
-	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+	if e.IsPointPress() && m.body.Rect().Hit(e.X, e.Y) {
 		m.BlurFilter()
 	}
 
@@ -1743,14 +1777,29 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.moveCursor(1)
 		return m, m.flushMsgs()
 
-	case e.IsPress():
+	case e.IsPointPress():
 		if line < m.headerRows() {
-			return m, tea.Batch(m.clickHeader(e.X), focus.RequestSelf(m.token), m.flushMsgs())
+			// Sorting is chrome that acts, so it stays left-only; a right
+			// press on the header still claims focus.
+			var sort tea.Cmd
+			if e.IsPress() {
+				sort = m.clickHeader(e.X)
+			}
+			return m, tea.Batch(sort, focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		cmds := []tea.Cmd{focus.RequestSelf(m.token)}
 		row := m.viewStart + (line - m.headerRows())
 		if row >= 0 && row < m.rowCount() {
 			m.cursor = row
+			// Clicking the ✓ gutter toggles the mark, the way a tree's ▸
+			// toggles on a single click (rule 28). Returns before the
+			// activate branch: a double click here would otherwise toggle
+			// twice and open the row as well.
+			if e.IsPress() && m.markable && m.onMarkColumn(e.X) {
+				m.toggleMarkAt(row)
+				cmds = append(cmds, m.flushMsgs())
+				return m, tea.Batch(cmds...)
+			}
 			m.refresh()
 			if cur, resident := m.rowAt(m.cursor); resident && e.IsDoubleClick() {
 				idx, tok := m.cursor, m.token
@@ -1792,7 +1841,7 @@ func (m *Model) clickHeader(x int) tea.Cmd {
 func (m Model) columnAt(x int) (int, bool) {
 	c := m.body.ContentRect()
 	// Position within the rendered row, undoing the h-scroll offset.
-	pos := (x - c.X) + m.body.XOffset()
+	pos := (x - c.X) + m.body.XOffset() - m.gutterW()
 	if pos < 0 {
 		return 0, false
 	}
@@ -1884,7 +1933,8 @@ func (m *Model) adjustViewStart() {
 
 func (m *Model) refresh() {
 	m.adjustViewStart()
-	header := m.headerStyle.Render(renderRow(m.headerCells(), m.cols, m.widths, m.colSep))
+	gutterPad := strings.Repeat(" ", m.gutterW())
+	header := m.headerStyle.Render(gutterPad + renderRow(m.headerCells(), m.cols, m.widths, m.colSep))
 
 	dr := m.dataRows()
 	n := m.rowCount()
@@ -1906,10 +1956,16 @@ func (m *Model) refresh() {
 			cells = m.placeholder
 		}
 		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
-		if i == m.cursor {
-			b.WriteString(m.selectedStyle.Render(row))
-		} else {
-			b.WriteString(m.cellStyle.Render(row))
+		switch {
+		case i == m.cursor:
+			// One styled run over the whole row, gutter included: a nested
+			// mark style would close the highlight at its first reset and
+			// punch a hole in the selected row's background (rule 19).
+			b.WriteString(m.selectedStyle.Render(m.gutterFor(i) + row))
+		case m.markable && m.isMarkedAt(i):
+			b.WriteString(m.markStyle.Render(markGlyph) + m.cellStyle.Render(" "+row))
+		default:
+			b.WriteString(m.cellStyle.Render(m.gutterFor(i) + row))
 		}
 	}
 	if m.filterable {

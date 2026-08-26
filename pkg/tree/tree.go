@@ -1043,7 +1043,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		return m, m.flushMsgs()
 	}
 	if m.searchable && m.filter.Rect().Hit(e.X, e.Y) {
-		if e.IsPress() {
+		if e.IsPointPress() {
 			return m, tea.Batch(m.FocusFilter(), focus.RequestSelf(m.token), m.flushMsgs())
 		}
 		return m, m.flushMsgs()
@@ -1055,7 +1055,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	// invisible and keeps swallowing keys. Scrollbar presses returned above,
 	// so dragging the bar leaves a query alive (rule 23: scrolling never
 	// claims the keyboard).
-	if e.IsPress() && m.body.Rect().Hit(e.X, e.Y) {
+	if e.IsPointPress() && m.body.Rect().Hit(e.X, e.Y) {
 		m.BlurFilter()
 	}
 
@@ -1074,7 +1074,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.moveCursor(1)
 		return m, m.flushMsgs()
 
-	case e.IsPress():
+	case e.IsPointPress():
 		if !m.body.Rect().Hit(e.X, e.Y) {
 			return m, nil
 		}
@@ -1085,7 +1085,9 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.body.SetFocused(true)
 		if row, ok := m.body.RowAt(e.X, e.Y); ok && row < len(m.rows) {
 			m.cursor = row
-			if m.onGlyph(e.X, m.rows[row]) || e.IsDoubleClick() {
+			// Chrome that acts stays left-only: a right press is asking a
+			// question about the row, not expanding it.
+			if (e.IsPress() && m.onGlyph(e.X, m.rows[row])) || e.IsDoubleClick() {
 				m.toggleCursor()
 			} else {
 				m.refresh()

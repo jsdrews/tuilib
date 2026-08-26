@@ -20,8 +20,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/config"
+	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
@@ -99,6 +101,25 @@ type Options struct {
 	// Capture itself works with this unset — the calling screen still
 	// receives every line; you lose the console, not the pipeline.
 	OutputKey key.Binding
+
+	// ActionsKey opens the action menu (pkg/action) for the active screen,
+	// and is the single switch for the whole feature: leave it zero and no
+	// menu, no right-click handling and no key exist.
+	//
+	// Opt-in for the same reason OutputKey is — a key the shell claims is a
+	// key no component may ever bind, in every app that links the shell.
+	//
+	//	ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions"))
+	//
+	// A screen supplies its verbs by implementing action.Provider. Screens
+	// that don't have none, and the key stays inert on them — the hint is
+	// only advertised where the menu would actually open.
+	ActionsKey key.Binding
+
+	// Actions configures the menu. Leave zero for theme.Actions() against
+	// the current theme; colors come back from the theme on every swap, as
+	// everywhere else in the library.
+	Actions action.Options
 
 	// Output configures the console. Leave zero for output.OptionsFrom
 	// against the initial theme. Non-visual fields (MaxRecords, ExportDir,
@@ -325,7 +346,33 @@ type Model struct {
 
 	mouseMode MouseMode
 	mouse     mouse.Tracker
+
+	// act* are zero unless Options.ActionsKey was set. The menu and the
+	// confirm modal are pointers because View has a value receiver: a
+	// layout.Sized over a value field would place a copy that is discarded
+	// when View returns, and the overlay would never hit-test (see
+	// placeChrome for the same problem in the chrome).
+	actionsKey key.Binding
+	actOpts    action.Options
+	menu       *action.Menu
+	menuUp     bool
+	conf       *confirm.Model
+	confUp     bool
+	pendingAct action.Action
+	pendingTgt string
+
+	// running maps a live action run's Tag (an action.RunKey) to nothing in
+	// particular — it is a set. The shell owns it because it launches the
+	// action, so it holds both the RunKey and the run at once; a screen
+	// doing this has to bridge the two halves by hand.
+	running map[string]bool
 }
+
+// actionsEnabled reports whether the action menu exists for this app.
+func (m Model) actionsEnabled() bool { return m.actionsKey.Keys() != nil }
+
+// overlayUp reports whether the shell is showing the menu or its confirm.
+func (m Model) overlayUp() bool { return m.menuUp || m.confUp }
 
 // outputEnabled reports whether the console exists for this app.
 func (m Model) outputEnabled() bool { return m.outBuf != nil }
@@ -395,6 +442,13 @@ func New(opts Options) Model {
 		mouseMode:   opts.Mouse,
 		mouse:       mouse.NewTracker(opts.DoubleClickInterval),
 	}
+	if opts.ActionsKey.Keys() != nil {
+		m.actionsKey = opts.ActionsKey
+		m.actOpts = mergeActionOptions(opts.Actions, t)
+		menu := action.New(m.actOpts)
+		m.menu = &menu
+		m.running = map[string]bool{}
+	}
 	if opts.OutputKey.Keys() != nil {
 		m.outputKey = opts.OutputKey
 		m.outOpts = mergeOutputOptions(opts.Output, t)
@@ -424,6 +478,27 @@ func mergeOutputOptions(prev output.Options, t theme.Theme) output.Options {
 	return next
 }
 
+// mergeActionOptions rebuilds the menu's themed options, carrying the
+// caller's non-visual knobs across. Same shape as mergeOutputOptions, and for
+// the same reason: colors belong to the theme (rule 4), everything else to the
+// app author.
+func mergeActionOptions(prev action.Options, t theme.Theme) action.Options {
+	next := t.Actions()
+	if prev.Title != "" {
+		next.Title = prev.Title
+	}
+	if prev.MultiReason != "" {
+		next.MultiReason = prev.MultiReason
+	}
+	if prev.RunningReason != "" {
+		next.RunningReason = prev.RunningReason
+	}
+	keys := prev.Keys
+	keys.FillDefaults()
+	next.Keys = keys
+	return next
+}
+
 // Init runs the root screen's Init + OnEnter(nil), and turns on mouse
 // reporting when Options.Mouse asks for it.
 func (m Model) Init() tea.Cmd {
@@ -446,6 +521,17 @@ func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
 func (m *Model) retheme() {
 	t := m.theme()
 	m.stack.SetTheme(t)
+	if m.actionsEnabled() {
+		// Rebuild over the same state (rule 4): the cursor survives, and so
+		// does whatever the menu was opened against.
+		cursor, set := m.menu.Cursor(), m.menu.Set()
+		m.actOpts = mergeActionOptions(m.actOpts, t)
+		menu := action.New(m.actOpts)
+		m.menu = &menu
+		m.menu.SetActions(set)
+		m.menu.SetRunning(m.running)
+		m.menu.SetCursor(cursor)
+	}
 	if m.outputEnabled() {
 		m.outOpts = mergeOutputOptions(m.outOpts, t)
 		if m.outScreen != nil && !m.outputOnTop() {
@@ -555,7 +641,24 @@ func (m Model) composeRight() (slot string, badgeW int) {
 // component is on screen and has some other route to discovery; the output
 // key has none, so it takes the slot that always survives.
 func (m Model) helpBindings(cur screen.Screen) []key.Binding {
+	// While an overlay owns the keyboard, the hints are its own — the
+	// screen's bindings do nothing until it closes.
+	switch {
+	case m.confUp:
+		return m.conf.Help()
+	case m.menuUp:
+		return m.menu.Help()
+	}
+
 	own := cur.Help()
+	if m.actionsEnabled() && !m.currentActions().Empty() {
+		// Advertised by the shell rather than by each screen, for the same
+		// reason the output key is (rule 14): it is opt-in, so a screen
+		// author copying an existing screen has no reason to know it exists.
+		// Only where it would actually open something — a key that opens an
+		// empty box teaches users the feature is broken.
+		own = append([]key.Binding{m.actionsKey}, own...)
+	}
 	if !m.outputEnabled() || m.outputKey.Keys() == nil {
 		return own
 	}
@@ -638,6 +741,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// nil cmd; only the KeyMsg branch mutates state.
 	m.sb, _ = m.sb.Update(msg)
 
+	// Menu results first, so a dismissed overlay never sees a stale
+	// follow-up key.
+	switch a := msg.(type) {
+	case action.ChosenMsg:
+		m.closeOverlay()
+		if a.Action.Confirm != "" {
+			m.armConfirm(a.Action, a.Target)
+			m.apply()
+			return m, nil
+		}
+		cmd := m.runAction(a.Action, a.Target)
+		m.apply()
+		return m, cmd
+
+	case action.CancelledMsg:
+		m.closeOverlay()
+		m.apply()
+		return m, nil
+
+	case confirm.ConfirmedMsg:
+		// Guarded on confUp so a screen hosting its own confirm modal keeps
+		// receiving its own results — the shell claims these only while it
+		// is the one showing the dialog.
+		if m.confUp {
+			act, tgt := m.pendingAct, m.pendingTgt
+			m.closeOverlay()
+			cmd := m.runAction(act, tgt)
+			m.apply()
+			return m, cmd
+		}
+
+	case confirm.CancelledMsg:
+		if m.confUp {
+			m.closeOverlay()
+			m.apply()
+			return m, nil
+		}
+
+	case action.RetargetMsg:
+		// A right-press that missed the menu means "ask me about this one
+		// instead" — one gesture, not dismiss-then-click-again.
+		m.closeOverlay()
+		cmd := m.rightClick(a.Event)
+		m.apply()
+		return m, cmd
+	}
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
@@ -673,6 +823,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		e := m.mouse.Track(msg, time.Now())
+
+		// While an overlay is up it owns the pointer. ZStack hands both
+		// layers the same rect, so a component underneath still believes it
+		// owns the cells the menu covers — occluding it is the host's job,
+		// and here the shell is the host.
+		if m.overlayUp() {
+			cmd := m.updateOverlay(e)
+			m.apply()
+			return m, cmd
+		}
+
+		// Right-click asks "what can I do to this?", so the screen sees the
+		// event first and moves its cursor, and only then does the menu open
+		// against what the pointer actually landed on. Reversed, the menu
+		// would describe whatever happened to be selected before.
+		if e.IsRightPress() && m.actionsEnabled() {
+			cmd := m.rightClick(e)
+			m.apply()
+			return m, cmd
+		}
+
 		// The shell owns its own chrome, exactly as it owns the keys that
 		// drive it — a screen should no more handle a crumb click than it
 		// handles esc-pop.
@@ -735,7 +906,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.outBuf.Append(output.Record{
 				Level:  output.LevelInfo,
 				Source: msg.Label,
-				Text:   commandLine(msg.Cmd),
+				Text:   captureHead(msg),
 				Head:   true,
 				RunID:  msg.RunID,
 			})
@@ -755,6 +926,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.forwardCapture(msg)
 
 	case runner.Captured:
+		// An action the shell launched carries a Tag. Releasing the gate and
+		// posting the receipt are scoped to those: a bare runner.Capture
+		// keeps behaving exactly as it always has, which matters because it
+		// is a shipped feature with callers of its own.
+		if msg.Tag != "" {
+			delete(m.running, msg.Tag)
+			if m.menuUp {
+				m.menu.SetRunning(m.running)
+			}
+			if msg.Err != nil {
+				m.sb.SetError(msg.Label + " failed: " + msg.Err.Error())
+			} else {
+				m.sb.SetInfo(msg.Label + " completed")
+			}
+		}
 		if m.outputEnabled() {
 			m.outBuf.EndRun(msg.RunID)
 			// A continuation, not a head: one run is one event however many
@@ -774,9 +960,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.forwardCapture(msg)
 
 	case tea.KeyMsg:
+		if m.overlayUp() {
+			// The overlay owns the keyboard completely while it is up, so
+			// there is no partial-routing state to reason about — the same
+			// contract a screen hosting pkg/confirm lives under.
+			cmd := m.updateOverlay(msg)
+			m.apply()
+			return m, cmd
+		}
 		cur := m.stack.Current()
 		capturing := cur != nil && cur.IsCapturingKeys()
 		if !capturing {
+			if m.actionsEnabled() && key.Matches(msg, m.actionsKey) {
+				m.openMenu(-1, -1)
+				m.apply()
+				return m, nil
+			}
 			if key.Matches(msg, m.quitKey) && m.stack.Depth() == 1 {
 				return m, tea.Quit
 			}
@@ -871,6 +1070,19 @@ func (m *Model) logResult(r runner.Result) {
 		return
 	}
 	m.logEntry(label, label+" completed", "", output.LevelInfo)
+}
+
+// captureHead is the head line for a run: whatever the runner described it as,
+// falling back to the command line.
+//
+// The fallback is what keeps messages built by hand (tests, mostly) rendering
+// as they always did; a real capture and a real Go run both arrive with Detail
+// already set, and a Go run has no Cmd to derive one from.
+func captureHead(m runner.CaptureStarted) string {
+	if m.Detail != "" {
+		return m.Detail
+	}
+	return commandLine(m.Cmd)
 }
 
 // commandLine renders the command a capture is running, as the head line of
@@ -1040,6 +1252,18 @@ func (m Model) View() string {
 		body = layout.RenderFunc(func(geom.Rect) string { return "" })
 	}
 
+	// The overlay goes over the body only, never the chrome: the breadcrumb
+	// still says where you are and the statusbar still carries the hints
+	// while the menu is up.
+	switch {
+	case m.confUp:
+		body = layout.ZStack(body, layout.Center(52, 7, layout.Sized(m.conf)))
+	case m.menuUp:
+		// No layout.Center wrapper — the menu treats the rect as outer
+		// bounds and places itself inside them.
+		body = layout.ZStack(body, layout.Sized(m.menu))
+	}
+
 	items := []layout.Item{
 		layout.Fixed(1, layout.Bar(&m.bc)),
 		layout.Flex(1, body),
@@ -1068,3 +1292,121 @@ func (m Model) View() string {
 // of SetTheme (rare — most screens just cache the theme they were last told
 // about).
 func (m Model) Theme() theme.Theme { return m.theme() }
+
+// currentActions asks the active screen for its verbs. Screens that don't
+// implement action.Provider have none, which is the honest answer for a screen
+// that never declared any.
+//
+// Called on menu open and from apply(), so it runs about as often as Help() —
+// the same contract applies: cheap, allocation-light, no I/O.
+func (m Model) currentActions() action.Set {
+	if !m.actionsEnabled() {
+		return action.Set{}
+	}
+	p, ok := m.stack.Current().(action.Provider)
+	if !ok {
+		return action.Set{}
+	}
+	return p.Actions()
+}
+
+// openMenu shows the action menu for the active screen, anchored at (x, y) or
+// centered when x is negative. Reports whether it opened: a screen with no
+// verbs opens nothing, which is what keeps the key inert rather than showing
+// an empty box.
+func (m *Model) openMenu(x, y int) bool {
+	set := m.currentActions()
+	if set.Empty() {
+		return false
+	}
+	m.menu.SetActions(set)
+	m.menu.SetRunning(m.running)
+	if x < 0 {
+		m.menu.Center()
+	} else {
+		m.menu.Anchor(x, y)
+	}
+	m.menuUp = true
+	return true
+}
+
+// closeOverlay drops whatever is on top of the body.
+func (m *Model) closeOverlay() {
+	m.menuUp, m.confUp = false, false
+	m.pendingAct, m.pendingTgt = action.Action{}, ""
+}
+
+// updateOverlay routes one message to the menu or its confirm modal, and
+// handles their results. It sees only keys and mouse — everything else keeps
+// flowing to the screen underneath, so a capture still logs and a poll still
+// ticks while the menu is open.
+func (m *Model) updateOverlay(msg tea.Msg) tea.Cmd {
+	if m.confUp {
+		c, cmd := m.conf.Update(msg)
+		*m.conf = c
+		return cmd
+	}
+
+	var cmd tea.Cmd
+	menu, cmd := m.menu.Update(msg)
+	*m.menu = menu
+	return cmd
+}
+
+// armConfirm puts the yes/no modal between the pick and the run, so a
+// destructive verb states what it is about to do before it does it.
+func (m *Model) armConfirm(a action.Action, target string) {
+	m.pendingAct, m.pendingTgt = a, target
+	opts := m.theme().Confirm()
+	opts.Title = "confirm"
+	opts.Message = a.Confirm
+	c := confirm.New(opts)
+	m.conf = &c
+	m.menuUp, m.confUp = false, true
+}
+
+// runAction executes a chosen action.
+//
+// A Do action gets an invocation line, because it is the only line the shell
+// can promise: it returns an opaque tea.Cmd that might push a screen or hand
+// over the terminal, and the library cannot narrate what it does not own.
+//
+// A Run action gets none, because it would be the second head record for one
+// piece of news — runner.Go already opens the event with the action's Detail,
+// and everything the action writes lands underneath it. The badge counts
+// events, so logging the invocation separately would make every action report
+// twice (rule 17).
+func (m *Model) runAction(a action.Action, target string) tea.Cmd {
+	if a.Do != nil {
+		m.logEntry("", "action: "+a.Label, "", output.LevelInfo)
+		return a.Do()
+	}
+	if a.Run == nil {
+		m.logEntry("", "action: "+a.Label, "", output.LevelInfo)
+		return nil
+	}
+
+	tag := action.RunKey(a, target)
+	m.running[tag] = true
+
+	detail := a.Label
+	if target != "" {
+		detail = a.Label + " · " + target
+	}
+	return runner.GoWith(runner.GoOptions{
+		Label:  a.Label,
+		Detail: detail,
+		Tag:    tag,
+		Run:    a.Run,
+	})
+}
+
+// rightClick forwards the press to the screen, then opens the menu against
+// whatever it selected. Returns the screen's own command so a component that
+// wanted to react to the press still gets to.
+func (m *Model) rightClick(e mouse.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.stack, cmd = m.stack.Update(e)
+	m.openMenu(e.X, e.Y)
+	return cmd
+}

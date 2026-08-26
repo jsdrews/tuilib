@@ -28,6 +28,7 @@ import (
 	appstack "github.com/jsdrews/tuilib/examples/app/stack"
 	appstatus "github.com/jsdrews/tuilib/examples/app/status"
 	apptabs "github.com/jsdrews/tuilib/examples/app/tabs"
+	dataactions "github.com/jsdrews/tuilib/examples/data/actions"
 	dataalert "github.com/jsdrews/tuilib/examples/data/alert"
 	dataconfirm "github.com/jsdrews/tuilib/examples/data/confirm"
 	datadrilldown "github.com/jsdrews/tuilib/examples/data/drilldown"
@@ -82,6 +83,7 @@ var entries = []entry{
 	{"Tabs — three sub-screens behind one strip", "Cities (filterable list) + Logs (streaming logview) + Counter, switched via shift+left/right or 1/2/3. tab/shift+tab is left alone. Each body keeps its own state across switches; logs keep streaming while you're on another tab.", apptabs.New},
 	{"Status — info/error messages from a screen", "Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on any keypress.", appstatus.New},
 	{"Output — the app-wide console", "Actions that emit app.Info / app.ErrorDetail / app.ErrorOf, plus runner.Capture streaming a live subprocess. The statusbar shows a sliver and wipes it on the next keypress; o opens the console where all of it is still there, with c to clear, x to kill a running capture, and w to export. Note the OnEnter guard on app.OutputClosed — closing the console must not look like a fresh activation.", appoutput.New},
+	{"Actions — the verb menu (pkg/action)", "Press a or right-click a row to open action.Menu. It sizes itself to its widest row and anchors where you asked. Space marks rows: with more than one marked, every action that did not declare Multi goes dim with a reason. Start a Restart and reopen the menu to see the Exclusive gate. Single click commits, click-away dismisses, Delete confirms first.", dataactions.New},
 	{"Confirm — modal yes/no dialog", "Press d on a file to bring up a confirm modal via pkg/confirm; ConfirmedMsg/CancelledMsg flow back as tea.Msg, the parent dismisses and reports the outcome via app.Info.", dataconfirm.New},
 	{"Alert — modal acknowledgement dialog", "A list of mock operations; some succeed (statusbar info), some fail with an error-tinted modal alert via pkg/alert. DismissedMsg flows back as tea.Msg. Contrasts the lightweight statusbar pattern with the modal \"stop and acknowledge\" pattern.", dataalert.New},
 	{"Replace — atomic top-of-stack swap", "Press r on the city list (filter set, cursor moved) to swap in a fresh instance — depth stays at 1, no flicker. Push a city detail, bump the visit counter, then r to reset the counter without re-firing the parent's OnEnter.", appreplace.New},
@@ -196,6 +198,11 @@ func main() {
 		// the point: anything that behaves badly with a pointer shows up
 		// immediately rather than only in the mouse demo.
 		Mouse: app.MouseClick,
+
+		// Actions are opt-in per app, exactly as the output console is: the
+		// shell claiming a letter takes it from every component downstream.
+		// "a" is the conventional choice and is otherwise unclaimed.
+		ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions")),
 		// The console is opt-in, and this is the line that spends the key:
 		// once the shell claims "o" it is claimed for every screen in the
 		// app, which is why the library ships no default for it.
