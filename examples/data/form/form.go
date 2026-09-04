@@ -1,6 +1,6 @@
-// Package form demonstrates pkg/form: a vertical form with Text, Select,
-// and Confirm fields. Submit replaces the form with a result pane; esc pops
-// back to the launcher.
+// Package form demonstrates pkg/form: a vertical form with Text, Password,
+// Select, and Confirm fields. Submit replaces the form with a result pane;
+// esc pops back to the launcher.
 package form
 
 import (
@@ -16,6 +16,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -126,6 +127,21 @@ func (s *Screen) SetTheme(t theme.Theme) {
 				return nil
 			},
 		}),
+		form.Password(form.PasswordOptions{
+			Key:   "password",
+			Label: "Password",
+			// The placeholder is not masked — it is a hint, not a secret, and
+			// it disappears the moment anything is typed.
+			Placeholder: "at least 8 characters",
+			Required:    true,
+			// Validation reads the real text, not the mask.
+			Validate: func(v any) error {
+				if s, _ := v.(string); len(s) < 8 {
+					return errors.New("too short")
+				}
+				return nil
+			},
+		}),
 		form.Select(form.SelectOptions{
 			Key:     "role",
 			Label:   "Role",
@@ -163,8 +179,15 @@ func (s *Screen) rebuildResult(values map[string]any) {
 	if values == nil {
 		values = s.form.Values()
 	}
-	for _, k := range []string{"name", "email", "role", "notify"} {
-		fmt.Fprintf(&b, "  %-8s %v\n", k+":", values[k])
+	for _, k := range []string{"name", "email", "password", "role", "notify"} {
+		v := values[k]
+		if k == "password" {
+			// The real string is right there in Values — this prints a mask
+			// because echoing a submitted secret back to the screen undoes
+			// the point of masking the field it came from.
+			v = strings.Repeat(string(input.DefaultMaskChar), len(fmt.Sprint(v)))
+		}
+		fmt.Fprintf(&b, "  %-10s %v\n", k+":", v)
 	}
 	b.WriteString("\nEsc pops back to the launcher.")
 	s.result.SetContent(b.String())
