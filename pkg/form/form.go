@@ -1,8 +1,9 @@
-// Package form is a vertical form component: a sequence of Text, Select,
-// and Confirm fields with tab/shift-tab focus cycling and a submit button.
+// Package form is a vertical form component: a sequence of Text, Password,
+// Select, and Confirm fields with tab/shift-tab focus cycling and a submit
+// button.
 //
-// Each field renders as a bordered, titled component (Text wraps pkg/input,
-// Confirm wraps pkg/toggle, Select owns its own pane), so the field's Label
+// Each field renders as a bordered, titled component (Text and Password wrap
+// pkg/input, Confirm wraps pkg/toggle, Select owns its own pane), so the Label
 // sits on the border as a pane title. Focus is signalled by the border color
 // flipping from BorderInactive to BorderActive — there's no "▸" prefix or
 // inline label line.
@@ -11,6 +12,7 @@
 //
 //	f := form.New(theme.Dark().Form().With([]form.Field{
 //	    form.Text(form.TextOptions{Key: "name", Label: "Name"}),
+//	    form.Password(form.PasswordOptions{Key: "pass", Label: "Password"}),
 //	    form.Select(form.SelectOptions{Key: "role", Label: "Role",
 //	        Options: []string{"admin", "user"}}),
 //	    form.Confirm(form.ConfirmOptions{Key: "agree", Label: "I agree"}),
@@ -566,6 +568,43 @@ func Text(opts TextOptions) Field {
 		Title:       st.label(opts.Label),
 		Placeholder: opts.Placeholder,
 		Initial:     opts.Initial,
+	})
+	return &textField{fieldState: st, key: opts.Key, input: in}
+}
+
+// PasswordOptions configures a Password field. Every field here means what
+// its TextOptions namesake means — Validate sees the real text, not the mask,
+// and the value arrives in SubmittedMsg.Values as an ordinary string.
+type PasswordOptions struct {
+	Key, Label, Placeholder, Initial string
+
+	// MaskChar is the glyph shown per typed character. Defaults to
+	// input.DefaultMaskChar.
+	MaskChar rune
+
+	// Required rejects an empty value. The label gains a "*" so the
+	// obligation is visible before anyone submits.
+	Required bool
+	// Validate reports why the value is unacceptable, or nil. Runs after
+	// Required, so a blank required field says "required" rather than
+	// whatever a format check would say about "".
+	Validate func(any) error
+}
+
+// Password returns a masked single-line text field backed by pkg/input. It is
+// Text in every respect except that typed characters render as MaskChar.
+//
+// Confirm-password rules have no field to attach to and so are still out of
+// scope here (see the anti-pattern note on cross-field validation): compare
+// the two values on SubmittedMsg in the screen.
+func Password(opts PasswordOptions) Field {
+	st := fieldState{required: opts.Required, validate: opts.Validate}
+	in := input.New(input.Options{
+		Title:       st.label(opts.Label),
+		Placeholder: opts.Placeholder,
+		Initial:     opts.Initial,
+		Echo:        input.EchoMask,
+		MaskChar:    opts.MaskChar,
 	})
 	return &textField{fieldState: st, key: opts.Key, input: in}
 }

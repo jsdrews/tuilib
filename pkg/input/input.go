@@ -12,6 +12,11 @@
 //	// in your screen's Update: in, cmd = in.Update(msg)
 //	// in your screen's View:   string := in.View()
 //
+// Set Options.Echo to EchoMask for a password field. Masking is a display
+// property only — Value returns the real text — so a "reveal" affordance is
+// just SetEcho(input.EchoNormal) on a keypress. Reach for form.Password when
+// the field belongs to a pkg/form rather than standing on its own.
+//
 // Reach for pkg/filter when you want the same input wired with the
 // "/-to-focus, enter-commits, esc-clears" key behavior.
 package input
@@ -27,6 +32,36 @@ import (
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
+
+// EchoMode controls how typed characters are rendered. It affects the
+// display only: Value always returns the real text.
+type EchoMode int
+
+const (
+	// EchoNormal renders text as typed. The zero value, so an input is
+	// never accidentally masked.
+	EchoNormal EchoMode = iota
+	// EchoMask renders MaskChar once per character — the password field.
+	EchoMask
+	// EchoNone renders nothing at all, the way a terminal passphrase prompt
+	// takes input: the field looks empty however much is typed.
+	EchoNone
+)
+
+// DefaultMaskChar is substituted per character under EchoMask when
+// Options.MaskChar is unset.
+const DefaultMaskChar = '•'
+
+// echo maps to the underlying textinput's vocabulary.
+func (e EchoMode) echo() textinput.EchoMode {
+	switch e {
+	case EchoMask:
+		return textinput.EchoPassword
+	case EchoNone:
+		return textinput.EchoNone
+	}
+	return textinput.EchoNormal
+}
 
 // Options configures a new input. Zero-value fields fall back to sensible
 // defaults so a caller can `input.New(input.Options{})` and get a working
@@ -50,6 +85,13 @@ type Options struct {
 	// CharLimit caps input length. Defaults to 0 (unlimited).
 	CharLimit int
 
+	// Echo controls how typed characters are rendered. Defaults to
+	// EchoNormal; set EchoMask for a password field.
+	Echo EchoMode
+	// MaskChar is the glyph EchoMask substitutes per character. Defaults to
+	// DefaultMaskChar. Ignored under any other EchoMode.
+	MaskChar rune
+
 	// Text-input styling.
 	PromptStyle      lipgloss.Style
 	TextStyle        lipgloss.Style
@@ -71,6 +113,10 @@ type Options struct {
 type Model struct {
 	input textinput.Model
 	pane  pane.Pane
+
+	// echo is kept alongside the textinput's own EchoMode so Echo can report
+	// in this package's vocabulary rather than mapping bubbles' back.
+	echo EchoMode
 
 	// token is this input's stable identity for focus requests. Update takes
 	// a value receiver, so the model cannot name its own address.
@@ -108,6 +154,12 @@ func New(opts Options) Model {
 	ti.Prompt = opts.Prompt
 	ti.Placeholder = opts.Placeholder
 	ti.CharLimit = opts.CharLimit
+	ti.EchoMode = opts.Echo.echo()
+	if opts.MaskChar != 0 {
+		ti.EchoCharacter = opts.MaskChar
+	} else {
+		ti.EchoCharacter = DefaultMaskChar
+	}
 	if opts.Initial != "" {
 		ti.SetValue(opts.Initial)
 	}
@@ -134,7 +186,7 @@ func New(opts Options) Model {
 	p.SetContent(ti.View())
 
 	return Model{
-		token: focus.NewToken(), input: ti, pane: p}
+		token: focus.NewToken(), input: ti, pane: p, echo: opts.Echo}
 }
 
 // Init returns nil. Use Focus to start the cursor blink.
@@ -181,6 +233,18 @@ func (m Model) Value() string { return m.input.Value() }
 // SetValue replaces the text.
 func (m *Model) SetValue(s string) {
 	m.input.SetValue(s)
+	m.pane.SetContent(m.input.View())
+}
+
+// Echo reports how typed characters are currently rendered.
+func (m Model) Echo() EchoMode { return m.echo }
+
+// SetEcho changes how typed characters are rendered, leaving the value
+// alone. This is the "reveal password" affordance: flip a masked field to
+// EchoNormal and back without the user retyping anything.
+func (m *Model) SetEcho(e EchoMode) {
+	m.echo = e
+	m.input.EchoMode = e.echo()
 	m.pane.SetContent(m.input.View())
 }
 
