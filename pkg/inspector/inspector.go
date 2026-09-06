@@ -547,6 +547,12 @@ func (m *Model) BlurFilter() {
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor)   { m.body.SetActiveColor(c) }
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
 
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.body.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.body.SetInactiveBorder(b) }
+
 // Selected returns the field under the cursor.
 func (m Model) Selected() (Field, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {

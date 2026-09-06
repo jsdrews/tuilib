@@ -77,6 +77,14 @@ type Styles struct {
 	PaneActive   lipgloss.TerminalColor
 	PaneInactive lipgloss.TerminalColor
 
+	// FieldBorderActive / FieldBorderInactive shape the field's border,
+	// focused and unfocused. Every other component takes its shape from the
+	// theme; before these existed a form's fields were the one chrome in the
+	// library that could not be reached at all, not even by an explicit
+	// override. Zero values leave each field's own default in place.
+	FieldBorderActive   lipgloss.Border
+	FieldBorderInactive lipgloss.Border
+
 	// ErrorColor tints a field's border while it is showing a validation
 	// error, regardless of focus — an invalid field is invalid whether or
 	// not you are standing on it.
@@ -521,6 +529,29 @@ func applyFieldError(p errorPresenter, st *Styles, err error) {
 	p.SetTopRight(st.ErrorText.Render(err.Error()))
 }
 
+// borderPresenter is what a field's component must offer for the form to
+// shape its border. Kept separate from errorPresenter: shape is a standing
+// property of the theme, while the error colors are a transient complaint.
+type borderPresenter interface {
+	SetActiveBorder(lipgloss.Border)
+	SetInactiveBorder(lipgloss.Border)
+}
+
+// applyFieldBorder pushes the theme's field shape onto one field's component.
+// Zero values are skipped so a Styles that predates these fields leaves the
+// component's own default alone.
+func applyFieldBorder(p borderPresenter, st *Styles) {
+	if st == nil {
+		return
+	}
+	if (st.FieldBorderActive != lipgloss.Border{}) {
+		p.SetActiveBorder(st.FieldBorderActive)
+	}
+	if (st.FieldBorderInactive != lipgloss.Border{}) {
+		p.SetInactiveBorder(st.FieldBorderInactive)
+	}
+}
+
 // fieldState is the validation bookkeeping every field type shares.
 type fieldState struct {
 	required bool
@@ -636,6 +667,7 @@ func (f *textField) SetStyles(s *Styles) {
 	if s.PaneInactive != nil {
 		f.input.SetInactiveColor(s.PaneInactive)
 	}
+	applyFieldBorder(&f.input, s)
 }
 
 func (f *textField) Update(msg tea.Msg) (Field, tea.Cmd) {
@@ -696,11 +728,9 @@ func Select(o SelectOptions) Field {
 	}
 	st := fieldState{required: o.RequirePick, validate: o.Validate}
 	li := list.New(list.Options{
-		Title:          st.label(o.Label),
-		Items:          o.Options,
-		Filterable:     false,
-		ActiveBorder:   lipgloss.NormalBorder(),
-		InactiveBorder: lipgloss.NormalBorder(),
+		Title:      st.label(o.Label),
+		Items:      o.Options,
+		Filterable: false,
 	})
 	li.SetCursor(initial)
 	if o.RequirePick {
@@ -737,6 +767,7 @@ func (f *selectField) SetStyles(s *Styles) {
 	if c := s.Selected.GetForeground(); c != nil {
 		f.list.SetSelectedColor(c)
 	}
+	applyFieldBorder(&f.list, s)
 }
 
 func (f *selectField) Value() any {
@@ -822,6 +853,7 @@ func (f *confirmField) SetStyles(s *Styles) {
 	if s.PaneInactive != nil {
 		f.toggle.SetInactiveColor(s.PaneInactive)
 	}
+	applyFieldBorder(&f.toggle, s)
 }
 
 func (f *confirmField) Update(msg tea.Msg) (Field, tea.Cmd) {

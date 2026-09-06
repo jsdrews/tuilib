@@ -128,11 +128,16 @@ type Options struct {
 	Focused       bool
 	ActiveColor   lipgloss.TerminalColor
 	InactiveColor lipgloss.TerminalColor
-	// ActiveBorder is drawn when the Pane is focused. Defaults to
-	// lipgloss.ThickBorder().
-	ActiveBorder lipgloss.Border
-	// InactiveBorder is drawn when the Pane is not focused. Defaults to
-	// lipgloss.NormalBorder().
+	// ActiveBorder is drawn when the Pane is focused, InactiveBorder when
+	// it is not. Both default to lipgloss.NormalBorder(): focus is carried
+	// by ActiveColor, and a pane that also changed weight on focus would
+	// shift the surrounding layout's visual weight for no reason the user
+	// asked for. The same two defaults are what theme.Theme resolves an
+	// unset BorderShapeActive / BorderShapeInactive to, so a themed pane and
+	// a bare pane.New(pane.Options{}) agree.
+	//
+	// Overlays are the deliberate exception — see Theme.BorderShapeOverlay.
+	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
 	// SlotBrackets controls how the title and other border slot text are
 	// bracketed against the border line. Defaults to SlotBracketsNone
@@ -169,7 +174,7 @@ func New(opts Options) Pane {
 		opts.InactiveColor = lipgloss.Color("240")
 	}
 	if (opts.ActiveBorder == lipgloss.Border{}) {
-		opts.ActiveBorder = lipgloss.ThickBorder()
+		opts.ActiveBorder = lipgloss.NormalBorder()
 	}
 	if (opts.InactiveBorder == lipgloss.Border{}) {
 		opts.InactiveBorder = lipgloss.NormalBorder()
@@ -699,10 +704,26 @@ func (p *Pane) SetActiveColor(c lipgloss.TerminalColor) { p.activeColor = c }
 
 // SetInactiveColor updates the border color used when the pane is unfocused.
 func (p *Pane) SetInactiveColor(c lipgloss.TerminalColor) { p.inactiveColor = c }
-func (p *Pane) SetTopLeft(s string)                       { p.topLeft = s }
-func (p *Pane) SetTopRight(s string)                      { p.topRight = s }
-func (p *Pane) SetBottomLeft(s string)                    { p.bottomLeft = s }
-func (p *Pane) SetBottomMiddle(s string)                  { p.bottomMid = s }
+
+// SetActiveBorder updates the border shape drawn when the pane is focused.
+func (p *Pane) SetActiveBorder(b lipgloss.Border) {
+	if (b == lipgloss.Border{}) {
+		return
+	}
+	p.activeBorder = b
+}
+
+// SetInactiveBorder updates the border shape drawn when the pane is unfocused.
+func (p *Pane) SetInactiveBorder(b lipgloss.Border) {
+	if (b == lipgloss.Border{}) {
+		return
+	}
+	p.inactiveBorder = b
+}
+func (p *Pane) SetTopLeft(s string)      { p.topLeft = s }
+func (p *Pane) SetTopRight(s string)     { p.topRight = s }
+func (p *Pane) SetBottomLeft(s string)   { p.bottomLeft = s }
+func (p *Pane) SetBottomMiddle(s string) { p.bottomMid = s }
 
 // SetBottomRight overrides the auto-generated scroll percentage. Pass "" to
 // restore the default.

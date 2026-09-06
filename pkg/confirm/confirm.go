@@ -234,6 +234,12 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.pane.SetActiveColor
 // SetInactiveColor updates the inactive border color.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.pane.SetInactiveColor(c) }
 
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.pane.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(b) }
+
 // Help returns the keys this dialog responds to. Compose into the parent's
 // Help() while the modal is up so the hint strip reflects the modal context.
 func (m Model) Help() []key.Binding {

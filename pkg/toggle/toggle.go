@@ -83,12 +83,6 @@ func New(opts Options) Model {
 	if opts.NoLabel == "" {
 		opts.NoLabel = "no"
 	}
-	if (opts.ActiveBorder == lipgloss.Border{}) {
-		opts.ActiveBorder = lipgloss.NormalBorder()
-	}
-	if (opts.InactiveBorder == lipgloss.Border{}) {
-		opts.InactiveBorder = lipgloss.NormalBorder()
-	}
 
 	p := pane.New(pane.Options{
 		Width:          opts.Width,
@@ -253,6 +247,12 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.pane.SetActiveColor
 
 // SetInactiveColor updates the border color used when unfocused.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.pane.SetInactiveColor(c) }
+
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.pane.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(b) }
 
 // renderInner produces the content rendered inside the pane.
 func (m Model) renderInner() string {

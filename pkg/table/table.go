@@ -1077,6 +1077,12 @@ func (m *Model) BlurFilter() {
 func (m *Model) SetActiveColor(c lipgloss.TerminalColor)   { m.body.SetActiveColor(c) }
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
 
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.body.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.body.SetInactiveBorder(b) }
+
 // SetHeaderStyle / SetSelectedStyle / SetCellStyle update row styling.
 func (m *Model) SetHeaderStyle(s lipgloss.Style)   { m.headerStyle = s; m.refresh() }
 func (m *Model) SetSelectedStyle(s lipgloss.Style) { m.selectedStyle = s; m.refresh() }

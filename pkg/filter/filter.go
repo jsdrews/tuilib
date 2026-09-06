@@ -93,12 +93,6 @@ func New(opts Options) Model {
 	if opts.CharLimit == 0 {
 		opts.CharLimit = 64
 	}
-	if (opts.ActiveBorder == lipgloss.Border{}) {
-		opts.ActiveBorder = lipgloss.NormalBorder()
-	}
-	if (opts.InactiveBorder == lipgloss.Border{}) {
-		opts.InactiveBorder = lipgloss.NormalBorder()
-	}
 
 	ti := textinput.New()
 	ti.Prompt = opts.Prompt

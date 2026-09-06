@@ -705,6 +705,12 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor
 // SetInactiveColor updates the body pane's inactive border color.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
 
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.body.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.body.SetInactiveBorder(b) }
+
 // SetMatchStyle updates the highlight style applied to matched substrings.
 func (m *Model) SetMatchStyle(s lipgloss.Style) {
 	m.matchStyle = s

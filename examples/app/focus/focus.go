@@ -69,9 +69,16 @@ func (s *focusScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	s.focus, gcmd = s.focus.Update(msg)
 	cmds = append(cmds, gcmd)
 
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" {
+	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "esc" && !s.focus.IsCapturingKeys() {
 		// While capturing, the shell suppresses its auto-esc-pop; pop
 		// explicitly so esc backs out from any focus state.
+		//
+		// The capturing case falls through instead, so esc reaches the
+		// component holding the keyboard and releases it — the input blurs,
+		// the list clears its filter. Popping here would take the screen out
+		// from under a half-typed field, and leaving it to the group would
+		// strand it: a focused input reports IsCapturingKeys, so tab cannot
+		// cycle off it until something hands the keyboard back.
 		return s, screen.Pop(nil)
 	}
 

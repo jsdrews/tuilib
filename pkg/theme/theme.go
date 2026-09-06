@@ -10,9 +10,11 @@
 //	sb := statusbar.New(th.Statusbar(h.ShortView(), "v0.1.0")) // footer
 //	p  := pane.New(th.Pane())                                 // body
 //
-// Anything you need to override — a non-default border shape, a slot-brackets
-// style, a custom width — you set on the returned Options before passing it to
-// each component's New. Theme only fills in the color/style tokens.
+// Theme fills in the chrome tokens — colors, border shape, slot brackets —
+// so every component drawn from one palette agrees. Anything you need to
+// override for a single component (a custom width, a deliberately heavier
+// border on one pane) you set on the returned Options before passing it to
+// that component's New; a per-instance value always wins over the theme.
 package theme
 
 import (
@@ -64,6 +66,27 @@ type Theme struct {
 	// BorderActive / BorderInactive color pane borders.
 	BorderActive   lipgloss.TerminalColor
 	BorderInactive lipgloss.TerminalColor
+
+	// BorderShapeActive / BorderShapeInactive are the border shapes for
+	// ordinary components, focused and unfocused. They are deliberately the
+	// same shape by default: focus is signalled by BorderActive, and a
+	// component that changed weight on focus would shift the eye for a
+	// reason the user didn't ask about.
+	//
+	// BorderShapeOverlay is for things that float above content — confirm,
+	// alert, the action menu. A heavier border is what separates an overlay
+	// from the pane it is covering, so this one is meant to differ.
+	//
+	// All three are zero-valued in the shipped palettes and resolve to the
+	// library defaults (Normal for components, Thick for overlays). A Theme
+	// literal written before these fields existed keeps its chrome.
+	BorderShapeActive   lipgloss.Border
+	BorderShapeInactive lipgloss.Border
+	BorderShapeOverlay  lipgloss.Border
+
+	// SlotBrackets controls how title and slot text meet the border line on
+	// every pane the theme builds. The zero value is SlotBracketsNone.
+	SlotBrackets pane.SlotBracketStyle
 
 	// Info / Error style the statusbar's middle slot in each message state.
 	InfoBG, InfoFG   lipgloss.TerminalColor
@@ -231,6 +254,31 @@ func All() []Theme {
 
 // ---- Per-component Options builders ----------------------------------------
 
+// shapeActive / shapeInactive / shapeOverlay resolve the theme's border
+// shapes, falling back to the library defaults when a palette leaves them
+// zero. Every builder goes through these so there is exactly one place that
+// decides what an unset shape means.
+func (t Theme) shapeActive() lipgloss.Border {
+	if (t.BorderShapeActive == lipgloss.Border{}) {
+		return lipgloss.NormalBorder()
+	}
+	return t.BorderShapeActive
+}
+
+func (t Theme) shapeInactive() lipgloss.Border {
+	if (t.BorderShapeInactive == lipgloss.Border{}) {
+		return lipgloss.NormalBorder()
+	}
+	return t.BorderShapeInactive
+}
+
+func (t Theme) shapeOverlay() lipgloss.Border {
+	if (t.BorderShapeOverlay == lipgloss.Border{}) {
+		return lipgloss.ThickBorder()
+	}
+	return t.BorderShapeOverlay
+}
+
 // Breadcrumb returns breadcrumb.Options pre-filled from the theme. Mutate the
 // returned value for any non-theme fields (Width, Crumbs, Separator, …).
 func (t Theme) Breadcrumb() breadcrumb.Options {
@@ -263,6 +311,7 @@ func (t Theme) Help() help.Options {
 	return help.Options{
 		KeyStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG).Background(t.BarBG),
 		DescStyle:   lipgloss.NewStyle().Foreground(t.BarFG).Background(t.BarBG),
+		Border:      t.shapeInactive(),
 		BorderColor: t.Subtle,
 	}
 }
@@ -273,9 +322,12 @@ func (t Theme) Help() help.Options {
 // theme's accent color.
 func (t Theme) Pane() pane.Options {
 	return pane.Options{
-		ActiveColor:   t.BorderActive,
-		InactiveColor: t.BorderInactive,
-		SpinnerStyle:  lipgloss.NewStyle().Foreground(t.Accent),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		SlotBrackets:   t.SlotBrackets,
+		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 	}
 }
 
@@ -291,7 +343,9 @@ func (t Theme) Filter() filter.Options {
 		CursorColor:      t.Accent,
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 	}
 }
 
@@ -304,9 +358,9 @@ func (t Theme) List() list.Options {
 	return list.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
-		ActiveBorder:   lipgloss.NormalBorder(),
-		InactiveBorder: lipgloss.NormalBorder(),
-		SlotBrackets:   pane.SlotBracketsNone,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		SlotBrackets:   t.SlotBrackets,
 		SelectedColor:  t.Accent,
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
@@ -327,7 +381,9 @@ func (t Theme) Input() input.Options {
 		CursorColor:      t.Accent,
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 	}
 }
 
@@ -340,7 +396,9 @@ func (t Theme) Toggle() toggle.Options {
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
-		SlotBrackets:    pane.SlotBracketsNone,
+		ActiveBorder:    t.shapeActive(),
+		InactiveBorder:  t.shapeInactive(),
+		SlotBrackets:    t.SlotBrackets,
 	}
 }
 
@@ -355,7 +413,9 @@ func (t Theme) Confirm() confirm.Options {
 		MessageStyle:    lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
-		SlotBrackets:    pane.SlotBracketsNone,
+		ActiveBorder:    t.shapeOverlay(),
+		InactiveBorder:  t.shapeOverlay(),
+		SlotBrackets:    t.SlotBrackets,
 	}
 }
 
@@ -367,11 +427,13 @@ func (t Theme) Confirm() confirm.Options {
 // OK label as needed before passing to alert.New.
 func (t Theme) Alert() alert.Options {
 	return alert.Options{
-		OKStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-		MessageStyle:  lipgloss.NewStyle().Foreground(t.BarFG),
-		ActiveColor:   t.BorderActive,
-		InactiveColor: t.BorderInactive,
-		SlotBrackets:  pane.SlotBracketsNone,
+		OKStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		MessageStyle:   lipgloss.NewStyle().Foreground(t.BarFG),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   t.shapeOverlay(),
+		InactiveBorder: t.shapeOverlay(),
+		SlotBrackets:   t.SlotBrackets,
 	}
 }
 
@@ -393,9 +455,9 @@ func (t Theme) Actions() action.Options {
 		DisabledStyle:  lipgloss.NewStyle().Foreground(t.Subtle),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
-		ActiveBorder:   lipgloss.NormalBorder(),
-		InactiveBorder: lipgloss.NormalBorder(),
-		SlotBrackets:   pane.SlotBracketsNone,
+		ActiveBorder:   t.shapeOverlay(),
+		InactiveBorder: t.shapeOverlay(),
+		SlotBrackets:   t.SlotBrackets,
 		Keys:           action.DefaultKeys(),
 	}
 }
@@ -413,9 +475,9 @@ func (t Theme) Table() table.Options {
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
-		ActiveBorder:   lipgloss.NormalBorder(),
-		InactiveBorder: lipgloss.NormalBorder(),
-		SlotBrackets:   pane.SlotBracketsNone,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		SlotBrackets:   t.SlotBrackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
@@ -438,9 +500,9 @@ func (t Theme) Logview() logview.Options {
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		ActiveBorder:     lipgloss.NormalBorder(),
-		InactiveBorder:   lipgloss.NormalBorder(),
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
@@ -459,9 +521,9 @@ func (t Theme) TextView() textview.Options {
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		ActiveBorder:     lipgloss.NormalBorder(),
-		InactiveBorder:   lipgloss.NormalBorder(),
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             textview.DefaultKeys(),
@@ -480,9 +542,9 @@ func (t Theme) Tree() tree.Options {
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		ActiveBorder:     lipgloss.NormalBorder(),
-		InactiveBorder:   lipgloss.NormalBorder(),
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		MarkStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -505,9 +567,9 @@ func (t Theme) Inspector() inspector.Options {
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
-		ActiveBorder:     lipgloss.NormalBorder(),
-		InactiveBorder:   lipgloss.NormalBorder(),
-		SlotBrackets:     pane.SlotBracketsNone,
+		ActiveBorder:     t.shapeActive(),
+		InactiveBorder:   t.shapeInactive(),
+		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
@@ -522,16 +584,18 @@ func (t Theme) Inspector() inspector.Options {
 func (t Theme) Form() form.Options {
 	return form.Options{
 		Styles: form.Styles{
-			Input:        lipgloss.NewStyle().Foreground(t.BarFG),
-			Placeholder:  lipgloss.NewStyle().Foreground(t.Subtle),
-			CursorColor:  t.Accent,
-			Selected:     lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-			PaneActive:   t.BorderActive,
-			PaneInactive: t.BorderInactive,
-			ErrorColor:   t.ErrorBG,
-			ErrorText:    lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
-			Submit:       lipgloss.NewStyle().Foreground(t.BarFG),
-			SubmitActive: lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
+			Input:               lipgloss.NewStyle().Foreground(t.BarFG),
+			Placeholder:         lipgloss.NewStyle().Foreground(t.Subtle),
+			CursorColor:         t.Accent,
+			Selected:            lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+			PaneActive:          t.BorderActive,
+			PaneInactive:        t.BorderInactive,
+			FieldBorderActive:   t.shapeActive(),
+			FieldBorderInactive: t.shapeInactive(),
+			ErrorColor:          t.ErrorBG,
+			ErrorText:           lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
+			Submit:              lipgloss.NewStyle().Foreground(t.BarFG),
+			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
 		},
 	}
 }

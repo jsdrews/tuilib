@@ -143,12 +143,6 @@ func New(opts Options) Model {
 	if opts.Title == "" {
 		opts.Title = "input"
 	}
-	if (opts.ActiveBorder == lipgloss.Border{}) {
-		opts.ActiveBorder = lipgloss.NormalBorder()
-	}
-	if (opts.InactiveBorder == lipgloss.Border{}) {
-		opts.InactiveBorder = lipgloss.NormalBorder()
-	}
 
 	ti := textinput.New()
 	ti.Prompt = opts.Prompt
@@ -192,12 +186,24 @@ func New(opts Options) Model {
 // Init returns nil. Use Focus to start the cursor blink.
 func (m Model) Init() tea.Cmd { return nil }
 
-// Update forwards messages to the textinput. No keys are intercepted —
-// commit/cancel semantics belong to the caller (see pkg/filter for the
+// Update forwards messages to the textinput. Esc is the one key intercepted:
+// it blurs the field, leaving the value alone. Everything else — committing,
+// clearing, what enter means — belongs to the caller (see pkg/filter for the
 // "enter commits, esc clears" pattern).
+//
+// Esc is here because input reports IsCapturingKeys while focused, and
+// focus.Group declines to cycle away from a capturing member. Without a key
+// that releases it, an input in a Group is a one-way trap: tab is swallowed
+// and nothing hands the keyboard back. Rule 27 tells the reader to "leave the
+// field with enter or esc, then cycle" — for a bare input this is what makes
+// that true.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if e, ok := msg.(mouse.Msg); ok {
 		return m.handleMouse(e)
+	}
+	if k, ok := msg.(tea.KeyMsg); ok && m.Focused() && k.Type == tea.KeyEsc {
+		m.Blur()
+		return m, nil
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
@@ -272,10 +278,17 @@ func (m Model) Focused() bool { return m.input.Focused() }
 // Satisfies focus.Capturer.
 func (m Model) IsCapturingKeys() bool { return m.Focused() }
 
-// Help returns the keys this input "owns" — there are no special
-// shortcuts (typing is implied), so the slice is empty. Kept for
-// interface symmetry with other components.
-func (m Model) Help() []key.Binding { return nil }
+// Help returns the keys this input "owns". Typing is implied and needs no
+// hint; esc is advertised only while focused, since that is the only time it
+// does anything.
+func (m Model) Help() []key.Binding {
+	if !m.Focused() {
+		return nil
+	}
+	return []key.Binding{
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave field")),
+	}
+}
 
 // Reset clears the value and blurs.
 func (m *Model) Reset() {
@@ -312,3 +325,9 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.pane.SetActiveColor
 
 // SetInactiveColor updates the border color used when unfocused.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.pane.SetInactiveColor(c) }
+
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.pane.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(b) }
