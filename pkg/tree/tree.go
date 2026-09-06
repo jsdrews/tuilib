@@ -116,6 +116,16 @@ type Options struct {
 	// LoadingLabel is rendered next to the spinner while loading.
 	LoadingLabel string
 
+	// Markable adds a mark gutter and binds x / X / A / D, so the
+	// user can build a multi-selection the screen reads back with
+	// Selection(). Off by default and free when off: the gutter takes no
+	// columns. Unlike list and table, marking needs no keyed setter — a
+	// node's path is already its identity. See mark.go.
+	Markable bool
+
+	// MarkStyle colors the ✓ on a marked row that is not under the cursor.
+	MarkStyle lipgloss.Style
+
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
 
@@ -138,6 +148,8 @@ type Keys struct {
 	NextLeaf, PrevLeaf           key.Binding
 	Search, NextMatch, PrevMatch key.Binding
 	Filter                       key.Binding
+	Mark, MarkRange              key.Binding
+	MarkAll, ClearMarks          key.Binding
 	Pane                         pane.Keys
 }
 
@@ -160,6 +172,10 @@ func DefaultKeys() Keys {
 		NextMatch:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match")),
 		PrevMatch:   key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "prev match")),
 		Filter:      key.NewBinding(key.WithKeys("\\"), key.WithHelp(`\`, "filter mode")),
+		Mark:        key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "mark")),
+		MarkRange:   key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "mark to here")),
+		MarkAll:     key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "mark all")),
+		ClearMarks:  key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "drop marks")),
 		Pane:        pane.DefaultKeys(),
 	}
 }
@@ -214,6 +230,18 @@ func (k *Keys) fillDefaults() {
 	if len(k.Filter.Keys()) == 0 {
 		k.Filter = d.Filter
 	}
+	if len(k.Mark.Keys()) == 0 {
+		k.Mark = d.Mark
+	}
+	if len(k.MarkRange.Keys()) == 0 {
+		k.MarkRange = d.MarkRange
+	}
+	if len(k.MarkAll.Keys()) == 0 {
+		k.MarkAll = d.MarkAll
+	}
+	if len(k.ClearMarks.Keys()) == 0 {
+		k.ClearMarks = d.ClearMarks
+	}
 	k.Pane.FillDefaults()
 }
 
@@ -227,6 +255,13 @@ type Model struct {
 	body       pane.Pane
 	filter     filter.Model
 	searchable bool
+
+	markable bool
+	marks    map[string]bool
+	// markAnchor is the path of the most recently marked row — the fixed
+	// end of a MarkRange.
+	markAnchor string
+	markStyle  lipgloss.Style
 
 	matchStyle       lipgloss.Style
 	currentLineStyle lipgloss.Style
@@ -279,6 +314,8 @@ func New(opts Options) Model {
 		root:             opts.Root,
 		expanded:         map[string]bool{},
 		searchable:       opts.Searchable,
+		markable:         opts.Markable,
+		markStyle:        opts.MarkStyle,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
 		keys:             opts.Keys,
@@ -381,6 +418,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cursor = max(0, len(m.rows)-1)
 			m.refresh()
 			return m, m.flushMsgs()
+		case m.markable && key.Matches(k, m.keys.Mark):
+			m.ToggleMark()
+		case m.markable && key.Matches(k, m.keys.MarkRange):
+			m.MarkRange()
+		case m.markable && key.Matches(k, m.keys.MarkAll):
+			m.ToggleMarkAll()
+		case m.markable && key.Matches(k, m.keys.ClearMarks):
+			m.ClearMarks()
 		case key.Matches(k, m.keys.ExpandAll):
 			m.expandAll()
 			return m, m.flushMsgs()
@@ -702,6 +747,10 @@ func (m Model) Help() []key.Binding {
 		m.keys.NextSibling, m.keys.PrevSibling,
 		m.keys.NextLeaf, m.keys.PrevLeaf,
 		m.keys.Enter,
+	}
+	if m.markable {
+		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
 	}
 	out = append(out, m.body.HelpBindings()...)
 	if m.searchable {
@@ -1085,6 +1134,11 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 		m.body.SetFocused(true)
 		if row, ok := m.body.RowAt(e.X, e.Y); ok && row < len(m.rows) {
 			m.cursor = row
+			// The ✓ gutter toggles on a single click, like the ▸ glyph.
+			if e.IsPress() && m.markable && m.onMarkColumn(e.X) {
+				m.toggleMarkAt(row)
+				return m, tea.Batch(focus.RequestSelf(m.token), m.flushMsgs())
+			}
 			// Chrome that acts stays left-only: a right press is asking a
 			// question about the row, not expanding it.
 			if (e.IsPress() && m.onGlyph(e.X, m.rows[row])) || e.IsDoubleClick() {
@@ -1107,7 +1161,7 @@ func (m Model) onGlyph(x int, r row) bool {
 	}
 	c := m.body.ContentRect()
 	pos := (x - c.X) + m.body.XOffset()
-	return pos == 2*r.depth
+	return pos == m.gutterW()+2*r.depth
 }
 
 // scrollTo puts row at the top of the view and moves the cursor onto it.
@@ -1158,14 +1212,20 @@ func (m *Model) formatRow(r row, current bool) string {
 	}
 
 	label := r.node.Label()
+	// The gutter is leftmost, before the indent: a ✓ that indented with its
+	// row would not read as a column.
+	gutter := m.gutterForRow(r)
 	if !current {
-		return indent + glyph + m.highlightLabel(label)
+		if m.markable && m.marks[r.path] {
+			return m.markStyle.Render(markGlyph) + " " + indent + glyph + m.highlightLabel(label)
+		}
+		return gutter + indent + glyph + m.highlightLabel(label)
 	}
 
 	base := m.currentLineStyle
 	matchOnRow := m.matchStyle.Inherit(base)
 	var b strings.Builder
-	b.WriteString(renderPreserving(base, indent+glyph))
+	b.WriteString(renderPreserving(base, gutter+indent+glyph))
 	b.WriteString(m.renderHighlightedSegments(label, base, matchOnRow))
 
 	inner := max(0, m.body.Width()-2-pane.ScrollbarWidth)

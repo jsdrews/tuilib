@@ -310,8 +310,8 @@ type Options struct {
 	// uses bold + Accent fg + Subtle bg.
 	SelectedStyle lipgloss.Style
 
-	// Markable adds a mark gutter and binds space / ctrl+a, so the user can
-	// build a multi-selection the screen reads back with Selection().
+	// Markable adds a mark gutter and binds x / X / A / D, so the
+	// user can build a multi-selection the screen reads back with Selection().
 	//
 	// Off by default and free when off: the gutter takes no columns. Marking
 	// requires keyed rows (SetKeyedRows) and is inert on a windowed table —
@@ -351,11 +351,24 @@ type Options struct {
 // The embedded pane.Keys covers horizontal scroll; mutate fields on
 // Pane to override h-scroll without touching the rest.
 type Keys struct {
-	Up, Down           key.Binding
-	Top, Bottom        key.Binding
-	HalfUp, HalfDown   key.Binding
-	Filter             key.Binding
-	Mark, MarkAll      key.Binding
+	Up, Down         key.Binding
+	Top, Bottom      key.Binding
+	HalfUp, HalfDown key.Binding
+	Filter           key.Binding
+	Mark, MarkAll    key.Binding
+	// ClearMarks drops the whole selection unconditionally.
+	//
+	// Separate from MarkAll because MarkAll is a toggle over the *visible*
+	// rows: from a partial selection it marks the rest before a second press
+	// clears, so "undo my selection" would otherwise route through a state
+	// where everything is marked — an alarming detour on a screen whose next
+	// keystroke might be a destructive verb. This key always does the same
+	// thing regardless of what is currently marked.
+	ClearMarks key.Binding
+
+	// MarkRange extends the selection from the anchor (the most recently
+	// marked row) to the cursor. Forward only; see mark.go.
+	MarkRange          key.Binding
 	SortPrev, SortNext key.Binding
 	SortDir            key.Binding
 	ColPrev, ColNext   key.Binding
@@ -365,21 +378,23 @@ type Keys struct {
 // DefaultKeys returns the table's stock keymap.
 func DefaultKeys() Keys {
 	return Keys{
-		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Top:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
-		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
-		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
-		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
-		Filter:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
-		Mark:     key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
-		MarkAll:  key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "mark all")),
-		SortPrev: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "sort col-")),
-		SortNext: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "sort col+")),
-		SortDir:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort dir")),
-		ColPrev:  key.NewBinding(key.WithKeys("shift+left"), key.WithHelp("⇧←", "col-")),
-		ColNext:  key.NewBinding(key.WithKeys("shift+right"), key.WithHelp("⇧→", "col+")),
-		Pane:     pane.DefaultKeys(),
+		Up:         key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:       key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:        key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:     key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		HalfUp:     key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
+		HalfDown:   key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
+		Filter:     key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+		Mark:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "mark")),
+		MarkAll:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "mark all")),
+		ClearMarks: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "drop marks")),
+		MarkRange:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "mark to here")),
+		SortPrev:   key.NewBinding(key.WithKeys("["), key.WithHelp("[", "sort col-")),
+		SortNext:   key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "sort col+")),
+		SortDir:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "sort dir")),
+		ColPrev:    key.NewBinding(key.WithKeys("shift+left"), key.WithHelp("⇧←", "col-")),
+		ColNext:    key.NewBinding(key.WithKeys("shift+right"), key.WithHelp("⇧→", "col+")),
+		Pane:       pane.DefaultKeys(),
 	}
 }
 
@@ -414,6 +429,12 @@ func (k *Keys) fillDefaults() {
 	}
 	if len(k.MarkAll.Keys()) == 0 {
 		k.MarkAll = d.MarkAll
+	}
+	if len(k.ClearMarks.Keys()) == 0 {
+		k.ClearMarks = d.ClearMarks
+	}
+	if len(k.MarkRange.Keys()) == 0 {
+		k.MarkRange = d.MarkRange
 	}
 	if len(k.SortPrev.Keys()) == 0 {
 		k.SortPrev = d.SortPrev
@@ -453,12 +474,16 @@ type Borders struct {
 
 // Model is the table widget. Embed as a value; mutate via the setters.
 type Model struct {
-	cols       []Column
-	widths     []int // effective per-column visible widths (base + flex share)
-	rows       []Row
-	rowKeys    []string
-	markable   bool
-	marks      map[string]bool
+	cols     []Column
+	widths   []int // effective per-column visible widths (base + flex share)
+	rows     []Row
+	rowKeys  []string
+	markable bool
+	marks    map[string]bool
+	// markAnchor is the key of the most recently marked row — the fixed end
+	// of a MarkRange. Held as a key, like the marks themselves, so a reorder
+	// cannot slide the anchor onto a different row.
+	markAnchor string
 	markStyle  lipgloss.Style
 	visible    []Row
 	visibleIdx []int
@@ -703,6 +728,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.ToggleMark()
 	case m.markable && key.Matches(km, m.keys.MarkAll):
 		m.ToggleMarkAll()
+	case m.markable && key.Matches(km, m.keys.ClearMarks):
+		m.ClearMarks()
+	case m.markable && key.Matches(km, m.keys.MarkRange):
+		m.MarkRange()
 	case key.Matches(km, m.keys.ColPrev):
 		cur := m.body.XOffset()
 		if e := m.prevColumnEdge(cur); e >= 0 {
@@ -749,7 +778,7 @@ func (m Model) Help() []key.Binding {
 		out = append(out, m.keys.Filter)
 	}
 	if m.markable {
-		out = append(out, m.keys.Mark, m.keys.MarkAll,
+		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
 			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
 	}
 	return out

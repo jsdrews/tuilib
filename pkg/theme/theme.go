@@ -485,6 +485,7 @@ func (t Theme) Tree() tree.Options {
 		SlotBrackets:     pane.SlotBracketsNone,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
+		MarkStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             tree.DefaultKeys(),
 	}

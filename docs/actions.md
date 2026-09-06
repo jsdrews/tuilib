@@ -5,7 +5,12 @@ and still proposed. `pkg/action`, `geom.AnchorIn`, `mouse.IsRightPress` /
 `IsPointPress`, `theme.Actions()`, marking in `pkg/list` and `pkg/table`,
 `runner.Go` / `runner` correlation tags, the app shell wiring
 (`Options.ActionsKey`, the overlay routing mode, right-click, the statusbar
-receipt) and `examples/data/actions` are all in. Decisions 6, 7, 15 and 19
+receipt), `examples/data/actions` and `examples/data/multiselect` are all
+in. Marking is demonstrated in `examples/data/multiselect` and summarised
+as CLAUDE.md rule 32 — rules 30 and 31 below are still unwritten, so the
+marking rule took the next free number rather than one they had
+reserved. `examples/data/actions` stays single-target on purpose.
+Decisions 6, 7, 15 and 19
 record where the built thing corrected the design.
 
 ## Problem
@@ -699,7 +704,7 @@ and `Marks()` is empty.
   excluded for exactly that reason: `space` is already spent there on
   expand/collapse, and marking a tree raises a question this design does not
   answer (does marking a branch mark its children?).
-- **`ctrl+a` marks every currently visible row** — visible meaning post-filter,
+- **`A` marks every currently visible row** — visible meaning post-filter,
   which makes "filter to `region:eu`, mark all, restart" a three-keystroke
   flow. On a windowed table (`SetWindow`) it marks the resident window only;
   the count stays honest because it is a count of what is actually marked.
@@ -829,7 +834,7 @@ generates the table below, so the doc cannot drift from the code.
 | `ctrl+z` | `pkg/app` | suspend |
 | `t` | `pkg/app` | cycle theme (opt-in, conventional) |
 | `o` | `pkg/app` | output console (opt-in, conventional) |
-| `a` | `pkg/app` | actions menu (opt-in, conventional — proposed) |
+| `a` | `pkg/app` | actions menu (opt-in, conventional) |
 
 **Universal — rule 25's vocabulary. No component and no screen may rebind these.**
 
@@ -855,9 +860,12 @@ that component happens to be focused, so treat them as spoken for.
 | `[` `]` `s` | `pkg/table` | sort column −/+, direction |
 | `shift+←` `shift+→` | `pkg/table` | previous / next column edge |
 | `shift+←` `shift+→`, `1`–`9` | `pkg/tab` | switch tab |
-| `space` | `pkg/tree`, `pkg/inspector`, `pkg/toggle` | toggle |
-| `space` | `pkg/list`, `pkg/table` | mark row (when `Markable`) — proposed |
-| `ctrl+a` | `pkg/list`, `pkg/table` | mark all visible (when `Markable`) — proposed |
+| `space` | `pkg/tree`, `pkg/inspector`, `pkg/toggle` | toggle (expand/collapse in tree — never marking) |
+| `x` | `pkg/list`, `pkg/table`, `pkg/tree` | mark row (when `Markable`) |
+| `space` | `pkg/list`, `pkg/table` | mark row (when `Markable`) |
+| `A` | `pkg/list`, `pkg/table`, `pkg/tree` | mark all visible (when `Markable`) |
+| `X` | `pkg/list`, `pkg/table`, `pkg/tree` | mark anchor↔cursor, either direction (when `Markable`) |
+| `D` | `pkg/list`, `pkg/table`, `pkg/tree` | clear marks (when `Markable`) |
 | `E` `C` | `pkg/tree`, `pkg/inspector` | expand / collapse all |
 | `{` `}` `J` `K` | `pkg/tree`, `pkg/inspector` | sibling / leaf navigation |
 | `w` | `pkg/textview` | toggle wrap |
@@ -871,9 +879,9 @@ After `a` goes to the actions menu, the unclaimed lowercase letters are:
 
 > **b  d  e  f  i  m  p  r  u  v  z**
 
-Most uppercase letters are free (`A B D F H I L M O P Q R S T U V W X Y Z`),
+Most uppercase letters are free (`B F H I L M O P Q R S T U V W Y Z`),
 as is most punctuation and most `ctrl+` combinations outside
-`ctrl+a`/`c`/`d`/`u`/`z`.
+`A`/`c`/`d`/`u`/`z`.
 
 The point of publishing this is not to encourage spending it. It is that an
 author who needs a key can now find one in five seconds instead of grepping,
@@ -902,7 +910,7 @@ shape here:
 | `pkg/action` | **new.** `Action`, `Set`, `Func`, `Provider`, `Menu` (self-sizing anchored overlay component), `OptionsFrom`, `Validate`. |
 | `pkg/keys` | **new.** Registry, scopes, `Check`, `Free`. Leaf, no tuilib imports. |
 | `pkg/geom` | `AnchorIn(outer, x, y, w, h)`. |
-| `pkg/list`, `pkg/table` | `Options.Markable`; `space` / `ctrl+a`; marker column; `Marks`/`SetMarks`/`ClearMarks`/`Selection`/`SelectionLabel`. |
+| `pkg/list`, `pkg/table` | `Options.Markable`; `space` / `A`; marker column; `Marks`/`SetMarks`/`ClearMarks`/`Selection`/`SelectionLabel`. |
 | `pkg/runner` | `Go(label, fn)`; `CaptureStarted.Detail`; package doc widened. Still dependency-free. |
 | `pkg/mouse` | `Msg.IsRightPress()`. |
 | `pkg/app` | `Options.ActionsKey`; overlay slot + routing mode; right-press handling; invocation logging; outcome → statusbar; hint gating. |
