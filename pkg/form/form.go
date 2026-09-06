@@ -72,10 +72,11 @@ type Styles struct {
 	// Selected styles the active item in Select and the chosen side of Confirm.
 	Selected lipgloss.Style
 
-	// PaneActive / PaneInactive color the field's border. Forwarded to each
-	// field's pane (input.SetActiveColor / SetInactiveColor or pane defaults).
-	PaneActive   lipgloss.TerminalColor
-	PaneInactive lipgloss.TerminalColor
+	// PaneActiveColor / PaneInactiveColor color the field's border, focused
+	// and unfocused. Forwarded to each field's pane (input.SetActiveColor /
+	// SetInactiveColor, or the pane's own defaults).
+	PaneActiveColor   lipgloss.TerminalColor
+	PaneInactiveColor lipgloss.TerminalColor
 
 	// FieldBorderActive / FieldBorderInactive shape the field's border,
 	// focused and unfocused. Every other component takes its shape from the
@@ -519,8 +520,8 @@ func applyFieldError(p errorPresenter, st *Styles, err error) {
 		return
 	}
 	if err == nil {
-		p.SetActiveColor(st.PaneActive)
-		p.SetInactiveColor(st.PaneInactive)
+		p.SetActiveColor(st.PaneActiveColor)
+		p.SetInactiveColor(st.PaneInactiveColor)
 		p.SetTopRight("")
 		return
 	}
@@ -661,11 +662,11 @@ func (f *textField) SetStyles(s *Styles) {
 	f.input.SetTextStyle(s.Input)
 	f.input.SetPlaceholderStyle(s.Placeholder)
 	f.input.SetCursorColor(s.CursorColor)
-	if s.PaneActive != nil {
-		f.input.SetActiveColor(s.PaneActive)
+	if s.PaneActiveColor != nil {
+		f.input.SetActiveColor(s.PaneActiveColor)
 	}
-	if s.PaneInactive != nil {
-		f.input.SetInactiveColor(s.PaneInactive)
+	if s.PaneInactiveColor != nil {
+		f.input.SetInactiveColor(s.PaneInactiveColor)
 	}
 	applyFieldBorder(&f.input, s)
 }
@@ -758,15 +759,13 @@ func (f *selectField) SetStyles(s *Styles) {
 	if s == nil {
 		return
 	}
-	if s.PaneActive != nil {
-		f.list.SetActiveColor(s.PaneActive)
+	if s.PaneActiveColor != nil {
+		f.list.SetActiveColor(s.PaneActiveColor)
 	}
-	if s.PaneInactive != nil {
-		f.list.SetInactiveColor(s.PaneInactive)
+	if s.PaneInactiveColor != nil {
+		f.list.SetInactiveColor(s.PaneInactiveColor)
 	}
-	if c := s.Selected.GetForeground(); c != nil {
-		f.list.SetSelectedColor(c)
-	}
+	f.list.SetSelectedStyle(s.Selected)
 	applyFieldBorder(&f.list, s)
 }
 
@@ -847,11 +846,11 @@ func (f *confirmField) SetStyles(s *Styles) {
 	}
 	f.toggle.SetSelectedStyle(s.Selected)
 	f.toggle.SetUnselectedStyle(lipgloss.NewStyle())
-	if s.PaneActive != nil {
-		f.toggle.SetActiveColor(s.PaneActive)
+	if s.PaneActiveColor != nil {
+		f.toggle.SetActiveColor(s.PaneActiveColor)
 	}
-	if s.PaneInactive != nil {
-		f.toggle.SetInactiveColor(s.PaneInactive)
+	if s.PaneInactiveColor != nil {
+		f.toggle.SetInactiveColor(s.PaneInactiveColor)
 	}
 	applyFieldBorder(&f.toggle, s)
 }

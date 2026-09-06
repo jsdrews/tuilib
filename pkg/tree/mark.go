@@ -27,8 +27,6 @@ import "strconv"
 // at every depth. A gutter that indented with its row would be unreadable as
 // a column, which is the whole reason to have one.
 
-const markGlyph = "✓"
-
 // gutterW is the width the mark column takes. Zero when marking is off, so a
 // tree that does not opt in is laid out exactly as before.
 func (m Model) gutterW() int {
@@ -45,7 +43,7 @@ func (m Model) gutterForRow(r row) string {
 		return ""
 	}
 	if m.marks[r.path] {
-		return markGlyph + " "
+		return m.glyphs.Mark + " "
 	}
 	return "  "
 }

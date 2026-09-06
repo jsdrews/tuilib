@@ -23,9 +23,9 @@ func validated(t *testing.T) Model {
 	t.Helper()
 	m := New(Options{
 		Styles: Styles{
-			PaneActive:   lipgloss.Color("12"),
-			PaneInactive: lipgloss.Color("240"),
-			ErrorColor:   lipgloss.Color("160"),
+			PaneActiveColor:   lipgloss.Color("12"),
+			PaneInactiveColor: lipgloss.Color("240"),
+			ErrorColor:        lipgloss.Color("160"),
 		},
 		Fields: []Field{
 			Text(TextOptions{Key: "name", Label: "Name", Required: true}),

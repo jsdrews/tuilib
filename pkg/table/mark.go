@@ -15,8 +15,6 @@ import "strconv"
 //     set is precisely the drift this design refuses to ship. Marking there
 //     is inert rather than approximate.
 
-const markGlyph = "✓"
-
 // gutterW is the width the mark column takes from the columns. Zero when
 // marking is off, so a table that does not opt in is laid out exactly as
 // before.
@@ -33,7 +31,7 @@ func (m Model) gutterFor(i int) string {
 		return ""
 	}
 	if m.isMarkedAt(i) {
-		return markGlyph + " "
+		return m.glyphs.Mark + " "
 	}
 	return "  "
 }

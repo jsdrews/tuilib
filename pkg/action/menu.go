@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -98,7 +99,11 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
 
 	// MultiReason and RunningReason override the stock text the menu fills
 	// into Disabled for a non-Multi action under a multi-selection, and for
@@ -118,6 +123,9 @@ type Options struct {
 // menu treats the rect it is given as outer bounds and draws itself inside
 // them, so there is no layout.Center wrapper to keep in sync with its size.
 type Menu struct {
+	// glyphs is the resolved mark vocabulary this menu draws with.
+	glyphs glyph.Set
+
 	pane pane.Pane
 	set  Set
 	keys Keys
@@ -156,6 +164,7 @@ func New(opts Options) Menu {
 
 	p := pane.New(pane.Options{
 		Focused:        true,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
@@ -164,6 +173,7 @@ func New(opts Options) Menu {
 	})
 
 	m := Menu{
+		glyphs:        opts.Glyphs.Resolve(),
 		pane:          p,
 		set:           opts.Set,
 		keys:          opts.Keys,
@@ -495,7 +505,7 @@ func (m Menu) renderRow(i, innerW int) string {
 
 	prefix := "  "
 	if i == m.cursor {
-		prefix = "▸ "
+		prefix = m.glyphs.Cursor + " "
 	}
 
 	segs := []seg{

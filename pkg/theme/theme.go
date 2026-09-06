@@ -18,6 +18,9 @@
 package theme
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/action"
@@ -27,6 +30,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/form"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/inspector"
@@ -87,6 +91,11 @@ type Theme struct {
 	// SlotBrackets controls how title and slot text meet the border line on
 	// every pane the theme builds. The zero value is SlotBracketsNone.
 	SlotBrackets pane.SlotBracketStyle
+
+	// Glyphs are the marks components draw — row cursors, expand arrows,
+	// scrollbar thumbs, rules, sort indicators. Empty fields fall back to
+	// glyph.Default, so setting one arrow does not blank the rest.
+	Glyphs glyph.Set
 
 	// Info / Error style the statusbar's middle slot in each message state.
 	InfoBG, InfoFG   lipgloss.TerminalColor
@@ -279,6 +288,63 @@ func (t Theme) shapeOverlay() lipgloss.Border {
 	return t.BorderShapeOverlay
 }
 
+// glyphs resolves the theme's glyph set against the library defaults. Every
+// builder goes through it so a partially-filled Set never reaches a component
+// as empty strings.
+func (t Theme) glyphs() glyph.Set { return t.Glyphs.Resolve() }
+
+// cellColor renders text in c with a foreground-only escape, so a table's
+// selected-row background passes through it unbroken (rule 19).
+//
+// It exists because pkg/ansi is dependency-free and takes a palette index,
+// while a Theme carries a lipgloss color. Before it, theme.Table hardcoded
+// index 240 for its separators, which meant table chrome rendered the same
+// grey in every palette — light themes included — and was the one piece of
+// chrome a theme could not reach.
+//
+// A color that is neither a palette index nor a hex literal is left unstyled
+// rather than guessed at: an uncolored separator is legible, a wrong one is
+// not.
+func cellColor(c lipgloss.TerminalColor, text string) string {
+	col, ok := c.(lipgloss.Color)
+	if !ok {
+		return text
+	}
+	v := string(col)
+	if n, err := strconv.Atoi(v); err == nil {
+		return ansi.CellColor(n, text)
+	}
+	if r, g, b, ok := parseHex(v); ok {
+		return ansi.CellColorRGB(r, g, b, text)
+	}
+	return text
+}
+
+// parseHex reads "#rgb" and "#rrggbb".
+func parseHex(v string) (r, g, b uint8, ok bool) {
+	if !strings.HasPrefix(v, "#") {
+		return 0, 0, 0, false
+	}
+	switch h := v[1:]; len(h) {
+	case 3:
+		n, err := strconv.ParseUint(h, 16, 32)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		r = uint8((n>>8)&0xf) * 17
+		g = uint8((n>>4)&0xf) * 17
+		b = uint8(n&0xf) * 17
+		return r, g, b, true
+	case 6:
+		n, err := strconv.ParseUint(h, 16, 32)
+		if err != nil {
+			return 0, 0, 0, false
+		}
+		return uint8(n >> 16), uint8(n >> 8), uint8(n), true
+	}
+	return 0, 0, 0, false
+}
+
 // Breadcrumb returns breadcrumb.Options pre-filled from the theme. Mutate the
 // returned value for any non-theme fields (Width, Crumbs, Separator, …).
 func (t Theme) Breadcrumb() breadcrumb.Options {
@@ -326,6 +392,7 @@ func (t Theme) Pane() pane.Options {
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 	}
@@ -345,6 +412,7 @@ func (t Theme) Filter() filter.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 	}
 }
@@ -360,8 +428,9 @@ func (t Theme) List() list.Options {
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
-		SelectedColor:  t.Accent,
+		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
@@ -383,6 +452,7 @@ func (t Theme) Input() input.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 	}
 }
@@ -398,6 +468,7 @@ func (t Theme) Toggle() toggle.Options {
 		InactiveColor:   t.BorderInactive,
 		ActiveBorder:    t.shapeActive(),
 		InactiveBorder:  t.shapeInactive(),
+		Glyphs:          t.glyphs(),
 		SlotBrackets:    t.SlotBrackets,
 	}
 }
@@ -415,6 +486,7 @@ func (t Theme) Confirm() confirm.Options {
 		InactiveColor:   t.BorderInactive,
 		ActiveBorder:    t.shapeOverlay(),
 		InactiveBorder:  t.shapeOverlay(),
+		Glyphs:          t.glyphs(),
 		SlotBrackets:    t.SlotBrackets,
 	}
 }
@@ -433,6 +505,7 @@ func (t Theme) Alert() alert.Options {
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
+		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
 	}
 }
@@ -457,6 +530,7 @@ func (t Theme) Actions() action.Options {
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
+		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
 		Keys:           action.DefaultKeys(),
 	}
@@ -477,13 +551,14 @@ func (t Theme) Table() table.Options {
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
 		Borders: table.Borders{
-			Vertical:   ansi.CellColor(240, "│"),
-			HeaderRule: ansi.CellColor(240, "─"),
+			Vertical:   cellColor(t.Subtle, t.glyphs().ColumnSep),
+			HeaderRule: cellColor(t.Subtle, t.glyphs().Rule),
 		},
 		Keys: table.DefaultKeys(),
 	}
@@ -502,6 +577,7 @@ func (t Theme) Logview() logview.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
@@ -523,6 +599,7 @@ func (t Theme) TextView() textview.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
@@ -544,6 +621,7 @@ func (t Theme) Tree() tree.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
@@ -569,6 +647,7 @@ func (t Theme) Inspector() inspector.Options {
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
+		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
@@ -588,8 +667,8 @@ func (t Theme) Form() form.Options {
 			Placeholder:         lipgloss.NewStyle().Foreground(t.Subtle),
 			CursorColor:         t.Accent,
 			Selected:            lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-			PaneActive:          t.BorderActive,
-			PaneInactive:        t.BorderInactive,
+			PaneActiveColor:     t.BorderActive,
+			PaneInactiveColor:   t.BorderInactive,
 			FieldBorderActive:   t.shapeActive(),
 			FieldBorderInactive: t.shapeInactive(),
 			ErrorColor:          t.ErrorBG,

@@ -20,6 +20,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -28,6 +29,36 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 )
+
+// glyphSets pairs a label with a glyph vocabulary. The zero Set resolves to
+// glyph.Default, which is why "Default" carries no fields.
+var glyphSets = []struct {
+	name string
+	set  glyph.Set
+}{
+	{"Default", glyph.Set{}},
+	{"ASCII", glyph.Set{
+		Cursor: ">", Mark: "*", ExpandOpen: "v", ExpandClosed: ">",
+		Rule: "-", ScrollThumb: "#", ScrollTrack: ".",
+		SortAsc: "^", SortDesc: "v", ColumnSep: "|", Placeholder: ".",
+	}},
+	{"Heavy", glyph.Set{
+		Cursor: "➤", Mark: "✔", ExpandOpen: "▼", ExpandClosed: "▶",
+		Rule: "━", ScrollThumb: "▓", ScrollTrack: "▒",
+	}},
+	{"Minimal", glyph.Set{
+		Cursor: "·", Mark: "+", ExpandOpen: "-", ExpandClosed: "+",
+		Rule: "┈", ScrollThumb: "│", ScrollTrack: " ",
+	}},
+}
+
+func glyphNames() []string {
+	out := make([]string, len(glyphSets))
+	for i, g := range glyphSets {
+		out[i] = g.name
+	}
+	return out
+}
 
 // shape pairs a label with the lipgloss border it names. Hidden is included
 // because it is the one that shows what the title slots do on their own: the
@@ -59,9 +90,11 @@ type Screen struct {
 	// screen is derived from.
 	component int
 	overlay   int
+	glyphs    int
 
-	compPick list.Model
-	ovlPick  list.Model
+	compPick  list.Model
+	ovlPick   list.Model
+	glyphPick list.Model
 
 	rows   list.Model
 	field  input.Model
@@ -92,11 +125,12 @@ func (s *Screen) themed() theme.Theme {
 	t.BorderShapeActive = shapes[s.component].border
 	t.BorderShapeInactive = shapes[s.component].border
 	t.BorderShapeOverlay = shapes[s.overlay].border
+	t.Glyphs = glyphSets[s.glyphs].set
 	return t
 }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	before := [2]int{s.component, s.overlay}
+	before := [3]int{s.component, s.overlay, s.glyphs}
 	var cmds []tea.Cmd
 
 	// The group owns tab cycling and focus grants; it does not forward to
@@ -113,8 +147,8 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 		cmds = append(cmds, s.forwardFocused(msg))
 	}
 
-	s.component, s.overlay = s.compPick.Cursor(), s.ovlPick.Cursor()
-	if [2]int{s.component, s.overlay} != before {
+	s.component, s.overlay, s.glyphs = s.compPick.Cursor(), s.ovlPick.Cursor(), s.glyphPick.Cursor()
+	if [3]int{s.component, s.overlay, s.glyphs} != before {
 		// The pickers are drawn from the theme they edit, so a cursor move
 		// rebuilds them too — cursors and focus carried across exactly as in
 		// a theme swap (rule 4).
@@ -131,6 +165,8 @@ func (s *Screen) forwardAll(msg tea.Msg) []tea.Cmd {
 	s.compPick, c = s.compPick.Update(msg)
 	cmds = append(cmds, c)
 	s.ovlPick, c = s.ovlPick.Update(msg)
+	cmds = append(cmds, c)
+	s.glyphPick, c = s.glyphPick.Update(msg)
 	cmds = append(cmds, c)
 	s.rows, c = s.rows.Update(msg)
 	cmds = append(cmds, c)
@@ -149,6 +185,8 @@ func (s *Screen) forwardFocused(msg tea.Msg) tea.Cmd {
 		s.compPick, cmd = s.compPick.Update(msg)
 	case s.focus.Is(&s.ovlPick):
 		s.ovlPick, cmd = s.ovlPick.Update(msg)
+	case s.focus.Is(&s.glyphPick):
+		s.glyphPick, cmd = s.glyphPick.Update(msg)
 	case s.focus.Is(&s.rows):
 		s.rows, cmd = s.rows.Update(msg)
 	case s.focus.Is(&s.field):
@@ -164,6 +202,7 @@ func (s *Screen) Layout() layout.Node {
 		layout.Fixed(24, layout.VStack(
 			layout.Flex(1, layout.Sized(&s.compPick)),
 			layout.Flex(1, layout.Sized(&s.ovlPick)),
+			layout.Flex(1, layout.Sized(&s.glyphPick)),
 		)),
 		layout.Flex(1, layout.ZStack(
 			layout.VStack(
@@ -194,7 +233,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 // cursors and which pane had focus.
 func (s *Screen) rebuild() {
 	t := s.themed()
-	compCur, ovlCur, rowCur := s.component, s.overlay, s.rows.Cursor()
+	compCur, ovlCur, glyphCur, rowCur := s.component, s.overlay, s.glyphs, s.rows.Cursor()
 	value := s.field.Value()
 	idx := s.focus.Index()
 
@@ -210,10 +249,21 @@ func (s *Screen) rebuild() {
 	s.ovlPick = list.New(ovlOpts)
 	s.ovlPick.SetCursor(ovlCur)
 
+	glyphOpts := t.List()
+	glyphOpts.Title = "glyphs"
+	glyphOpts.Items = glyphNames()
+	s.glyphPick = list.New(glyphOpts)
+	s.glyphPick.SetCursor(glyphCur)
+
 	rowOpts := t.List()
 	rowOpts.Title = "a list"
-	rowOpts.Items = []string{"api-gateway", "worker-pool", "scheduler", "ingest", "web"}
+	rowOpts.Filterable = true
+	rowOpts.Markable = true
 	s.rows = list.New(rowOpts)
+	s.rows.SetKeyedItems(previewRows())
+	// Marked declaratively, not by ToggleMark: rebuild runs on every picker
+	// move, and a toggle would flip the mark on and off as you browse.
+	s.rows.SetMarks([]string{"worker-pool"})
 	s.rows.SetCursor(rowCur)
 
 	fieldOpts := t.Input()
@@ -234,6 +284,20 @@ func (s *Screen) rebuild() {
 	// The input is a focus stop like any other. It reports IsCapturingKeys
 	// while focused, so tab cannot cycle off it — press esc to leave the
 	// field, then tab.
-	s.focus = focus.NewGroup(&s.compPick, &s.ovlPick, &s.rows, &s.field, &s.choice)
+	s.focus = focus.NewGroup(&s.compPick, &s.ovlPick, &s.glyphPick, &s.rows, &s.field, &s.choice)
 	s.focus.SetIndex(idx)
+}
+
+// previewRows are keyed so the list can carry a mark; anonymous string items
+// silently cannot be marked.
+func previewRows() []list.KeyedItem {
+	names := []string{
+		"api-gateway", "worker-pool", "scheduler", "ingest",
+		"web", "cache", "queue", "cron", "search", "billing",
+	}
+	out := make([]list.KeyedItem, len(names))
+	for i, n := range names {
+		out[i] = list.KeyedItem{Key: n, Display: n}
+	}
+	return out
 }

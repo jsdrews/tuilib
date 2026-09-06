@@ -38,6 +38,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -106,8 +107,12 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
-	HScrollbar     bool
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
+	HScrollbar   bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// tree is in its loading state (see SetLoading). Pass via theme.Tree()
@@ -247,6 +252,9 @@ func (k *Keys) fillDefaults() {
 
 // Model is the tree widget. Embed by value; mutate via the setters.
 type Model struct {
+	// glyphs is the resolved mark vocabulary this component draws with.
+	glyphs glyph.Set
+
 	root     Node
 	expanded map[string]bool
 	rows     []row
@@ -310,6 +318,7 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		glyphs:           opts.Glyphs.Resolve(),
 		token:            focus.NewToken(),
 		root:             opts.Root,
 		expanded:         map[string]bool{},
@@ -339,6 +348,7 @@ func New(opts Options) Model {
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
@@ -642,7 +652,7 @@ func (m Model) filterHeader() string {
 	if m.filter.Focused() {
 		rule = m.filterRuleActive
 	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
 }
 
 // SetTitle sets the pane's top-left title.
@@ -1212,9 +1222,9 @@ func (m *Model) formatRow(r row, current bool) string {
 	case r.isLeaf:
 		glyph = "  "
 	case r.expanded:
-		glyph = "▾ "
+		glyph = m.glyphs.ExpandOpen + " "
 	default:
-		glyph = "▸ "
+		glyph = m.glyphs.ExpandClosed + " "
 	}
 
 	label := r.node.Label()
@@ -1223,7 +1233,7 @@ func (m *Model) formatRow(r row, current bool) string {
 	gutter := m.gutterForRow(r)
 	if !current {
 		if m.markable && m.marks[r.path] {
-			return m.markStyle.Render(markGlyph) + " " + indent + glyph + m.highlightLabel(label)
+			return m.markStyle.Render(m.glyphs.Mark) + " " + indent + glyph + m.highlightLabel(label)
 		}
 		return gutter + indent + glyph + m.highlightLabel(label)
 	}

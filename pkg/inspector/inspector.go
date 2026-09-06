@@ -36,6 +36,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -84,8 +85,12 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
-	HScrollbar     bool
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
+	HScrollbar   bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// inspector is in its loading state (see SetLoading).
@@ -206,6 +211,9 @@ func (k *Keys) fillDefaults() {
 
 // Model is the inspector widget. Embed by value; mutate via the setters.
 type Model struct {
+	// glyphs is the resolved mark vocabulary this component draws with.
+	glyphs glyph.Set
+
 	fields   []Field
 	expanded map[string]bool
 	rows     []row
@@ -261,6 +269,7 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		glyphs:           opts.Glyphs.Resolve(),
 		token:            focus.NewToken(),
 		fields:           append([]Field(nil), opts.Fields...),
 		expanded:         map[string]bool{},
@@ -291,6 +300,7 @@ func New(opts Options) Model {
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
@@ -459,7 +469,7 @@ func (m Model) filterHeader() string {
 	if m.filter.Focused() {
 		rule = m.filterRuleActive
 	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
 }
 
 // SetFields replaces the record. Expansion state is preserved by row
@@ -1022,9 +1032,9 @@ func (m Model) renderRow(r row) string {
 	glyph := "  "
 	if !r.isLeaf {
 		if r.expanded {
-			glyph = "▾ "
+			glyph = m.glyphs.ExpandOpen + " "
 		} else {
-			glyph = "▸ "
+			glyph = m.glyphs.ExpandClosed + " "
 		}
 	}
 	label := r.field.Label

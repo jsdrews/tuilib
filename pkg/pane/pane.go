@@ -8,6 +8,7 @@ package pane
 
 import (
 	"fmt"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -114,6 +115,7 @@ type Pane struct {
 	activeBorder   lipgloss.Border
 	inactiveBorder lipgloss.Border
 	slotBrackets   SlotBracketStyle
+	glyphs         glyph.Set
 
 	keys Keys
 }
@@ -139,6 +141,9 @@ type Options struct {
 	// Overlays are the deliberate exception — see Theme.BorderShapeOverlay.
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
+	// Glyphs supplies the scrollbar thumb and track. Empty fields fall back
+	// to glyph.Default.
+	Glyphs glyph.Set
 	// SlotBrackets controls how the title and other border slot text are
 	// bracketed against the border line. Defaults to SlotBracketsNone
 	// (text sits inline on the border with no surrounding glyphs).
@@ -199,6 +204,7 @@ func New(opts Options) Pane {
 		activeBorder:   opts.ActiveBorder,
 		inactiveBorder: opts.InactiveBorder,
 		slotBrackets:   opts.SlotBrackets,
+		glyphs:         opts.Glyphs.Resolve(),
 		keys:           opts.Keys,
 	}
 	p.SetRect(geom.Rect{W: opts.Width, H: opts.Height})
@@ -274,11 +280,11 @@ func (p Pane) View() string {
 		if p.virtualTotal > 0 {
 			total, visible, offset = p.virtualTotal, p.virtualVisible, p.virtualOffset
 		}
-		bar := Scrollbar(p.viewport.Height, total, visible, offset)
+		bar := ScrollbarWith(p.viewport.Height, total, visible, offset, p.glyphs)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, p.viewport.View(), bar)
 		if p.hScrollbar {
 			inner := p.viewport.Width
-			hbar := HScrollbar(inner, p.maxLineW, inner, p.xOffset)
+			hbar := HScrollbarWith(inner, p.maxLineW, inner, p.xOffset, p.glyphs)
 			body = lipgloss.JoinVertical(lipgloss.Left, body, hbar+strings.Repeat(" ", ScrollbarWidth))
 		}
 		// Auto-fill bottom-right with scroll percent only when content actually

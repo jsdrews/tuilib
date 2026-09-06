@@ -80,6 +80,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
@@ -296,7 +297,11 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
 
 	// HScrollbar reserves a row at the bottom of the body pane and lets
 	// ←/h and →/l scroll wide tables horizontally. theme.Table() enables
@@ -474,6 +479,9 @@ type Borders struct {
 
 // Model is the table widget. Embed as a value; mutate via the setters.
 type Model struct {
+	// glyphs is the resolved mark vocabulary this component draws with.
+	glyphs glyph.Set
+
 	cols     []Column
 	widths   []int // effective per-column visible widths (base + flex share)
 	rows     []Row
@@ -579,6 +587,7 @@ func New(opts Options) Model {
 		colSep = " " + opts.Borders.Vertical + " "
 	}
 	m := Model{
+		glyphs:        opts.Glyphs.Resolve(),
 		cols:          cols,
 		rows:          append([]Row(nil), opts.Rows...),
 		filterable:    opts.Filterable,
@@ -605,7 +614,9 @@ func New(opts Options) Model {
 		focusIdx:      -1,
 	}
 	if m.phGlyph == "" {
-		m.phGlyph = "·"
+		// Options.Placeholder still wins; the glyph set is the fallback, so a
+		// theme can restyle filler rows without every caller restating it.
+		m.phGlyph = m.glyphs.Placeholder
 	}
 	m.rebuildPlaceholder()
 	m.visible = m.rows
@@ -629,6 +640,7 @@ func New(opts Options) Model {
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
@@ -818,7 +830,7 @@ func (m Model) filterHeader() string {
 	if m.filter.Focused() {
 		rule = m.filterRuleActive
 	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
 }
 
 // rowCount is the number of rows the cursor can reach — the logical total
@@ -1998,7 +2010,7 @@ func (m *Model) refresh() {
 			// punch a hole in the selected row's background (rule 19).
 			b.WriteString(m.selectedStyle.Render(m.gutterFor(i) + row))
 		case m.markable && m.isMarkedAt(i):
-			b.WriteString(m.markStyle.Render(markGlyph) + m.cellStyle.Render(" "+row))
+			b.WriteString(m.markStyle.Render(m.glyphs.Mark) + m.cellStyle.Render(" "+row))
 		default:
 			b.WriteString(m.cellStyle.Render(m.gutterFor(i) + row))
 		}
@@ -2119,9 +2131,9 @@ func (m Model) headerCells() []string {
 		title := c.Title
 		if i == m.sortCol {
 			if m.sortDesc {
-				title += " ▼"
+				title += " " + m.glyphs.SortDesc
 			} else {
-				title += " ▲"
+				title += " " + m.glyphs.SortAsc
 			}
 		}
 		out[i] = title

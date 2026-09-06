@@ -1,6 +1,7 @@
 package pane
 
 import (
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"math"
 	"strings"
 )
@@ -8,12 +9,6 @@ import (
 const (
 	ScrollbarWidth  = 1
 	ScrollbarHeight = 1
-
-	scrollThumb = "█"
-	scrollTrack = "░"
-
-	hScrollThumb = "━"
-	hScrollTrack = "─"
 )
 
 // Scrollbar renders a single-column vertical scrollbar of the given height.
@@ -21,6 +16,14 @@ const (
 // in the viewport, and offset is the current scroll offset from the top.
 // When content fits entirely, returns a blank column of the given height.
 func Scrollbar(height, total, visible, offset int) string {
+	return ScrollbarWith(height, total, visible, offset, glyph.Default())
+}
+
+// ScrollbarWith is Scrollbar drawn with an explicit glyph set. Pane uses it
+// so a theme's thumb and track reach the bar; the plain form keeps working
+// for callers that never set glyphs.
+func ScrollbarWith(height, total, visible, offset int, g glyph.Set) string {
+	g = g.Resolve()
 	if height <= 0 {
 		return ""
 	}
@@ -31,9 +34,9 @@ func Scrollbar(height, total, visible, offset int) string {
 	thumb := max(1, int(math.Round(float64(visible)*ratio)))
 	off := max(0, min(height-thumb, int(math.Round(float64(offset)*ratio))))
 	return strings.TrimRight(
-		strings.Repeat(scrollTrack+"\n", off)+
-			strings.Repeat(scrollThumb+"\n", thumb)+
-			strings.Repeat(scrollTrack+"\n", max(0, height-off-thumb)),
+		strings.Repeat(g.ScrollTrack+"\n", off)+
+			strings.Repeat(g.ScrollThumb+"\n", thumb)+
+			strings.Repeat(g.ScrollTrack+"\n", max(0, height-off-thumb)),
 		"\n",
 	)
 }
@@ -43,6 +46,12 @@ func Scrollbar(height, total, visible, offset int) string {
 // fits in the viewport, and offset is the current horizontal scroll
 // column. When content fits entirely, returns a blank row.
 func HScrollbar(width, total, visible, offset int) string {
+	return HScrollbarWith(width, total, visible, offset, glyph.Default())
+}
+
+// HScrollbarWith is HScrollbar drawn with an explicit glyph set.
+func HScrollbarWith(width, total, visible, offset int, g glyph.Set) string {
+	g = g.Resolve()
 	if width <= 0 {
 		return ""
 	}
@@ -52,7 +61,7 @@ func HScrollbar(width, total, visible, offset int) string {
 	ratio := float64(width) / float64(total)
 	thumb := max(1, int(math.Round(float64(visible)*ratio)))
 	off := max(0, min(width-thumb, int(math.Round(float64(offset)*ratio))))
-	return strings.Repeat(hScrollTrack, off) +
-		strings.Repeat(hScrollThumb, thumb) +
-		strings.Repeat(hScrollTrack, max(0, width-off-thumb))
+	return strings.Repeat(g.HScrollTrack, off) +
+		strings.Repeat(g.HScrollThumb, thumb) +
+		strings.Repeat(g.HScrollTrack, max(0, width-off-thumb))
 }

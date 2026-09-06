@@ -29,6 +29,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -104,7 +105,11 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
 }
 
 // Model is the input's exported state. Focus state lives on both the
@@ -171,6 +176,7 @@ func New(opts Options) Model {
 		Width:          opts.Width,
 		Height:         3,
 		Title:          opts.Title,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
