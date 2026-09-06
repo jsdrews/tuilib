@@ -680,6 +680,76 @@ example in `examples/`.
     rule 25's reservations and impose a second navigation model on a
     component that already scrolls. See `examples/data/remote`.
 
+32. **For multi-select, set `Options.Markable` and read `Selection()`.**
+    `pkg/list`, `pkg/table` and `pkg/tree` carry a marked set the user
+    builds with `x`, which toggles the cursor row both ways (`space` also
+    marks in list and table; in a tree it stays expand/collapse). `X`
+    (shift+x) extends the selection from the anchor — the most recently marked row —
+    to the cursor; `A` marks every row the filter currently shows;
+    `D` clears the selection outright; clicking the `✓` gutter toggles
+    without opening the row. Off by default: no marker column, no
+    bindings, no width cost.
+
+    `D` is a separate key rather than a second `A` because
+    `A` is a *toggle over the visible rows*: from a partial selection
+    it marks the rest, and only a second press clears. "Undo my selection"
+    would otherwise route through a state where everything is marked,
+    which is the wrong place to pass through on a screen whose next
+    keystroke might be a destructive verb.
+
+    `X` spans in **either direction** from the anchor, which stays fixed —
+    so repeated ranges grow and shrink against one end rather than walking
+    it along. With no usable anchor it marks the cursor row alone and
+    anchors there. Ranges are additive: they extend a selection rather
+    than replacing it. **Shift+click is the same verb with the mouse.**
+    (The range key is `X` — shift+x — and not `shift+space`, because
+    terminals do not deliver shift+space distinguishably from space.
+    Shift+click may never arrive at all, since some terminals reserve it,
+    so it is an accelerator on top of `X` and never the only path.)
+
+    **In `list` and `table`, marking requires keyed data** —
+    `SetKeyedItems` / `SetKeyedRows`. Marks are held by key, never by
+    index, so a polled refresh (rule 24) that reorders the set between the
+    user marking rows and choosing a verb cannot slide the selection onto
+    its neighbours. On anonymous `SetItems` / `SetRows` every mark
+    operation is a deliberate no-op: an inert feature is recoverable, a
+    silently wrong selection is not.
+
+    `pkg/tree` needs no keyed setter, because a node's path already *is*
+    its identity — the same path the tree uses for expansion state and
+    cursor restore. **Marking a branch marks that node alone**, not its
+    descendants. Paths are hierarchical strings, so a caller wanting the
+    subtree can prefix-test what it got; the alternative needs a tri-state
+    glyph and a rule for children that arrive on a later refresh, and buys
+    nothing until something needs it. `A` there means every *visible*
+    row — expanded, and surviving the filter — so it never marks what a
+    collapsed branch is hiding.
+
+    **Read `Selection()`, not `Marks()`.** It is "the marked keys, or the
+    cursor row's key when nothing is marked", which is the branch every
+    caller would otherwise write and some would forget — and whose
+    failure mode is a verb quietly acting on one row when the user had
+    marked six. `SelectionLabel()` names it for a confirm string or a
+    menu title ("cache-redis", or "3 items").
+
+    Marks survive filtering, because a key does not care whether its row
+    is on screen. So a user can mark a row, filter it away, and still act
+    on it — correct, and a genuine surprise, which is why `action.Set`
+    puts `Target` on the menu's own border rather than trusting the user
+    to remember. Carry them across a `SetTheme` rebuild with `SetMarks`
+    the same way you carry the cursor (rule 4).
+
+    A windowed table (`SetWindow`) cannot be marked: it carries rows
+    without keys, so a mark there could only be held by index into a
+    sparse paged set. Marking is inert there rather than approximate.
+    `pkg/inspector` has no marking — it is a record viewer, and there is
+    no verb that acts on a set of its fields.
+
+    See `examples/data/multiselect` and rule 8: the verbs that act on a
+    selection belong in an `action.Set`, not on letter keys. (Rules 30 and
+    31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
+    key table, both shipped but not yet written up here.)
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -835,6 +905,17 @@ example in `examples/`.
 - **Don't write per-component reset codes.** If bar colors drift between
   embedded segments, the fix is usually "make sure every embedded style
   sets the same `Background()`," not a manual `\x1b[0m`.
+- **Don't branch on `Marks()` vs. the cursor by hand.** Writing
+  `if ks := t.Marks(); len(ks) > 0 { … } else { … }` at every call site is
+  easy to get right once and easy to forget the second time, and what a
+  forgotten branch does is act on one row when the user marked six.
+  `Selection()` is that branch, already written. Reach for `Marks()` only
+  when you specifically need "marked, and not the cursor fallback".
+- **Don't offer marking on anonymous rows.** `Options.Markable` with
+  `SetRows` / `SetItems` renders a gutter the user can click and a `space`
+  binding that does nothing, because marks need keys. Either key the data
+  (`SetKeyedRows` / `SetKeyedItems`) or leave `Markable` off — a visible
+  affordance that silently no-ops reads as a broken component.
 - **Don't hand-roll a focus index.** `focus.Group` (rule 27) owns
   cycling, the blur-all-focus-one dance, click-to-focus grants, and
   `IsCapturingKeys` delegation. An int plus an `applyFocus` helper gets
@@ -1091,6 +1172,17 @@ path.
   typing `G` into the filter doesn't trigger the jump. Long rows scroll
   horizontally with `←→` / `h` / `l` when `HScrollbar` is enabled (default
   via `theme.List()`).
+- **Multi-select (marking):** `pkg/list/mark.go`, `pkg/table/mark.go` and
+  `pkg/tree/mark.go` —
+  `Options.Markable`, `space` / `A`, `Marks` / `SetMarks` /
+  `ClearMarks` / `MarkCount`, and `Selection` / `SelectionLabel`, which
+  are the two a screen actually calls. Held by key, so marks survive a
+  filter, a keyed swap and a theme rebuild; inert on anonymous data and
+  under `SetWindow`. The contract is asserted once across both components
+  in `internal/componenttest/marking_test.go` rather than in any one
+  package, for the reason the "don't test shared behaviour in one
+  component's package" anti-pattern gives. See rule 32,
+  `examples/data/multiselect`, and `docs/actions.md` decisions 19-20.
 - **Keyed items / rows:** `pkg/list` (`SetKeyedItems` + `KeyedItem{Key,
   Display}` + `SelectedKey`) and `pkg/table` (`SetKeyedRows` +
   `KeyedRow{Key, Cells}` + `SelectedKey`) are the auto-refresh primitive.

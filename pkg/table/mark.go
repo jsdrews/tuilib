@@ -88,8 +88,12 @@ func (m *Model) toggleMarkAt(i int) {
 	}
 	if m.marks[k] {
 		delete(m.marks, k)
+		if m.markAnchor == k {
+			m.markAnchor = ""
+		}
 	} else {
 		m.marks[k] = true
+		m.markAnchor = k
 	}
 	m.refresh()
 }
@@ -148,6 +152,9 @@ func (m *Model) SetMarks(keys []string) {
 	for _, k := range keys {
 		m.marks[k] = true
 	}
+	if !m.marks[m.markAnchor] {
+		m.markAnchor = ""
+	}
 	m.refresh()
 }
 
@@ -157,6 +164,7 @@ func (m *Model) ClearMarks() {
 		return
 	}
 	m.marks = map[string]bool{}
+	m.markAnchor = ""
 	m.refresh()
 }
 
@@ -187,4 +195,81 @@ func (m Model) SelectionLabel() string {
 	default:
 		return strconv.Itoa(len(sel)) + " items"
 	}
+}
+
+// Range marking: X extends the selection from the anchor to the cursor.
+//
+// The anchor is the most recently marked row, held by key like the marks
+// themselves. Marking a row sets it; unmarking that same row clears it, so the
+// anchor is always a row that is actually marked.
+//
+// A range runs in either direction: the anchor and the cursor are the two ends
+// of a span, whichever is on top. With no usable anchor — none set, or one
+// whose row has been filtered away — X marks the cursor row alone and becomes
+// the new anchor, so the gesture always reads "put the anchor down, move,
+// extend".
+
+// anchorIndex resolves the anchor key to its current position. Not found means
+// the anchor row has been filtered away or removed, in which case there is no
+// range to draw and V falls back to marking the cursor row.
+func (m Model) anchorIndex() (int, bool) {
+	if m.markAnchor == "" {
+		return 0, false
+	}
+	for i := range m.visible {
+		if k, ok := m.keyAt(i); ok && k == m.markAnchor {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// markAt marks row i without toggling. Reports the row's key.
+func (m *Model) markAt(i int) (string, bool) {
+	k, ok := m.keyAt(i)
+	if !ok {
+		return "", false
+	}
+	if m.marks == nil {
+		m.marks = map[string]bool{}
+	}
+	m.marks[k] = true
+	return k, true
+}
+
+// MarkRange marks every row between the anchor and the cursor, inclusive, in
+// whichever direction they sit. With no usable anchor it marks the cursor row
+// alone and anchors there.
+//
+// The anchor stays where it was, so repeated ranges from one anchor grow and
+// shrink against a fixed end rather than walking it along.
+//
+// Additive: rows already marked outside the range keep their marks, so a range
+// extends a selection rather than replacing it.
+func (m *Model) MarkRange() {
+	if !m.markable {
+		return
+	}
+	cur := m.cursor
+	if _, ok := m.keyAt(cur); !ok {
+		return
+	}
+
+	start, ok := m.anchorIndex()
+	if !ok {
+		if k, ok := m.markAt(cur); ok {
+			m.markAnchor = k
+		}
+		m.refresh()
+		return
+	}
+
+	lo, hi := start, cur
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	for i := lo; i <= hi; i++ {
+		m.markAt(i)
+	}
+	m.refresh()
 }

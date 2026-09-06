@@ -138,10 +138,14 @@ func (s *Screen) Help() []key.Binding {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 	cursor, query := s.tree.Cursor(), s.tree.Query()
+	marks := s.tree.Marks()
 	opts := t.Tree()
 	opts.Title = "tuilib (synthetic)"
 	opts.Root = sample()
 	opts.Searchable = true
+	// Marking is keyed on each node's path, so no keyed setter is needed and
+	// the marks survive expand/collapse, the filter, and this rebuild.
+	opts.Markable = true
 	opts.InitialDepth = 2
 	opts.Filter.Placeholder = "search nodes…"
 	s.tree = tw.New(opts)
@@ -149,4 +153,5 @@ func (s *Screen) SetTheme(t theme.Theme) {
 		s.tree.SetQuery(query)
 	}
 	s.tree.SetCursor(cursor)
+	s.tree.SetMarks(marks)
 }

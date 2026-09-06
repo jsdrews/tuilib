@@ -53,8 +53,8 @@ type Options struct {
 	// SelectedColor foregrounds the highlighted row (bold).
 	SelectedColor lipgloss.TerminalColor
 
-	// Markable adds a mark column and binds space / ctrl+a, so the user can
-	// build a multi-selection the screen reads back with Selection().
+	// Markable adds a mark column and binds x / X / A / D, so the
+	// user can build a multi-selection the screen reads back with Selection().
 	//
 	// Off by default, and it costs a row nothing when off: the gutter stays
 	// two cells wide. Marking requires keyed items (SetKeyedItems) — see
@@ -94,7 +94,20 @@ type Keys struct {
 	HalfUp, HalfDown key.Binding
 	Filter           key.Binding
 	Mark, MarkAll    key.Binding
-	Pane             pane.Keys
+	// ClearMarks drops the whole selection unconditionally.
+	//
+	// Separate from MarkAll because MarkAll is a toggle over the *visible*
+	// rows: from a partial selection it marks the rest before a second press
+	// clears, so "undo my selection" would otherwise route through a state
+	// where everything is marked — an alarming detour on a screen whose next
+	// keystroke might be a destructive verb. This key always does the same
+	// thing regardless of what is currently marked.
+	ClearMarks key.Binding
+
+	// MarkRange extends the selection from the anchor (the most recently
+	// marked row) to the cursor. Forward only; see mark.go.
+	MarkRange key.Binding
+	Pane      pane.Keys
 }
 
 // DefaultKeys returns the list's stock keymap. Mutate the returned value
@@ -111,9 +124,11 @@ func DefaultKeys() Keys {
 		// space already means "toggle" in tree, inspector and toggle, so
 		// marking extends the existing vocabulary rather than inventing one.
 		// Neither list nor table bound it.
-		Mark:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
-		MarkAll: key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("^a", "mark all")),
-		Pane:    pane.DefaultKeys(),
+		Mark:       key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "mark")),
+		MarkAll:    key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "mark all")),
+		ClearMarks: key.NewBinding(key.WithKeys("D"), key.WithHelp("D", "drop marks")),
+		MarkRange:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "mark to here")),
+		Pane:       pane.DefaultKeys(),
 	}
 }
 
@@ -148,6 +163,12 @@ func (k *Keys) fillDefaults() {
 	}
 	if len(k.MarkAll.Keys()) == 0 {
 		k.MarkAll = d.MarkAll
+	}
+	if len(k.ClearMarks.Keys()) == 0 {
+		k.ClearMarks = d.ClearMarks
+	}
+	if len(k.MarkRange.Keys()) == 0 {
+		k.MarkRange = d.MarkRange
 	}
 	k.Pane.FillDefaults()
 }
@@ -203,9 +224,13 @@ type Model struct {
 	hScrollbar    bool
 
 	// marks holds the multi-selection by item key. See mark.go.
-	markable  bool
-	marks     map[string]bool
-	markStyle lipgloss.Style
+	markable bool
+	marks    map[string]bool
+	// markAnchor is the key of the most recently marked row — the fixed end
+	// of a MarkRange. Held as a key, like the marks themselves, so a reorder
+	// cannot slide the anchor onto a different row.
+	markAnchor string
+	markStyle  lipgloss.Style
 
 	keys Keys
 
@@ -616,6 +641,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.ToggleMark()
 	case m.markable && key.Matches(km, m.keys.MarkAll):
 		m.ToggleMarkAll()
+	case m.markable && key.Matches(km, m.keys.ClearMarks):
+		m.ClearMarks()
+	case m.markable && key.Matches(km, m.keys.MarkRange):
+		m.MarkRange()
 	default:
 		var cmd tea.Cmd
 		m.body, cmd = m.body.Update(msg)
@@ -695,7 +724,7 @@ func (m Model) Help() []key.Binding {
 		out = append(out, m.keys.Filter)
 	}
 	if m.markable {
-		out = append(out, m.keys.Mark, m.keys.MarkAll,
+		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
 			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
 	}
 	return out
