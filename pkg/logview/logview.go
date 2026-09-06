@@ -38,6 +38,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -82,8 +83,12 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
-	HScrollbar     bool
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
+	HScrollbar   bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// logview is in its loading state (see SetLoading). Pass via
@@ -154,6 +159,9 @@ func (k *Keys) fillDefaults() {
 
 // Model is the logview widget. Embed by value; mutate via the setters.
 type Model struct {
+	// glyphs is the resolved mark vocabulary this component draws with.
+	glyphs glyph.Set
+
 	lines    []string
 	maxLines int
 	follow   bool
@@ -202,6 +210,7 @@ func New(opts Options) Model {
 	opts.Keys.fillDefaults()
 
 	m := Model{
+		glyphs:           opts.Glyphs.Resolve(),
 		token:            focus.NewToken(),
 		maxLines:         opts.MaxLines,
 		follow:           true,
@@ -230,6 +239,7 @@ func New(opts Options) Model {
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
@@ -434,7 +444,7 @@ func (m Model) filterHeader() string {
 	if m.filter.Focused() {
 		rule = m.filterRuleActive
 	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
 }
 
 // SetTitle sets the pane's top-left title.
@@ -496,6 +506,12 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor
 
 // SetInactiveColor updates the body pane's inactive border color.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
+
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.body.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.body.SetInactiveBorder(b) }
 
 // SetMatchStyle updates the highlight style applied to matched substrings.
 func (m *Model) SetMatchStyle(s lipgloss.Style) {

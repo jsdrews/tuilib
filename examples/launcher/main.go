@@ -18,6 +18,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 
+	appchrome "github.com/jsdrews/tuilib/examples/app/chrome"
 	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
 	appfocus "github.com/jsdrews/tuilib/examples/app/focus"
 	applayouts "github.com/jsdrews/tuilib/examples/app/layouts"
@@ -59,6 +60,7 @@ type entry struct {
 }
 
 var entries = []entry{
+	{"Chrome — theme-owned border shape", "The two border-shape slots a Theme carries: one for ordinary components, one for overlays. Pick a shape on the left and every component on screen — the pickers included — is rebuilt from the modified theme, which is the same path any app gets from th.List()/th.Input()/th.Confirm(). Set both pickers to the same shape to see why the overlay slot is separate: the modal flattens into the content behind it.", appchrome.New},
 	{"Panes — border + title showcase", "Four panes demonstrating border styles, title positions, and slot-bracket variants.", paneshowcase.New},
 	{"List — filterable cities (long, for scroll testing)", "A filterable list.Model with 372 numbered rows, so the scrollbar thumb is small and worth dragging. Every row shows its ordinal, so after a drag or a track click you can read whether the jump landed where the thumb said. Wheel scrolls whether or not the pane has focus; double-click opens a row.", datalist.New},
 	{"Logview — streaming with search", "A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow.", datalogview.New},
@@ -78,7 +80,7 @@ var entries = []entry{
 	{"Themes — live palette picker", "Cursor re-skins the whole app; enter shows a theme's field palette.", themecheck.New},
 	{"Layouts — five layout.Node trees", "One screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, …", applayouts.New},
 	{"Stack — data flow between screens", "Parent→child via constructor, child→parent via Pop(result) + OnEnter.", appstack.New},
-	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys.", appfocus.New},
+	{"Focus — tab/shift-tab between components", "A screen with input + list + toggle; tab cycles focus, only the active component takes keys. Esc leaves the input — without it the field captures every key and tab can never cycle off it.", appfocus.New},
 	{"Filters — two filterable panes", "A list and a table, each with its own filter, on one screen. Exercises the focus states a single filterable pane can't reach: exactly one region highlighted at a time, clicking a body taking input back from its filter, switching panes clearing the filter you left, and tab completing a key:value term instead of cycling panes.", appfilters.New},
 	{"Mouse — click, double-click, wheel, drag", "Three panes wired for mouse: click to focus, click a row to select, double-click to open, click a table header to sort or a tree ▸ to expand, wheel over any pane, drag a scrollbar. Requires app.Options.Mouse — the launcher sets it.", appmouse.New},
 	{"Prescreen — push a screen in front, take a result back", "The \"log in before you can use this\" shape: a root screen pushes a child from OnEnter, receives its result on Pop, and can re-push it later (L logs out) — all without the child living permanently on the stack. The login form is set dressing; the flow is the point. Every field is clickable.", appprescreen.New},

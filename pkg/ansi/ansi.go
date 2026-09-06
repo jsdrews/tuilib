@@ -93,3 +93,12 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// CellColorRGB is CellColor for a 24-bit color, emitting the truecolor
+// foreground form with the same foreground-only reset. Callers that hold a
+// lipgloss color rather than a palette index resolve it to RGB and come here;
+// keeping the escape construction in one place is why this lives beside
+// CellColor instead of in the caller.
+func CellColorRGB(r, g, b uint8, text string) string {
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm%s\x1b[39m", r, g, b, text)
+}

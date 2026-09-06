@@ -21,11 +21,6 @@ import "strconv"
 // and still act on it — correct, and a genuine surprise, which is why
 // action.Set.Target names the target on the menu's own border.
 
-const (
-	cursorGlyph = "▸"
-	markGlyph   = "✓"
-)
-
 // keyAt maps a visible row index to its item key.
 func (m Model) keyAt(i int) (string, bool) {
 	if i < 0 || i >= len(m.visibleIdx) {
@@ -49,14 +44,14 @@ func (m Model) isMarkedAt(i int) bool {
 func (m Model) prefixFor(i int) string {
 	cur := " "
 	if i == m.cursor {
-		cur = cursorGlyph
+		cur = m.glyphs.Cursor
 	}
 	if !m.markable {
 		return cur + " "
 	}
 	mk := " "
 	if m.isMarkedAt(i) {
-		mk = markGlyph
+		mk = m.glyphs.Mark
 	}
 	return cur + mk + " "
 }

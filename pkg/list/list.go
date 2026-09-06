@@ -20,6 +20,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -42,7 +43,11 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
 
 	// HScrollbar reserves a row at the bottom of the list pane for a
 	// horizontal scrollbar and lets ←/h and →/l scroll long rows
@@ -50,8 +55,11 @@ type Options struct {
 	// items are guaranteed short and the extra row is unwanted.
 	HScrollbar bool
 
-	// SelectedColor foregrounds the highlighted row (bold).
-	SelectedColor lipgloss.TerminalColor
+	// SelectedStyle is applied to the highlighted row. theme.List() supplies
+	// Accent in bold; every other component naming this slot takes a full
+	// Style, so a list that only accepted a foreground color was the one
+	// place a caller could not give the cursor a background.
+	SelectedStyle lipgloss.Style
 
 	// Markable adds a mark column and binds x / X / A / D, so the
 	// user can build a multi-selection the screen reads back with Selection().
@@ -205,6 +213,9 @@ type SelectedChangedMsg struct {
 
 // Model is the list widget. Embed as a value; mutate via the setters.
 type Model struct {
+	// glyphs is the resolved mark vocabulary this component draws with.
+	glyphs glyph.Set
+
 	items   []string
 	visible []string
 	// visibleIdx maps visible[i] back to items[visibleIdx[i]]. Used by
@@ -264,12 +275,13 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		glyphs:             opts.Glyphs.Resolve(),
 		token:              focus.NewToken(),
 		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
 		filterRuleInactive: lipgloss.NewStyle().Foreground(opts.InactiveColor),
 		items:              append([]string(nil), opts.Items...),
 		filterable:         opts.Filterable,
-		selectedStyle:      lipgloss.NewStyle().Bold(true).Foreground(opts.SelectedColor),
+		selectedStyle:      opts.SelectedStyle,
 		hScrollbar:         opts.HScrollbar,
 		keys:               opts.Keys,
 		markable:           opts.Markable,
@@ -297,6 +309,7 @@ func New(opts Options) Model {
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
 		InactiveBorder: opts.InactiveBorder,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		HScrollbar:     opts.HScrollbar,
 		SpinnerStyle:   opts.SpinnerStyle,
@@ -360,7 +373,7 @@ func (m *Model) refresh() {
 			// close the highlight at its first reset (rule 19).
 			b.WriteString(m.selectedStyle.Render(m.prefixFor(i) + it))
 		case m.markable && m.isMarkedAt(i):
-			b.WriteString(" " + m.markStyle.Render(markGlyph) + " " + it)
+			b.WriteString(" " + m.markStyle.Render(m.glyphs.Mark) + " " + it)
 		default:
 			b.WriteString(m.prefixFor(i) + it)
 		}
@@ -769,7 +782,7 @@ func (m Model) filterHeader() string {
 	if m.filter.Focused() {
 		rule = m.filterRuleActive
 	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat("─", inner))
+	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
 }
 
 // SetItems replaces the item set, re-applies the current filter, and redraws.
@@ -926,9 +939,15 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.body.SetActiveColor
 // SetInactiveColor updates the body pane's inactive border color.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.body.SetInactiveColor(c) }
 
-// SetSelectedColor updates the foreground color of the highlighted row.
-func (m *Model) SetSelectedColor(c lipgloss.TerminalColor) {
-	m.selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(c)
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.body.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.body.SetInactiveBorder(b) }
+
+// SetSelectedStyle updates the style applied to the highlighted row.
+func (m *Model) SetSelectedStyle(s lipgloss.Style) {
+	m.selectedStyle = s
 	m.refresh()
 }
 

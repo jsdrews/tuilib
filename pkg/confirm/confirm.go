@@ -39,6 +39,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -88,7 +89,11 @@ type Options struct {
 	InactiveColor  lipgloss.TerminalColor
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
-	SlotBrackets   pane.SlotBracketStyle
+	// Glyphs are the marks this component draws, plus the scrollbar
+	// thumb and track it hands to its pane. Empty fields fall back to
+	// glyph.Default.
+	Glyphs       glyph.Set
+	SlotBrackets pane.SlotBracketStyle
 }
 
 // Model is the confirm dialog's exported state.
@@ -123,6 +128,7 @@ func New(opts Options) Model {
 		Height:         opts.Height,
 		Title:          opts.Title,
 		Focused:        true,
+		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
@@ -233,6 +239,12 @@ func (m *Model) SetActiveColor(c lipgloss.TerminalColor) { m.pane.SetActiveColor
 
 // SetInactiveColor updates the inactive border color.
 func (m *Model) SetInactiveColor(c lipgloss.TerminalColor) { m.pane.SetInactiveColor(c) }
+
+// SetActiveBorder updates the border shape drawn while focused.
+func (m *Model) SetActiveBorder(b lipgloss.Border) { m.pane.SetActiveBorder(b) }
+
+// SetInactiveBorder updates the border shape drawn while unfocused.
+func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(b) }
 
 // Help returns the keys this dialog responds to. Compose into the parent's
 // Help() while the modal is up so the hint strip reflects the modal context.

@@ -34,7 +34,7 @@ func newFocusList(items []string) Model {
 		Width:         30,
 		Height:        8,
 		Items:         items,
-		SelectedColor: lipgloss.Color("15"),
+		SelectedStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
 	})
 }
 
@@ -44,7 +44,7 @@ func newFilterableFocusList(items []string) Model {
 		Height:        10,
 		Items:         items,
 		Filterable:    true,
-		SelectedColor: lipgloss.Color("15"),
+		SelectedStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")),
 		Filter:        filter.Options{Width: 30, Placeholder: "filter"},
 	})
 }
