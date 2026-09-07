@@ -424,6 +424,22 @@ func (m *Model) SetTheme(t theme.Theme) {
 
 // Help returns the tab-switch bindings plus the active body's Help, deduped.
 func (m Model) Help() []key.Binding {
+	return help.Compile(m.switchKeys(), m.tabs[m.active].Body.Help())
+}
+
+// HelpSections reports the strip's own keys plus the active body's groups.
+// Only the active body: the hidden ones aren't on screen, and their keys do
+// nothing until you switch — which is what the strip's keys are for.
+func (m Model) HelpSections() []help.Section {
+	secs := help.Sections(help.Group(help.SectionTabs, m.switchKeys()...))
+	body := m.tabs[m.active].Body
+	if sp, ok := body.(help.Sectioned); ok {
+		return append(secs, sp.HelpSections()...)
+	}
+	return append(secs, help.Section{Title: body.Title(), Bindings: body.Help()})
+}
+
+func (m Model) switchKeys() []key.Binding {
 	own := []key.Binding{m.prevKey, m.nextKey}
 	if m.numberKeys && len(m.tabs) > 1 {
 		own = append(own, key.NewBinding(
@@ -431,5 +447,6 @@ func (m Model) Help() []key.Binding {
 			key.WithHelp("1-9", "tab"),
 		))
 	}
-	return help.Compile(own, m.tabs[m.active].Body.Help())
+	return append(own, key.NewBinding(
+		key.WithKeys("mouse:tab"), key.WithHelp("click", "switch tab")))
 }

@@ -34,6 +34,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -209,12 +210,14 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	// No "o" binding here: the shell advertises the output key itself, so a
-	// screen restating it would show it twice.
-	return append(s.menu.Help(),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections carries no "o" binding: the shell advertises the output key
+// itself, so a screen restating it would show it twice.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.menu, help.Group("Console demo",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run action")),
-	)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

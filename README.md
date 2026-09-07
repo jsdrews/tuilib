@@ -90,7 +90,7 @@ handles its own state in `Update`.
 | `pkg/breadcrumb` | One-line header strip with click-or-keyboard crumbs |
 | `pkg/pane` | Bordered, titled, scrollable region with slot metadata around the border — the primitive every other component wraps. Truncates long lines to inner width and supports horizontal scroll (←→ / h / l) with an optional thin scrollbar. Built-in loading state replaces the body with a centered spinner via `SetLoading(true)`. |
 | `pkg/statusbar` | Three-slot footer (left/middle/right) with info/error middle states |
-| `pkg/help` | Key-hint renderer (`ShortView` inline, `FullView` overlay) |
+| `pkg/help` | Key hints: `Model` (inline footer) + `Overlay` (the `?` modal — grouped by function, scrollable, searchable). `Section` + `Sectioned` are the contract every component implements; `Group` / `Sections` / `SectionsOf` build them, `Flatten` derives `Help()` from them, `Qualify` prefixes a group with its pane and `Suppress` drops what the shell's globals already claim |
 | `pkg/filter` | Textinput in a pane; "/" to focus, enter commits, esc clears |
 | `pkg/list` | Cursor-driven, optionally filterable list inside a pane. `SelectedIndex()` returns the underlying source-slice index even when items are formatted display strings and a filter is active. `SetKeyedItems([]KeyedItem{Key,Display})` + `SelectedKey()` snap the cursor to the same Key after a swap (the auto-refresh primitive — pair with `pkg/poll`). Vim-style nav: `g`/`G` top/bottom, `ctrl+u`/`ctrl+d` half-page, plus `↑↓` per row. `Options.Markable` adds a multi-selection: `space` toggles the cursor row, `X` extends from the last-marked row to the cursor in either direction (additive; shift+click does the same), `A` marks every row the filter shows, `D` clears outright, and clicking the `✓` gutter toggles; marks are held by Key, so they survive filtering, a keyed swap and a theme rebuild, and are inert on anonymous rows. Read `Selection()` — the marked keys, or the cursor's when nothing is marked — and `SelectionLabel()` ("3 items") |
 | `pkg/table` | Cursor-driven, optionally filterable tabular view inside a pane. `Column{Title, Width, Align, Sortable, Less, Flex, MaxWidth}` declares the layout; rows are `[]string` cells. Header pins to the top while scrolling horizontally with the body so columns stay aligned. ANSI-aware truncation via `x/ansi.Cut` — `Width` is the visible cell width. Sizing: `Width > 0` → fixed; `Width == 0` → content-auto (max of title + any cell, ANSI stripped, floor 4); `Flex > 0` → absorbs a share of leftover inner width by weight (Width is the min, `MaxWidth` is the cap; surplus from capped columns redistributes to uncapped flex columns). Recomputes on row/column/dimension changes, so flex columns reflow on resize. Same nav verbs as `pkg/list` (`g`/`G`, `ctrl+u/d`, `↑↓`/`j`/`k`); filter matches across all cells (ANSI stripped before matching) and accepts space-separated AND-ed terms; a `key:value` term scopes the match to the column whose Title starts with `key` (e.g. `region:europe pop:5`); a `~` prefix on the value makes that term a case-insensitive regex (e.g. `~^new`, `region:~^euro`). Mid-typing a `key:val` term shows the column's distinct matching values in the filter's bottom-left slot, and `tab` completes to the longest common prefix. `SetKeyedRows([]KeyedRow{Key,Cells})` + `SelectedKey()` snap the cursor to the same Key after a swap (the auto-refresh primitive — pair with `pkg/poll`). `Sortable` columns expose `[`/`]` (step active sort column) + `s` (toggle direction); supply `Column.Less` for numeric or unit-aware sort. `Options.Borders{Vertical, HeaderRule}` configures the inter-column glyph and the horizontal rule below the header — both are pre-styled glyph strings (`pkg/ansi.CellColor` keeps the selected-row bg intact); `theme.Table()` ships with subdued `│`/`─` defaults. `Options.Markable` adds a multi-selection: `space` toggles the cursor row, `X` extends from the last-marked row to the cursor in either direction (additive; shift+click does the same), `A` marks every row the filter shows, `D` clears outright, and clicking the `✓` gutter toggles; marks are held by Key, so they survive filtering, a keyed swap and a theme rebuild, and are inert on anonymous rows. Read `Selection()` — the marked keys, or the cursor's when nothing is marked — and `SelectionLabel()` ("3 items") (not available under `SetWindow`, which carries rows without keys) |
@@ -212,6 +212,54 @@ See `examples/app/replace`.
 
 `IsCapturingKeys()` tells the shell when a screen owns input (e.g. filter
 is focused) so global keys like `q`, `t`, and esc-pop are suppressed.
+
+**Key hints and the `?` overlay.** The statusbar's left slot shows a
+`? help` affordance; pressing `?` opens `help.Overlay`, a scrollable,
+searchable modal listing every binding the active screen exposes.
+
+Bindings are **grouped by what they do, not by who owns them**. Every
+interactive component implements `HelpSections() []help.Section` and
+derives its flat `Help()` from it, so the footer strip and the overlay can
+never disagree:
+
+```go
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+```
+
+Group names come from one shared vocabulary — `help.SectionNavigate` /
+`Scroll` / `Filter` / `Search` / `Select` / `Sort` / `Expand` / `View` /
+`Edit` / `Submit` / `Tabs` — so "Navigate" means the same thing in a list,
+a table and a tree. A screen composes its components' groups with its own
+verbs via `help.SectionsOf`:
+
+```go
+func (s *Screen) HelpSections() []help.Section {
+    return help.SectionsOf(&s.table, help.Group("Deployments", s.verbs()...))
+}
+```
+
+Name that group after the *subject* ("Deployments", "Cities"), never after
+the screen or component that owns it — an owner's name ends up standing
+over every binding it holds, including the scroll keys it doesn't
+describe. The owner is a qualifier instead, applied by `help.Qualify`
+("files · Navigate") only when more than one pane is on screen.
+
+A screen with several interactive components forwards
+`focus.Group.HelpSections()`; a `pkg/tab` host forwards
+`tabs.HelpSections()`, which carries the strip's keys plus the *active*
+body's groups. A screen that implements nothing still works — it falls
+back to a single group titled with its own name, which is exactly the flat
+list the footer would have shown.
+
+The shell writes the **Global** group itself (quit or esc-back depending on
+stack depth, theme, suspend, and the opt-in output and actions keys a
+screen has no reason to know about), then `help.Suppress` drops from the
+screen's own groups anything those globals already claim — so a screen that
+lists `q` and `t` in its `Help()` isn't punished for it. Repeats *across*
+panes are kept: two panes binding `↑/k` are two different verbs.
+
+Configure with `app.Options.HelpKey` (the key), `HelpVerbose` (spell as
+many bindings as fit inline in the footer) and `DisableHelpSearch`.
 
 **Statusbar messages.** Screens push transient feedback into the
 statusbar's center slot via `tea.Cmd`s the shell intercepts:

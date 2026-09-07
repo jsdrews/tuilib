@@ -65,6 +65,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -341,18 +342,24 @@ func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(
 // Help() while the modal is up so the hint strip reflects the modal context.
 // In autosize mode with overflowing content, the returned set includes the
 // scroll bindings.
-func (m Model) Help() []key.Binding {
-	out := []key.Binding{
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "dismiss")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "dismiss")),
-	}
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups dismissal under Submit and the autosize scroll keys
+// under Navigate, so a long error reads like anything else that scrolls.
+func (m Model) HelpSections() []help.Section {
+	var scroll []key.Binding
 	if m.autosize && m.canScroll() {
-		out = append(out,
+		scroll = []key.Binding{
 			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "scroll")),
 			key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("PgUp/PgDn", "page")),
-		)
+		}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionSubmit,
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "dismiss")),
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "dismiss"))),
+		help.Group(help.SectionNavigate, scroll...),
+	)
 }
 
 // renderInner produces the content rendered inside the pane. In the

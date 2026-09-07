@@ -30,6 +30,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -174,13 +175,26 @@ func (s *Screen) Layout() layout.Node {
 }
 
 func (s *Screen) Help() []key.Binding {
-	base := []key.Binding{
+	return append(s.screenKeys(), s.focus.Help()...)
+}
+
+func (s *Screen) screenKeys() []key.Binding {
+	return []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refetch")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	}
-	return append(base, s.focus.Help()...)
+}
+
+// HelpSections separates the screen's own verbs from the panes' bindings
+// for the `?` overlay. The Group names the panes; only the verbs that are
+// the screen's own need naming here. Duplicates of the shell's globals
+// (esc, t) are absorbed by its Global section, so listing them in Help()
+// costs nothing.
+func (s *Screen) HelpSections() []help.Section {
+	own := []help.Section{{Title: "Drilldown", Bindings: s.screenKeys()}}
+	return append(own, s.focus.HelpSections()...)
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

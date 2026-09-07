@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -68,13 +69,14 @@ func (s *statusScreen) Layout() layout.Node {
 	)
 }
 
-func (s *statusScreen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+func (s *statusScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *statusScreen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.menu, help.Group("Messages",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "fire")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *statusScreen) SetTheme(t theme.Theme) {

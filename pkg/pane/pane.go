@@ -700,8 +700,14 @@ func (p Pane) VisibleWidth() int { return p.viewport.Width }
 // Focused reports whether the pane is drawn in its active style.
 func (p Pane) Focused() bool { return p.focused }
 
-func (p *Pane) SetFocused(b bool)                   { p.focused = b }
-func (p *Pane) SetTitle(s string)                   { p.title = s }
+func (p *Pane) SetFocused(b bool) { p.focused = b }
+func (p *Pane) SetTitle(s string) { p.title = s }
+
+// Title returns the text on the pane's title slot. Components expose it so
+// a composite — focus.Group building help sections, say — can name the pane
+// a binding belongs to without being told a second time what it is called.
+func (p Pane) Title() string { return p.title }
+
 func (p *Pane) SetTitlePosition(pos BorderPosition) { p.titlePos = pos }
 
 // SetActiveColor updates the border color used when the pane is focused.

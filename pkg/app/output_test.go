@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -404,12 +405,13 @@ func (s *bindingHeavyScreen) Help() []key.Binding {
 	return out
 }
 
-// The expanded panel is capped at HelpMaxRows, so its tail is simply not
-// drawn. A binding placed at the end of the list is therefore the first
-// casualty on exactly the screens that need help most — which is how this
+// The output key has no route to discovery other than being advertised, so
+// it must survive a binding-heavy screen at every width. It used to be
+// appended to the end of a list the footer truncated, which is how this
 // shipped broken the first time: fine on a sparse screen at 120 columns,
-// gone on a table at 80.
-func TestOutputKeySurvivesACappedHelpPanel(t *testing.T) {
+// gone on a table at 80. The overlay puts it in the Global section, which
+// is first and therefore on screen before any scrolling.
+func TestOutputKeySurvivesABindingHeavyScreen(t *testing.T) {
 	for _, w := range []int{60, 80, 100, 120} {
 		m := New(Options{
 			Root:       &bindingHeavyScreen{stubScreen{name: "Table"}},
@@ -425,8 +427,10 @@ func TestOutputKeySurvivesACappedHelpPanel(t *testing.T) {
 		tm, _ = m.Update(typeKey("?"))
 		m = tm.(Model)
 
-		if !strings.Contains(stripANSI(m.View()), "o output") {
-			t.Errorf("w=%d: output key dropped off the end of the capped help panel", w)
+		// The overlay pads the key column to align descriptions, so the
+		// gap between "o" and its label is whatever the widest key needs.
+		if !regexp.MustCompile(`\bo\s+output\b`).MatchString(stripANSI(m.View())) {
+			t.Errorf("w=%d: output key missing from the key overlay", w)
 		}
 	}
 }

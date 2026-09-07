@@ -39,6 +39,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -658,6 +659,9 @@ func (m Model) filterHeader() string {
 // SetTitle sets the pane's top-left title.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.body.Title() }
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -751,40 +755,50 @@ func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }
 // m.keys (the same bindings Update dispatches against), so custom
 // keymaps propagate to the hint strip automatically. While the embedded
 // filter is focused, returns the filter's keys.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the bindings by what they do, for the `?` overlay.
+// Expanding a branch is its own group rather than part of Navigate: it is
+// the verb people come to a tree looking for, and rule 25 deliberately
+// keeps it off the arrow keys.
+func (m Model) HelpSections() []help.Section {
 	if m.searchable && m.filter.Focused() {
-		return m.filter.Help()
+		return help.Sections(help.Group(help.SectionSearch, m.filter.Help()...))
 	}
-	out := []key.Binding{
-		m.keys.Up, m.keys.Down,
-		m.keys.Top, m.keys.Bottom,
-		m.keys.Toggle,
-		m.keys.ExpandAll, m.keys.CollapseAll,
-		m.keys.NextSibling, m.keys.PrevSibling,
-		m.keys.NextLeaf, m.keys.PrevLeaf,
-		m.keys.Enter,
-	}
+	var sel []key.Binding
 	if m.markable {
-		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
-			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
+		sel = []key.Binding{m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")),
+			key.NewBinding(key.WithKeys("mouse:shiftclick"), key.WithHelp("shift-click", "mark to here"))}
 	}
-	out = append(out, m.body.HelpBindings()...)
+	var search []key.Binding
 	if m.searchable {
-		out = append(out, m.keys.Search)
+		search = []key.Binding{m.keys.Search}
 		if m.query != "" {
-			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
+			search = append(search, m.keys.NextMatch, m.keys.PrevMatch)
 			// Filter-mode binding's help label flips with state.
 			label := "filter"
 			if m.filterMode {
 				label = "show all"
 			}
-			out = append(out, key.NewBinding(
+			search = append(search, key.NewBinding(
 				key.WithKeys(m.keys.Filter.Keys()...),
 				key.WithHelp(`\`, label),
 			))
 		}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			m.keys.Up, m.keys.Down,
+			m.keys.Top, m.keys.Bottom,
+			m.keys.NextSibling, m.keys.PrevSibling,
+			m.keys.NextLeaf, m.keys.PrevLeaf,
+			m.keys.Enter),
+		help.Group(help.SectionExpand, m.keys.Toggle, m.keys.ExpandAll, m.keys.CollapseAll),
+		help.Group(help.SectionSelect, sel...),
+		help.Group(help.SectionScroll, m.body.HelpBindings()...),
+		help.Group(help.SectionSearch, search...),
+	)
 }
 
 // ---- internals -----------------------------------------------------------

@@ -68,13 +68,13 @@ func press(x, y int) tea.MouseMsg {
 // View has a value receiver, so the layout.Bar wrappers there size a copy of
 // the Model that is thrown away — leaving the real breadcrumb and statusbar
 // with a zero rect that declines every click.
-func TestClickingHelpAffordanceTogglesPanel(t *testing.T) {
+func TestClickingHelpAffordanceOpensAndClosesOverlay(t *testing.T) {
 	m := newApp(t, 1)
 	if !m.helpOverflow {
 		t.Fatalf("setup: expected the footer to show a help affordance")
 	}
-	if m.helpExpanded {
-		t.Fatalf("setup: panel should start collapsed")
+	if m.helpUp {
+		t.Fatalf("setup: overlay should start closed")
 	}
 
 	m.placeChrome()
@@ -87,17 +87,24 @@ func TestClickingHelpAffordanceTogglesPanel(t *testing.T) {
 	tm, _ := m.Update(press(slot.X+at, slot.Y))
 	m = tm.(Model)
 
-	if !m.helpExpanded {
-		t.Errorf("clicking the help affordance did not expand the panel")
+	if !m.helpUp {
+		t.Errorf("clicking the help affordance did not open the overlay")
 	}
 
-	// And again to close it.
+	// And again to close it: the affordance is outside the modal's bounds,
+	// which is the overlay's own dismissal gesture rather than a second
+	// case in the shell.
 	_ = m.View()
 	m.placeChrome()
 	at, _, _ = m.help.AffordanceSpan(m.shortViewBudget())
-	tm, _ = m.Update(press(slot.X+at, slot.Y))
-	if tm.(Model).helpExpanded {
-		t.Errorf("clicking the affordance again did not collapse the panel")
+	tm, cmd := m.Update(press(slot.X+at, slot.Y))
+	m = tm.(Model)
+	if cmd == nil {
+		t.Fatalf("no dismissal command from a press outside the overlay")
+	}
+	tm, _ = m.Update(cmd())
+	if tm.(Model).helpUp {
+		t.Errorf("clicking outside the overlay did not close it")
 	}
 }
 
@@ -110,8 +117,8 @@ func TestClickingElsewhereOnStatusbarDoesNotToggle(t *testing.T) {
 
 	tm, _ := m.Update(press(slot.X+at+w+2, slot.Y))
 
-	if tm.(Model).helpExpanded {
-		t.Errorf("a click beside the affordance toggled the panel")
+	if tm.(Model).helpUp {
+		t.Errorf("a click beside the affordance opened the overlay")
 	}
 }
 
@@ -156,7 +163,7 @@ func TestMouseOffIgnoresClicks(t *testing.T) {
 
 	tm, _ = m.Update(press(slot.X+at, slot.Y))
 
-	if tm.(Model).helpExpanded {
+	if tm.(Model).helpUp {
 		t.Errorf("clicks were handled with MouseOff")
 	}
 }

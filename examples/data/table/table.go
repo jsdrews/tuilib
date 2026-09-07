@@ -27,6 +27,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/ansi"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -103,13 +104,15 @@ func (s *Screen) Layout() layout.Node {
 	return layout.Sized(&s.tab)
 }
 
-func (s *Screen) Help() []key.Binding {
-	out := s.tab.Help()
-	out = append(out,
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections lets the table group its own bindings for the `?` overlay
+// and adds this screen's verbs under its own heading.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tab, help.Group("Cities",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	)
-	return out
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

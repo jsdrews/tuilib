@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -94,14 +95,14 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Runner",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

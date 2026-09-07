@@ -29,6 +29,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -109,6 +110,12 @@ func (s *Screen) Help() []key.Binding {
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	)
 }
+
+// HelpSections is what the `?` overlay reads. Two filterable panes put
+// nearly forty bindings on this screen, and the footer's flat list cannot
+// say which of them belong to the files pane and which to the rows —
+// the Group can, because it holds both.
+func (s *Screen) HelpSections() []help.Section { return s.focus.HelpSections() }
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t

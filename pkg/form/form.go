@@ -33,6 +33,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -376,17 +377,24 @@ func (m Model) IsCapturingKeys() bool { return true }
 
 // Help returns the form's own bindings plus the focused field's. The
 // enclosing screen typically returns these directly from its own Help().
-func (m Model) Help() []key.Binding {
-	out := []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "submit")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-	}
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections separates moving between fields from committing the form,
+// and puts the focused field's own bindings under Edit.
+func (m Model) HelpSections() []help.Section {
+	var edit []key.Binding
 	if m.focus < len(m.fields) {
-		out = append(out, m.fields[m.focus].Help()...)
+		edit = m.fields[m.focus].Help()
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next")),
+			key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev"))),
+		help.Group(help.SectionSubmit,
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "submit")),
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))),
+		help.Group(help.SectionEdit, edit...),
+	)
 }
 
 // Values returns every field's value keyed by Field.Key.

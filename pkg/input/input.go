@@ -30,6 +30,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -239,6 +240,9 @@ func (m *Model) SetTopRight(s string) { m.pane.SetTopRight(s) }
 
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
 
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.pane.Title() }
+
 // Value returns the current text.
 func (m Model) Value() string { return m.input.Value() }
 
@@ -287,13 +291,17 @@ func (m Model) IsCapturingKeys() bool { return m.Focused() }
 // Help returns the keys this input "owns". Typing is implied and needs no
 // hint; esc is advertised only while focused, since that is the only time it
 // does anything.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections reports the field's bindings under Edit, so the `?` overlay
+// groups them with whatever else on the screen takes typing.
+func (m Model) HelpSections() []help.Section {
 	if !m.Focused() {
 		return nil
 	}
-	return []key.Binding{
+	return help.Sections(help.Group(help.SectionEdit,
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "leave field")),
-	}
+	))
 }
 
 // Reset clears the value and blurs.

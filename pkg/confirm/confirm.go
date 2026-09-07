@@ -40,6 +40,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -248,14 +249,18 @@ func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(
 
 // Help returns the keys this dialog responds to. Compose into the parent's
 // Help() while the modal is up so the hint strip reflects the modal context.
-func (m Model) Help() []key.Binding {
-	return []key.Binding{
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the dialog's keys under Submit: every one of them
+// either commits the choice or abandons it.
+func (m Model) HelpSections() []help.Section {
+	return help.Sections(help.Group(help.SectionSubmit,
 		key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "select")),
 		key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "yes")),
 		key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "no")),
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "commit")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-	}
+	))
 }
 
 // renderInner produces the content rendered inside the pane: message body

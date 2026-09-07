@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -81,16 +82,24 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) Layout() layout.Node { return layout.Sized(&s.list) }
 
-func (s *Screen) Help() []key.Binding {
-	return append(s.list.Help(),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-		// Mouse affordances carry sentinel keys so they flow through
-		// help.Compile without colliding and never match a real KeyMsg.
-		key.NewBinding(key.WithKeys("mouse:drag"), key.WithHelp("drag bar", "scroll")),
-		key.NewBinding(key.WithKeys("mouse:wheel"), key.WithHelp("wheel", "scroll")),
-		key.NewBinding(key.WithKeys("mouse:dblclick"), key.WithHelp("2×click", "open")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the list's own groups through and adds this screen's
+// verbs. The scroll affordances join the list's Scroll group rather than
+// this screen's, because that is what they do — mouse hints are grouped by
+// verb like everything else (rule 10).
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list,
+		help.Group(help.SectionScroll,
+			// Mouse affordances carry sentinel keys so they flow through
+			// help.Compile without colliding and never match a real KeyMsg.
+			key.NewBinding(key.WithKeys("mouse:drag"), key.WithHelp("drag bar", "scroll")),
+			key.NewBinding(key.WithKeys("mouse:wheel"), key.WithHelp("wheel", "scroll"))),
+		help.Group("Cities",
+			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
+			key.NewBinding(key.WithKeys("mouse:dblclick"), key.WithHelp("2×click", "open")),
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme"))),
 	)
 }
 

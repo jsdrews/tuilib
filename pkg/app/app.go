@@ -55,11 +55,10 @@ type Options struct {
 	// the app is pinned to a single theme).
 	ThemeKey key.Binding
 
-	// HelpKey toggles the expanded help panel. The panel appears as a
-	// multi-row strip above the statusbar showing every binding the
-	// active screen currently exposes via Help() — useful when the
-	// inline hints don't all fit in one row. Defaults to "?". Set to an
-	// empty binding (key.NewBinding()) to disable the panel.
+	// HelpKey opens the key overlay (pkg/help.Overlay) — a scrollable,
+	// searchable modal listing every binding the active screen exposes,
+	// grouped into sections. Defaults to "?". Set to an empty binding
+	// (key.NewBinding()) to disable it.
 	HelpKey key.Binding
 
 	// SuspendKey suspends the program (ctrl+z semantics), returning to the
@@ -79,11 +78,6 @@ type Options struct {
 	// binding from an absent one. This flag is the explicit off switch,
 	// matching DisableAutoEscPop.
 	DisableSuspend bool
-
-	// HelpMaxRows caps how many rows the expanded help panel may grow
-	// to. Defaults to 6. The panel uses only as many rows as needed to
-	// fit every binding at the current width, up to this cap.
-	HelpMaxRows int
 
 	// OutputKey opens the app-wide output console (pkg/output) and is the
 	// single switch for the whole feature: leave it zero and no buffer, no
@@ -131,10 +125,15 @@ type Options struct {
 	// tight-packed inline in the statusbar's left slot until they
 	// overflow. The default (zero value) is minimal mode — the footer
 	// shows only the "? help" affordance and pressing HelpKey opens the
-	// expanded panel with every binding. Minimal cuts clutter on screens
-	// with many bindings (a deep component composition can easily
-	// produce 15+) at the cost of inline discoverability.
+	// overlay with every binding. Minimal cuts clutter on screens with
+	// many bindings (a deep component composition can easily produce
+	// 15+) at the cost of inline discoverability.
 	HelpVerbose bool
+
+	// HelpSearch embeds a search field in the key overlay, so a user
+	// hunting for one verb can type "mark" instead of reading. Defaults
+	// to on; set DisableHelpSearch to turn it off.
+	DisableHelpSearch bool
 
 	// Mouse selects how much mouse input the shell enables. Defaults to
 	// MouseOff, so an app gains mouse support only by asking for it — the
@@ -318,16 +317,23 @@ type Model struct {
 
 	quitKey, themeKey, helpKey key.Binding
 	suspendKey                 key.Binding
-	helpMaxRows                int
 	helpMinimal                bool
+	helpSearch                 bool
 	autoEscPop                 bool
 
 	bc breadcrumb.Model
 	sb statusbar.Model
 
 	help         help.Model
-	helpExpanded bool
 	helpOverflow bool
+	// helpOv is built on open and discarded on close, so the overlay
+	// always opens at the top of a freshly measured list — and so a theme
+	// swap has nothing stale to rebuild (the overlay owns the keyboard
+	// while it is up, which means the theme key cannot fire underneath
+	// it). Pointer for the same reason the menu is one: View has a value
+	// receiver, so layout.Sized over a value field would place a copy.
+	helpOv *help.Overlay
+	helpUp bool
 
 	// out* are nil/zero unless Options.OutputKey was set. outScreen is
 	// retained across opens rather than rebuilt, so the console keeps its
@@ -371,8 +377,10 @@ type Model struct {
 // actionsEnabled reports whether the action menu exists for this app.
 func (m Model) actionsEnabled() bool { return m.actionsKey.Keys() != nil }
 
-// overlayUp reports whether the shell is showing the menu or its confirm.
-func (m Model) overlayUp() bool { return m.menuUp || m.confUp }
+// overlayUp reports whether the shell is showing one of its own modals —
+// the action menu, its confirm, or the key overlay. All three own the
+// keyboard and the pointer completely while up.
+func (m Model) overlayUp() bool { return m.menuUp || m.confUp || m.helpUp }
 
 // outputEnabled reports whether the console exists for this app.
 func (m Model) outputEnabled() bool { return m.outBuf != nil }
@@ -413,9 +421,6 @@ func New(opts Options) Model {
 	if opts.DisableSuspend {
 		opts.SuspendKey = key.Binding{}
 	}
-	if opts.HelpMaxRows <= 0 {
-		opts.HelpMaxRows = 6
-	}
 	// Double-click speed is a per-machine preference, so an unset option
 	// defers to the user's config file before falling back to the default.
 	if opts.DoubleClickInterval <= 0 && !opts.SkipConfig {
@@ -436,8 +441,8 @@ func New(opts Options) Model {
 		themeKey:    opts.ThemeKey,
 		helpKey:     opts.HelpKey,
 		suspendKey:  opts.SuspendKey,
-		helpMaxRows: opts.HelpMaxRows,
 		helpMinimal: !opts.HelpVerbose,
+		helpSearch:  !opts.DisableHelpSearch,
 		autoEscPop:  !opts.DisableAutoEscPop,
 		mouseMode:   opts.Mouse,
 		mouse:       mouse.NewTracker(opts.DoubleClickInterval),
@@ -570,18 +575,13 @@ func (m *Model) apply() {
 		m.help.SetBindings(m.helpBindings(cur))
 	}
 
-	// Probe the inline (collapsed) flow first to detect overflow: that's
-	// the source of truth for whether ? should toggle anything. If the
-	// inline flow has no overflow, the panel has nothing to show and we
-	// auto-collapse (also covers theme swaps and screen changes that
-	// shrink the binding set).
-	m.help.SetExpanded(false)
+	// Probe the footer flow to detect overflow: that's the source of truth
+	// for whether ? opens anything. In minimal mode any binding at all
+	// overflows, since none of them are shown inline.
+	m.help.SetOpen(false)
 	_, _, overflow := m.helpStrip()
 	m.helpOverflow = overflow
-	if !overflow {
-		m.helpExpanded = false
-	}
-	m.help.SetExpanded(m.helpExpanded)
+	m.help.SetOpen(m.helpUp)
 	short, _, _ := m.helpStrip()
 
 	sbOpts := t.Statusbar(short, m.rightSlot)
@@ -633,13 +633,13 @@ func (m Model) composeRight() (slot string, badgeW int) {
 // While the console is open the same key closes it, so the description says
 // so; the key label stays whatever the app chose.
 //
-// It goes *first*, not last. The expanded panel is capped at HelpMaxRows, so
-// on a binding-heavy screen the tail of the list is simply not drawn — and a
-// binding appended at the end is the first thing dropped. That is how this
-// shipped broken: it rendered fine on a sparse screen at 120 columns and
-// vanished on a table at 80. Everything else in the list belongs to whatever
-// component is on screen and has some other route to discovery; the output
-// key has none, so it takes the slot that always survives.
+// It goes *first*, not last. The footer shows as many bindings as fit and
+// drops the rest, so a binding appended at the end is the first thing to
+// vanish. That is how this shipped broken: it rendered fine on a sparse
+// screen at 120 columns and disappeared on a table at 80. Everything else in
+// the list belongs to whatever component is on screen and has some other
+// route to discovery; the output key has none, so it takes the slot that
+// always survives.
 func (m Model) helpBindings(cur screen.Screen) []key.Binding {
 	// While an overlay owns the keyboard, the hints are its own — the
 	// screen's bindings do nothing until it closes.
@@ -648,6 +648,8 @@ func (m Model) helpBindings(cur screen.Screen) []key.Binding {
 		return m.conf.Help()
 	case m.menuUp:
 		return m.menu.Help()
+	case m.helpUp:
+		return m.helpOv.Help()
 	}
 
 	own := cur.Help()
@@ -775,6 +777,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case confirm.CancelledMsg:
 		if m.confUp {
 			m.closeOverlay()
+			m.apply()
+			return m, nil
+		}
+
+	case help.ClosedMsg:
+		// Guarded like the confirm results: a screen hosting its own key
+		// overlay keeps receiving its own.
+		if m.helpUp {
+			m.closeHelp()
 			m.apply()
 			return m, nil
 		}
@@ -985,7 +996,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.helpKey.Keys() != nil && key.Matches(msg, m.helpKey) && m.helpOverflow {
-				m.helpExpanded = !m.helpExpanded
+				m.openHelp()
 				m.apply()
 				return m, nil
 			}
@@ -1155,10 +1166,11 @@ func (m *Model) popOutput() tea.Cmd {
 // consumed the event.
 //
 // Clicking a crumb unwinds to that depth in one step, the mouse counterpart
-// of pressing esc repeatedly. Clicking the "? help" affordance toggles the
-// expanded panel, and only while the affordance is actually shown: it is the
-// source of truth for whether the help key does anything, so the click
-// follows the same rule rather than inventing a second one.
+// of pressing esc repeatedly. Clicking the "? help" affordance opens the key
+// overlay, and only while the affordance is actually shown: it is the source
+// of truth for whether the help key does anything, so the click follows the
+// same rule rather than inventing a second one. Closing is the overlay's
+// own job — a press outside its bounds, which the affordance is.
 func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
 	m.placeChrome()
 
@@ -1204,7 +1216,7 @@ func (m *Model) clickChrome(e mouse.Msg) (tea.Cmd, bool) {
 		if at, aw, ok := m.help.AffordanceSpan(m.shortViewBudget()); ok && slot.Hit(e.X, e.Y) {
 			rel := e.X - slot.X
 			if rel >= at && rel < at+aw {
-				m.helpExpanded = !m.helpExpanded
+				m.openHelp()
 				m.apply()
 				return nil, true
 			}
@@ -1262,30 +1274,17 @@ func (m Model) View() string {
 		// No layout.Center wrapper — the menu treats the rect as outer
 		// bounds and places itself inside them.
 		body = layout.ZStack(body, layout.Sized(m.menu))
+	case m.helpUp:
+		// Same shape as the menu: the overlay measures its own list and
+		// centers inside the bounds it is given.
+		body = layout.ZStack(body, layout.Sized(m.helpOv))
 	}
 
-	items := []layout.Item{
+	return layout.VStack(
 		layout.Fixed(1, layout.Bar(&m.bc)),
 		layout.Flex(1, body),
-	}
-	if m.helpExpanded {
-		budget := m.shortViewBudget()
-		if rows := m.help.ExpandedRows(budget, m.helpMaxRows); rows > 0 {
-			h := m.help
-			// Match the statusbar's left-slot Padding(0,1) so panel
-			// columns align with the footer's row 0.
-			leftPad := 1
-			items = append(items, layout.Fixed(rows, layout.RenderFunc(func(r geom.Rect) string {
-				rightPad := r.W - leftPad - budget
-				if rightPad < 0 {
-					rightPad = 0
-				}
-				return h.PadLines(h.ExpandedView(budget, rows), leftPad, rightPad)
-			})))
-		}
-	}
-	items = append(items, layout.Fixed(1, layout.Bar(&m.sb)))
-	return layout.VStack(items...).Render(geom.New(0, 0, m.w, m.h))
+		layout.Fixed(1, layout.Bar(&m.sb)),
+	).Render(geom.New(0, 0, m.w, m.h))
 }
 
 // Theme exposes the app's current palette for screens that need it outside
@@ -1308,6 +1307,89 @@ func (m Model) currentActions() action.Set {
 		return action.Set{}
 	}
 	return p.Actions()
+}
+
+// openHelp builds the key overlay for whatever is on screen and shows it.
+//
+// It is built here rather than held across opens because everything it
+// renders is a snapshot: the sections come from the active screen's current
+// state (a focused filter advertises different keys than a blurred one), and
+// a reopened reference should start at the top with no leftover search.
+func (m *Model) openHelp() {
+	opts := m.theme().HelpOverlay()
+	opts.Searchable = m.helpSearch
+	opts.Title = "keys"
+	o := help.NewOverlay(opts)
+	o.SetSections(m.helpSections())
+	m.helpOv = &o
+	m.helpUp = true
+}
+
+// closeHelp takes the overlay down and drops it.
+func (m *Model) closeHelp() {
+	m.helpUp = false
+	m.helpOv = nil
+}
+
+// helpSections groups the bindings for the overlay: the shell's own globals
+// first, then whatever the active screen describes.
+//
+// The Global section is the shell's to write. Screens list q and t in their
+// own Help() by convention, but nothing makes them, and the ones a screen
+// cannot know about — the output and actions keys, which exist only where
+// the app opted in — were already being prepended by helpBindings for the
+// footer. Naming the group is what makes the rest of the list mean
+// something: everything under a component's heading is that component's.
+// Duplicates are absorbed by help.CompileSections, so a screen that does
+// list q and t is not punished for it.
+//
+// A screen describes itself by implementing help.Sectioned; one that
+// doesn't gets a single section titled with its breadcrumb name, which is
+// exactly the flat list the footer would have shown.
+func (m Model) helpSections() []help.Section {
+	globals := []key.Binding{}
+	if m.outputEnabled() && m.outputKey.Keys() != nil {
+		globals = append(globals, m.outputKey)
+	}
+	if m.actionsEnabled() && !m.currentActions().Empty() {
+		globals = append(globals, m.actionsKey)
+	}
+	if m.helpKey.Keys() != nil {
+		globals = append(globals, key.NewBinding(
+			key.WithKeys(m.helpKey.Keys()...),
+			key.WithHelp(m.helpKey.Help().Key, "close this"),
+		))
+	}
+	if m.themeKey.Keys() != nil {
+		globals = append(globals, m.themeKey)
+	}
+	if m.autoEscPop && m.stack.Depth() > 1 {
+		globals = append(globals, key.NewBinding(
+			key.WithKeys("esc"), key.WithHelp("esc", "back"),
+		))
+	}
+	if m.stack.Depth() == 1 && m.quitKey.Keys() != nil {
+		globals = append(globals, m.quitKey)
+	}
+	if m.suspendKey.Keys() != nil {
+		globals = append(globals, m.suspendKey)
+	}
+
+	secs := []help.Section{{Title: "Global", Bindings: globals}}
+
+	cur := m.stack.Current()
+	if cur == nil {
+		return secs
+	}
+	var own []help.Section
+	if sp, ok := cur.(help.Sectioned); ok {
+		own = sp.HelpSections()
+	} else {
+		own = []help.Section{{Title: cur.Title(), Bindings: cur.Help()}}
+	}
+	// A screen listing q, t or esc in its own Help() — most do — has them
+	// absorbed by the group that owns them rather than printed twice.
+	return append(secs, help.Suppress(globals, own)...)
 }
 
 // openMenu shows the action menu for the active screen, anchored at (x, y) or
@@ -1341,6 +1423,21 @@ func (m *Model) closeOverlay() {
 // flowing to the screen underneath, so a capture still logs and a poll still
 // ticks while the menu is open.
 func (m *Model) updateOverlay(msg tea.Msg) tea.Cmd {
+	if m.helpUp {
+		// The help key closes what it opened. The overlay can't bind it
+		// itself: it is the app's choice of key, and the overlay would
+		// have to be told about it anyway — so the shell keeps the pair
+		// in one place. Not while the search field has input, or the key
+		// would be typed and swallowed at once.
+		if k, ok := msg.(tea.KeyMsg); ok && !m.helpOv.IsCapturingKeys() &&
+			m.helpKey.Keys() != nil && key.Matches(k, m.helpKey) {
+			m.closeHelp()
+			return nil
+		}
+		o, cmd := m.helpOv.Update(msg)
+		*m.helpOv = o
+		return cmd
+	}
 	if m.confUp {
 		c, cmd := m.conf.Update(msg)
 		*m.conf = c

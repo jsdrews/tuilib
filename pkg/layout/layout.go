@@ -175,6 +175,18 @@ func (z zstack) Render(r geom.Rect) string {
 	overlayView := z.overlay.Render(r)
 	baseLines := strings.Split(baseView, "\n")
 	overlayLines := strings.Split(overlayView, "\n")
+
+	// The base is padded to the rows and columns its rect promises before
+	// anything is spliced into it. A node is free to render short — a bare
+	// RenderFunc returning one line is legal — but the splice below cuts
+	// the base at the overlay's left edge and concatenates, so a base line
+	// that stops before that edge would drag the overlay left, and a base
+	// with too few lines would cut the overlay off at the bottom. Padding
+	// here rather than asking every host to render flush keeps the overlay
+	// where the layout put it.
+	for len(baseLines) < len(overlayLines) && len(baseLines) < r.H {
+		baseLines = append(baseLines, "")
+	}
 	for i, ol := range overlayLines {
 		if i >= len(baseLines) {
 			break
@@ -190,13 +202,21 @@ func (z zstack) Render(r geom.Rect) string {
 		if left < 0 {
 			continue
 		}
-		baseLines[i] = ansi.Cut(baseLines[i], 0, left) +
+		baseLines[i] = padCells(ansi.Cut(baseLines[i], 0, left), left) +
 			"\x1b[0m" +
 			ansi.Cut(ol, left, right+1) +
 			"\x1b[0m" +
 			ansi.Cut(baseLines[i], right+1, r.W)
 	}
 	return strings.Join(baseLines, "\n")
+}
+
+// padCells right-pads s with spaces until it is width cells wide.
+func padCells(s string, width int) string {
+	if gap := width - ansi.StringWidth(stripANSI(s)); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
 }
 
 // nonSpaceBounds returns the cell-index of the first and last non-space

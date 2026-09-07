@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
@@ -62,12 +63,16 @@ func (s *host) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *host) Help() []key.Binding {
-	base := []key.Binding{
+func (s *host) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections forwards to the tab model, which contributes the strip's own
+// keys plus the active body's groups — the hidden bodies' keys do nothing
+// until you switch, so they are not listed.
+func (s *host) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tabs, help.Group("Host",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
-	return append(base, s.tabs.Help()...)
+	))
 }
 
 func (s *host) SetTheme(t theme.Theme) {

@@ -81,6 +81,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
@@ -766,34 +767,47 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 func (m Model) View() string { return m.body.View() }
 
 // Help returns the keys this table responds to.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the same bindings by what they do, for the `?`
+// overlay: cursor movement, horizontal scroll, sort, filter and marking are
+// separate questions, and the Keys struct already keeps them apart.
+func (m Model) HelpSections() []help.Section {
 	if m.filterable && m.filter.Focused() {
 		out := m.filter.Help()
 		if _, ok := m.activeTerm(); ok {
 			out = append(out, key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "complete")))
 		}
-		return out
+		return help.Sections(help.Group(help.SectionFilter, out...))
 	}
-	out := []key.Binding{
-		m.keys.Up, m.keys.Down,
-		m.keys.HalfUp, m.keys.HalfDown,
-		m.keys.Top, m.keys.Bottom,
-	}
+	var scroll []key.Binding
 	if m.hScrollbar {
-		out = append(out, m.body.HelpBindings()...)
-		out = append(out, m.keys.ColPrev, m.keys.ColNext)
+		scroll = append(append([]key.Binding{}, m.body.HelpBindings()...), m.keys.ColPrev, m.keys.ColNext)
 	}
+	var sort []key.Binding
 	if m.hasSortable() {
-		out = append(out, m.keys.SortPrev, m.keys.SortNext, m.keys.SortDir)
+		sort = []key.Binding{m.keys.SortPrev, m.keys.SortNext, m.keys.SortDir}
 	}
+	var filter []key.Binding
 	if m.filterable {
-		out = append(out, m.keys.Filter)
+		filter = []key.Binding{m.keys.Filter}
 	}
+	var sel []key.Binding
 	if m.markable {
-		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
-			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
+		sel = []key.Binding{m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")),
+			key.NewBinding(key.WithKeys("mouse:shiftclick"), key.WithHelp("shift-click", "mark to here"))}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			m.keys.Up, m.keys.Down,
+			m.keys.HalfUp, m.keys.HalfDown,
+			m.keys.Top, m.keys.Bottom),
+		help.Group(help.SectionScroll, scroll...),
+		help.Group(help.SectionSort, sort...),
+		help.Group(help.SectionFilter, filter...),
+		help.Group(help.SectionSelect, sel...),
+	)
 }
 
 // SetRect places the table in the given rect. When filterable, the internal
@@ -1032,6 +1046,9 @@ func (m *Model) SetDistinct(col int, values []string) {
 
 // SetTitle updates the title rendered on the body pane's top border.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
+
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.body.Title() }
 
 // Focus gives the component the keyboard, highlighting the body pane.
 //

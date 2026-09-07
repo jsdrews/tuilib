@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/metrics"
 	"github.com/jsdrews/tuilib/pkg/poll"
@@ -121,16 +122,19 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) Layout() layout.Node { return layout.Sized(&s.tab) }
 
-func (s *Screen) Help() []key.Binding {
-	out := s.tab.Help()
-	out = append(out,
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the table's own groups through and keeps the polling
+// verbs — which belong to this screen, not to the table — under their own
+// heading.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tab, help.Group("Refresh",
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause/resume")),
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh now")),
 		key.NewBinding(key.WithKeys("+", "-"), key.WithHelp("+/-", "interval")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	)
-	return out
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

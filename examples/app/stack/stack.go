@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -75,14 +76,14 @@ func (s *cityList) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *cityList) Layout() layout.Node { return layout.Sized(&s.list) }
 
-func (s *cityList) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+func (s *cityList) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *cityList) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Cities",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-	}
+	))
 }
 
 func (s *cityList) SetTheme(t theme.Theme) {
@@ -146,13 +147,14 @@ func (s *cityDetail) Layout() layout.Node {
 	)
 }
 
-func (s *cityDetail) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+func (s *cityDetail) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *cityDetail) HelpSections() []help.Section {
+	return help.SectionsOf(&s.actions, help.Group("City",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 // OnEnter receives the timezone when TimezonePicker pops with a value.
@@ -236,14 +238,14 @@ func (s *timezonePicker) Layout() layout.Node {
 	)
 }
 
-func (s *timezonePicker) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+func (s *timezonePicker) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *timezonePicker) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Timezone",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "pick")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *timezonePicker) SetTheme(t theme.Theme) {

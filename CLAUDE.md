@@ -79,9 +79,9 @@ example in `examples/`.
 8. **Interaction should be menu-driven.** Prefer lists + enter over letter
    shortcuts for per-screen actions (`d` delete, `r` run, etc.). Reserve
    single-letter keys for app-wide affordances (`q`, `t`, `/`, `?`,
-   `esc`). `?` toggles the app shell's expanded help panel (see the help
-   entry under "Where to learn more"). This keeps `Help()` honest and
-   avoids shortcut collisions across screens.
+   `esc`). `?` opens the app shell's key overlay (see the help entry
+   under "Where to learn more"). This keeps `Help()` honest and avoids
+   shortcut collisions across screens.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
@@ -90,8 +90,8 @@ example in `examples/`.
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
    component in a second `pane.Pane`. The only things that *don't* own a
-   pane are bars (`breadcrumb`, `statusbar`), the `help` key-hint
-   renderer, the layout primitives, `pkg/runner` (which is not a UI
+   pane are bars (`breadcrumb`, `statusbar`), `help.Model` (the footer
+   strip — `help.Overlay` does own one), the layout primitives, `pkg/runner` (which is not a UI
    component — it suspends the program to run a subprocess), and
    `pkg/form` itself, which is a vertical layout of bordered fields. New
    input-style components should follow the same shape: `Options.Title` +
@@ -123,8 +123,58 @@ example in `examples/`.
     "focus + select")`. The sentinel matters twice: `help.Compile`
     dedupes on the joined key string, so two *keyless* bindings would
     collapse into one, and a sentinel can never match a real
-    `tea.KeyMsg`. Surface these in the expanded `?` panel rather than
-    the inline strip, which is already short on room.
+    `tea.KeyMsg`. Surface these in the `?` overlay rather than the
+    inline strip, which is already short on room.
+
+    **Components also expose `HelpSections() []help.Section`, and derive
+    `Help()` from it** (`help.Flatten`), so the flat list and the grouped
+    one can never disagree. Groups are named by what the keys *do*, from
+    one shared vocabulary — `help.SectionNavigate` / `Scroll` / `Filter`
+    / `Search` / `Select` / `Sort` / `Expand` / `View` / `Edit` /
+    `Submit` / `Tabs` — so "Navigate" means the same thing in a list, a
+    table and a tree. The groups are the `Keys` struct's own shape (rule 26); all
+    `Help()` ever did was flatten them away.
+
+    Never name a group after its owner. A heading named for the screen
+    or the component ends up over every binding that owner has, which is
+    how "Multi-select" came to sit above a table's scroll keys. The
+    owner is a *qualifier*, applied by `help.Qualify` only when more
+    than one of them is on screen ("files · Navigate"); `focus.Group`
+    does this for the panes it holds.
+
+    A screen composes with `help.SectionsOf`, which takes components,
+    sections and binding lists in one call:
+
+    ```go
+    func (s *Screen) HelpSections() []help.Section {
+        return help.SectionsOf(&s.table, help.Group("Deployments", s.verbs()...))
+    }
+    ```
+
+    A screen with more than one interactive component forwards
+    `focus.Group.HelpSections()` instead — one line, like
+    `IsCapturingKeys`. A `pkg/tab` host forwards `tabs.HelpSections()`,
+    which carries the strip's keys plus the *active* body's groups.
+
+    **A screen that hosts a component and doesn't forward its groups
+    falls back to one group named after the screen** — which is the bug
+    this rule exists to prevent, with the screen's name standing over
+    bindings it doesn't describe. Every example that hosts a component
+    forwards; the ones that don't (a bare `pane`, say) have only their
+    own verbs to list, which is what the fallback is for.
+
+    The library's own screens are held to this too: `pkg/output`'s console
+    forwards its logview's groups and adds `Log` for clear/export/kill,
+    because a screen that ships *with* the library would otherwise put a
+    heading named "Output" over the logview's scroll keys in every app
+    that sets `OutputKey`.
+
+    **`pkg/filter` is the one component with no `HelpSections`, and it
+    stays that way**: `pkg/help` imports it for the overlay's own `/`
+    search field, so `filter` implementing `help.Sectioned` is an import
+    cycle. It is a leaf below `help`, not an oversight — its two bindings
+    reach the overlay through whichever component embeds it, each of
+    which groups them under `Filter` or `Search` itself.
 
 11. **Run interactive subprocesses through `pkg/runner`.** For editors,
     pagers, full-screen TUIs, or any command that needs the terminal
@@ -1127,25 +1177,39 @@ path.
   one tracker, so no component carries mouse state or a threshold. See
   rule 28 and `examples/app/mouse`; run the launcher to try it, since
   `app.Options.Mouse` is set there for the whole suite.
-- **Help footer + expanded panel:** the statusbar's left slot renders the
-  active screen's `Help()` bindings as `key desc  •  key desc  •  …`. When
-  they don't all fit, the line is truncated and a `? help` affordance is
-  appended. Pressing `?` (configurable via `app.Options.HelpKey`) flips
-  on a multi-row panel above the statusbar that picks up at the first
-  binding that didn't fit and lays the remainder out as a row-major
-  grid: columns are separated by the same `  •  ` as the footer, and
-  per-column key/desc widths are picked so labels align vertically across
-  rows. The grid maximizes columns-per-row for the current width, so
-  wider terminals get fewer panel rows. The affordance flips to
-  `? close` while expanded. Panel height is capped by
-  `app.Options.HelpMaxRows` (default 6) and only grows as far as the
-  remaining bindings need. When the window resizes or the active screen
-  changes such that everything fits inline again, the panel
-  auto-collapses and `?` becomes inert — the affordance is the source of
-  truth for whether the key does anything. Screens contribute by
-  returning the right bindings from `Help()` (rule 10); nothing in the
-  screen needs to know about the panel itself. See `pkg/help` for the
-  renderer and `pkg/app` for the wiring.
+- **Help footer + key overlay:** the statusbar's left slot shows a
+  `? help` affordance (and, with `app.Options.HelpVerbose`, as many of
+  the active screen's `Help()` bindings as fit inline before it).
+  Pressing `?` — configurable via `app.Options.HelpKey`, and clickable —
+  opens `help.Overlay`: a bordered modal listing every binding the
+  screen exposes, **grouped into sections**, scrollable, and searchable
+  (`/`, on by default; `app.Options.DisableHelpSearch` turns it off).
+  Esc, `q`, `?` again, or a click outside close it.
+
+  The grouping is where the value is, and it is **by function, not by
+  owner** (rule 10): Navigate, Scroll, Sort, Filter, Select. The shell
+  writes a **Global** group itself — quit or esc-back depending on stack
+  depth, theme, suspend, and the opt-in output and actions keys a screen
+  has no reason to know about — then each component contributes its own
+  groups, qualified by pane ("files · Navigate") only when more than one
+  pane is on screen. `help.Suppress` drops from a screen's groups
+  anything the shell's globals already claim, so a screen that lists `q`
+  and `t` in its own `Help()` is not punished for it; repeats *across*
+  panes are kept, because two panes binding `↑/k` are two different
+  verbs, not one duplicate.
+
+  The list runs top to bottom in one column and scrolls when it
+  overflows, so a group keeps a fixed place instead of moving between
+  columns as the terminal changes width.
+  A screen that doesn't implement `help.Sectioned` still works: it gets
+  one group titled with its own name, which is the flat list the footer
+  would have shown.
+
+  The affordance is the source of truth for whether `?` does anything:
+  no affordance, no overlay. Screens contribute by returning the right
+  bindings from `Help()` (rule 10) and, when they have more than one
+  component, by grouping them. See `pkg/help` for both renderers and
+  `pkg/app` for the wiring.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next

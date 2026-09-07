@@ -26,6 +26,7 @@ import (
 
 	talert "github.com/jsdrews/tuilib/pkg/alert"
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -121,17 +122,19 @@ func (s *alertScreen) Layout() layout.Node {
 	return layout.ZStack(body, layout.Sized(&s.modal))
 }
 
-func (s *alertScreen) Help() []key.Binding {
+func (s *alertScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections reflects the active context: while the modal is up its keys
+// are the only ones that do anything, so they are the only ones listed.
+func (s *alertScreen) HelpSections() []help.Section {
 	if s.modalUp {
-		return s.modal.Help()
+		return help.SectionsOf(&s.modal)
 	}
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	return help.SectionsOf(&s.list, help.Group("Checks",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *alertScreen) SetTheme(t theme.Theme) {

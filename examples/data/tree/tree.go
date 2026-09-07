@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -127,12 +128,15 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) Layout() layout.Node { return layout.Sized(&s.tree) }
 
-func (s *Screen) Help() []key.Binding {
-	base := []key.Binding{
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the tree's own groups — Navigate, Expand, Select,
+// Search — through to the `?` overlay.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tree, help.Group("Tree",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
-	return append(base, s.tree.Help()...)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

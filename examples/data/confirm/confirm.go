@@ -15,6 +15,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/app"
 	tconfirm "github.com/jsdrews/tuilib/pkg/confirm"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -92,17 +93,19 @@ func (s *confirmScreen) Layout() layout.Node {
 	return layout.ZStack(body, layout.Center(48, 7, layout.Sized(&s.modal)))
 }
 
-func (s *confirmScreen) Help() []key.Binding {
+func (s *confirmScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections reflects the active context: while the modal is up its keys
+// are the only ones that do anything, so they are the only ones listed.
+func (s *confirmScreen) HelpSections() []help.Section {
 	if s.modalUp {
-		return s.modal.Help()
+		return help.SectionsOf(&s.modal)
 	}
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+	return help.SectionsOf(&s.list, help.Group("Deployments",
 		key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "delete")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *confirmScreen) SetTheme(t theme.Theme) {

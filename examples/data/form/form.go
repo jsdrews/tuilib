@@ -16,6 +16,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -86,20 +87,16 @@ func (s *Screen) renderForm(r geom.Rect) string {
 	return s.body.View()
 }
 
-func (s *Screen) Help() []key.Binding {
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *Screen) HelpSections() []help.Section {
+	own := help.Group("Signup",
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")))
 	if s.done {
-		return []key.Binding{
-			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-			key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-		}
+		return help.Sections(own)
 	}
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "submit")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	return help.SectionsOf(&s.form, own)
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
@@ -153,15 +154,16 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	base := []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next pane")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev pane")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections forwards to the Group, which names each pane and its groups;
+// tab/shift-tab come from the Group too, so this screen lists only its own.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.focus, help.Group("Loading",
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refetch")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
-	return append(base, s.focus.Help()...)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
