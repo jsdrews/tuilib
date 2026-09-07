@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/confirm"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
@@ -109,20 +110,32 @@ func (s *Screen) Layout() layout.Node {
 
 // Help composes the logview's bindings with the screen's own actions, and
 // swaps in the modal's while one is up so the hint strip tracks context.
-func (s *Screen) Help() []key.Binding {
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections forwards the logview's own groups and adds the console's
+// verbs under a heading naming what they act on.
+//
+// Forwarding is the whole point: without it this screen falls back to one
+// group titled "Output" standing over the logview's scroll and search keys,
+// which is the failure rule 10 exists to prevent — and it would reach every
+// app that sets OutputKey, not just one screen an author wrote.
+//
+// While a modal is up its keys are the only ones that do anything, so they
+// are the only ones listed, the same gating a screen hosting pkg/confirm
+// applies (rule 22).
+func (s *Screen) HelpSections() []help.Section {
 	if s.killing {
-		return s.conf.Help()
+		return help.SectionsOf(&s.conf)
 	}
 	if s.picking {
-		return append(s.picker.Help(),
-			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")))
+		return help.SectionsOf(&s.picker, help.Group("Runs",
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))))
 	}
-	out := s.lv.Help()
-	out = append(out, s.opts.Keys.Clear, s.opts.Keys.Export)
+	own := []key.Binding{s.opts.Keys.Clear, s.opts.Keys.Export}
 	if s.buf != nil && s.buf.InFlight() > 0 {
-		out = append(out, s.opts.Keys.Kill)
+		own = append(own, s.opts.Keys.Kill)
 	}
-	return out
+	return help.SectionsOf(&s.lv, help.Group("Log", own...))
 }
 
 // Update mirrors the buffer, then routes input. While a modal is up it owns

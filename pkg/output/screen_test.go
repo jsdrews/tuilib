@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -155,4 +156,68 @@ func runExport(t *testing.T, s *Screen) string {
 		t.Fatalf("reading exported file: %v", err)
 	}
 	return string(b)
+}
+
+// The console hosts a logview, so it has to forward that logview's groups.
+// Without HelpSections it falls back to one section titled with the screen's
+// name ("Output") standing over the logview's scroll and search keys — the
+// heading-over-bindings-it-doesn't-describe failure of CLAUDE.md rule 10.
+// It is asserted here rather than left to a screen author because this
+// screen ships with the library: every app that sets OutputKey gets it.
+func TestConsoleForwardsTheLogviewsGroups(t *testing.T) {
+	s := newTestScreen(t, NewBuffer(0))
+
+	secs := s.HelpSections()
+	if len(secs) < 2 {
+		t.Fatalf("console contributed %d group(s); it hosts a logview and has verbs of its own", len(secs))
+	}
+	for _, sec := range secs {
+		if sec.Title == s.Title() {
+			t.Errorf("a group is titled %q, the screen's own name", sec.Title)
+		}
+		if len(sec.Bindings) == 0 {
+			t.Errorf("group %q is a heading over nothing", sec.Title)
+		}
+	}
+}
+
+// Help is derived from the groups, so the footer strip and the key overlay
+// cannot disagree about what the console responds to.
+func TestConsoleHelpMatchesItsSections(t *testing.T) {
+	s := newTestScreen(t, NewBuffer(0))
+
+	flat := s.Help()
+	grouped := help.Flatten(s.HelpSections())
+	if len(flat) != len(grouped) {
+		t.Fatalf("Help has %d bindings, sections hold %d", len(flat), len(grouped))
+	}
+	for i := range flat {
+		if a, b := flat[i].Help(), grouped[i].Help(); a != b {
+			t.Errorf("binding %d: Help says %v, sections say %v", i, a, b)
+		}
+	}
+}
+
+// The kill verb is advertised only while something is actually running: a
+// key that does nothing teaches the user the feature is broken.
+func TestConsoleAdvertisesKillOnlyWhileRunsAreInFlight(t *testing.T) {
+	buf := NewBuffer(0)
+	s := newTestScreen(t, buf)
+
+	if killAdvertised(s) {
+		t.Error("kill advertised with nothing in flight")
+	}
+	buf.StartRun(1, "build", func() error { return nil })
+	if !killAdvertised(s) {
+		t.Error("kill not advertised while a run is in flight")
+	}
+}
+
+func killAdvertised(s *Screen) bool {
+	for _, b := range help.Flatten(s.HelpSections()) {
+		if strings.Contains(b.Help().Desc, "kill") {
+			return true
+		}
+	}
+	return false
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/query"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -45,9 +46,9 @@ import (
 )
 
 const (
-	pageSize  = 100
-	latency   = 250 * time.Millisecond
-	datasetN  = 5000
+	pageSize = 100
+	latency  = 250 * time.Millisecond
+	datasetN = 5000
 )
 
 // New returns the remote-source demo screen.
@@ -87,10 +88,14 @@ func (s *Screen) Layout() layout.Node {
 	return layout.VStack(layout.Flex(1, layout.Sized(&s.tab)))
 }
 
-func (s *Screen) Help() []key.Binding {
-	return append(s.tab.Help(),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the table's own groups through and adds the refetch
+// verb, which is this screen's rather than the table's.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tab, help.Group("Source",
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refetch")),
-	)
+	))
 }
 
 // fetchedMsg carries one page back from the fake server.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -779,12 +780,21 @@ func (m Menu) CanScroll() bool {
 
 // Help returns the bindings the menu currently responds to, including the
 // mouse affordance as a sentinel binding (rule 10) so it can be advertised in
-// the expanded panel without ever matching a real key.
-func (m Menu) Help() []key.Binding {
-	out := []key.Binding{m.keys.Up, m.keys.Down, m.keys.Choose, m.keys.Cancel}
+// the key overlay without ever matching a real key.
+func (m Menu) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections splits the menu the way a chooser divides: moving the cursor
+// under Navigate, and the keys that commit or abandon a verb under Submit.
+// The jump keys join Navigate only when the actions actually overflow, so a
+// three-item menu advertises three ways to move rather than seven.
+func (m Menu) HelpSections() []help.Section {
+	nav := []key.Binding{m.keys.Up, m.keys.Down}
 	if m.CanScroll() {
-		out = append(out, m.keys.Top, m.keys.Bottom, m.keys.HalfUp, m.keys.HalfDown)
+		nav = append(nav, m.keys.Top, m.keys.Bottom, m.keys.HalfUp, m.keys.HalfDown)
 	}
-	return append(out,
-		key.NewBinding(key.WithKeys("mouse:click"), key.WithHelp("click", "run")))
+	return help.Sections(
+		help.Group(help.SectionNavigate, nav...),
+		help.Group(help.SectionSubmit, m.keys.Choose, m.keys.Cancel,
+			key.NewBinding(key.WithKeys("mouse:click"), key.WithHelp("click", "run"))),
+	)
 }

@@ -39,6 +39,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -357,6 +358,9 @@ func (m Model) filterHeader() string {
 // SetTitle sets the pane's top-left title.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.body.Title() }
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -477,23 +481,31 @@ func (m *Model) SetSpinnerStyle(s lipgloss.Style) { m.body.SetSpinnerStyle(s) }
 // Help returns the keys this textview responds to. While the embedded
 // filter is focused, returns the filter's keys; otherwise the navigation
 // + search + wrap bindings appropriate for the current state.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the bindings by what they do, for the `?` overlay.
+// Wrap is a View key rather than a Navigate one: it changes how the
+// document is rendered, not which part of it is on screen.
+func (m Model) HelpSections() []help.Section {
 	if m.searchable && m.filter.Focused() {
-		return m.filter.Help()
+		return help.Sections(help.Group(help.SectionSearch, m.filter.Help()...))
 	}
-	out := []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "scroll")),
-		key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup/pgdn", "page")),
-		m.keys.Top, m.keys.Bottom, m.keys.Wrap,
-	}
-	out = append(out, m.body.HelpBindings()...)
+	var search []key.Binding
 	if m.searchable {
-		out = append(out, m.keys.Search)
+		search = []key.Binding{m.keys.Search}
 		if m.query != "" {
-			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
+			search = append(search, m.keys.NextMatch, m.keys.PrevMatch)
 		}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "scroll")),
+			key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup/pgdn", "page")),
+			m.keys.Top, m.keys.Bottom),
+		help.Group(help.SectionScroll, m.body.HelpBindings()...),
+		help.Group(help.SectionView, m.keys.Wrap),
+		help.Group(help.SectionSearch, search...),
+	)
 }
 
 // ---- internals -----------------------------------------------------------

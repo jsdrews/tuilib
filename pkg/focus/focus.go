@@ -36,8 +36,12 @@
 package focus
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/jsdrews/tuilib/pkg/help"
 )
 
 // Focusable is anything a Group can move focus between. Every interactive
@@ -294,6 +298,65 @@ func (g Group) Help() []key.Binding {
 	out := []key.Binding{g.keys.Next, g.keys.Prev}
 	if h, ok := g.Focused().(interface{ Help() []key.Binding }); ok {
 		out = append(out, h.Help()...)
+	}
+	return out
+}
+
+// HelpSections describes the whole screen for the key overlay: the cycling
+// pair, then each pane's own functional groups.
+//
+// Help answers "what can I press right now" and so reports the focused pane
+// alone. The overlay asks the other question — "what can I press at all" —
+// and answering it needs every pane, which is where an undifferentiated
+// list stops being readable: three components easily contribute thirty
+// bindings.
+//
+// The groups are named by what the keys do (Navigate, Filter, Select), and
+// the pane is a qualifier applied only when more than one of them
+// contributes — "files · Navigate". With a single pane the owner is not in
+// question and repeating it on every heading is noise.
+//
+// A screen holding a Group forwards this the same way it forwards
+// IsCapturingKeys:
+//
+//	func (s *Screen) HelpSections() []help.Section { return s.focus.HelpSections() }
+func (g Group) HelpSections() []help.Section {
+	type owned struct {
+		title string
+		secs  []help.Section
+	}
+	var owners []owned
+	for i, it := range g.items {
+		var secs []help.Section
+		switch h := it.(type) {
+		case help.Sectioned:
+			secs = h.HelpSections()
+		case interface{ Help() []key.Binding }:
+			secs = help.Sections(help.Section{Bindings: h.Help()})
+		}
+		if len(secs) == 0 {
+			continue
+		}
+		title := ""
+		if t, ok := it.(interface{ Title() string }); ok {
+			title = t.Title()
+		}
+		if title == "" {
+			title = fmt.Sprintf("pane %d", i+1)
+		}
+		owners = append(owners, owned{title: title, secs: secs})
+	}
+
+	var out []help.Section
+	if len(g.items) > 1 {
+		out = append(out, help.Group("Focus", g.keys.Next, g.keys.Prev))
+	}
+	for _, o := range owners {
+		if len(owners) > 1 {
+			out = append(out, help.Qualify(o.title, o.secs)...)
+			continue
+		}
+		out = append(out, o.secs...)
 	}
 	return out
 }

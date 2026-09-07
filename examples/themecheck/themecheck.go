@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -70,12 +71,13 @@ func (s *listScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *listScreen) Layout() layout.Node { return layout.Sized(&s.list) }
 
-func (s *listScreen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "preview")),
+func (s *listScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *listScreen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Themes",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "fields")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	}
+	))
 }
 
 func (s *listScreen) SetTheme(t theme.Theme) {

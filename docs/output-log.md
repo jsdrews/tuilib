@@ -454,13 +454,14 @@ remembered. `app.helpBindings` adds it to whatever the active screen returns,
 and flips the description to "close output" while the console is open, since
 the same key does both.
 
-It goes **first** in the list, which is not cosmetic. The expanded panel is
-capped at `HelpMaxRows`, so its tail is simply not drawn; a binding appended
-at the end is the first casualty on precisely the screens with enough bindings
-to need a panel. Appending shipped broken — visible on a sparse screen at 120
-columns, gone on a table at 80.
-`TestOutputKeySurvivesACappedHelpPanel` sweeps four widths against a
-24-binding screen.
+It goes **first** in the list, which is not cosmetic. The footer shows what
+fits and drops the rest, so a binding appended at the end is the first
+casualty on precisely the screens with enough bindings to need help.
+Appending shipped broken — visible on a sparse screen at 120 columns, gone on
+a table at 80. The key overlay that replaced the expanded panel carries it in
+its **Global** section, which is first and therefore on screen before any
+scrolling. `TestOutputKeySurvivesABindingHeavyScreen` sweeps four widths
+against a 24-binding screen.
 
 **6. `Capture` needed process-group kill and a bounded drain.** Found by CI on
 Linux, where `TestKillStopsALongRun` hung; macOS never reproduced it. Two

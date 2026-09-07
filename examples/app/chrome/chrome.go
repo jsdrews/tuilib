@@ -21,6 +21,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -215,11 +216,13 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	return append(s.focus.Help(),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.focus, help.Group("Chrome",
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	)
+	))
 }
 
 // SetTheme takes the app's palette and rebuilds from it, keeping the two

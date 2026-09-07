@@ -23,6 +23,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -201,6 +202,9 @@ func (m *Model) SetTopRight(s string) { m.pane.SetTopRight(s) }
 
 func (m *Model) SetTitle(s string) { m.pane.SetTitle(s) }
 
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.pane.Title() }
+
 // Value returns the current bool.
 func (m Model) Value() bool { return m.value }
 
@@ -241,11 +245,17 @@ func (m *Model) SetUnselectedStyle(s lipgloss.Style) {
 
 // Help returns the keys this toggle responds to. Compose into a screen's
 // Help() to drive a per-component help line.
-func (m Model) Help() []key.Binding {
-	return []key.Binding{
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections reports the toggle's bindings under Edit — flipping a toggle
+// is editing its value, and grouping it with the fields around it is how the
+// overlay reads on a form-shaped screen.
+func (m Model) HelpSections() []help.Section {
+	return help.Sections(help.Group(help.SectionEdit,
 		key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "flip")),
 		key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-	}
+		key.NewBinding(key.WithKeys("mouse:click"), key.WithHelp("click", "pick a side")),
+	))
 }
 
 // SetActiveColor updates the border color used when focused.

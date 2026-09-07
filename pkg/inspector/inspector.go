@@ -37,6 +37,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -414,27 +415,31 @@ func (m Model) View() string { return m.body.View() }
 // Help returns the keys this inspector responds to. Each entry comes
 // straight from m.keys (the same bindings Update dispatches against), so
 // custom keymaps propagate to the hint strip automatically.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the bindings by what they do, for the `?` overlay.
+func (m Model) HelpSections() []help.Section {
 	if m.filterable && m.filter.Focused() {
-		return m.filter.Help()
+		return help.Sections(help.Group(help.SectionSearch, m.filter.Help()...))
 	}
-	out := []key.Binding{
-		m.keys.Up, m.keys.Down,
-		m.keys.HalfUp, m.keys.HalfDown,
-		m.keys.Top, m.keys.Bottom,
-		m.keys.Toggle,
-		m.keys.ExpandAll, m.keys.CollapseAll,
-		m.keys.NextSibling, m.keys.PrevSibling,
-		m.keys.NextLeaf, m.keys.PrevLeaf,
-	}
-	out = append(out, m.body.HelpBindings()...)
+	var search []key.Binding
 	if m.filterable {
-		out = append(out, m.keys.Search, m.keys.Filter)
+		search = []key.Binding{m.keys.Search, m.keys.Filter}
 		if m.query != "" {
-			out = append(out, m.keys.NextMatch, m.keys.PrevMatch)
+			search = append(search, m.keys.NextMatch, m.keys.PrevMatch)
 		}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			m.keys.Up, m.keys.Down,
+			m.keys.HalfUp, m.keys.HalfDown,
+			m.keys.Top, m.keys.Bottom,
+			m.keys.NextSibling, m.keys.PrevSibling,
+			m.keys.NextLeaf, m.keys.PrevLeaf),
+		help.Group(help.SectionExpand, m.keys.Toggle, m.keys.ExpandAll, m.keys.CollapseAll),
+		help.Group(help.SectionScroll, m.body.HelpBindings()...),
+		help.Group(help.SectionSearch, search...),
+	)
 }
 
 // SetRect places the inspector in the given rect. When filterable, the
@@ -501,6 +506,9 @@ func (m *Model) SetFields(fs []Field) {
 
 // SetTitle updates the title rendered on the body pane's top border.
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
+
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.body.Title() }
 
 // Focus gives the component the keyboard, highlighting the body pane.
 //

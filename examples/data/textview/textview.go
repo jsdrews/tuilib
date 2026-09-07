@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	ttextview "github.com/jsdrews/tuilib/pkg/textview"
@@ -152,12 +153,17 @@ func (s *textviewScreen) Layout() layout.Node {
 	return layout.Sized(&s.view)
 }
 
-func (s *textviewScreen) Help() []key.Binding {
-	out := s.view.Help()
+func (s *textviewScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the textview's own groups through to the `?` overlay.
+// The doc-switch key is this screen's, and is gone while the search field
+// has input — d types a "d" there.
+func (s *textviewScreen) HelpSections() []help.Section {
+	var own []key.Binding
 	if !s.view.Searching() {
-		out = append(out, key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "next doc")))
+		own = []key.Binding{key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "next doc"))}
 	}
-	return out
+	return help.SectionsOf(&s.view, help.Group("Docs", own...))
 }
 
 func (s *textviewScreen) SetTheme(t theme.Theme) {

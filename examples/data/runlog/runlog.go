@@ -21,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
@@ -155,26 +156,24 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	base := []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "focus")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections forwards to the Group — which names both panes and their
+// groups — and adds this screen's own verbs, the process-control pair
+// appearing only while something is running.
+func (s *Screen) HelpSections() []help.Section {
+	own := []key.Binding{
+		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	}
 	if s.running != nil {
-		base = append(base,
+		own = append(own,
 			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "interrupt (SIGINT)")),
 			key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "force-kill (SIGKILL)")),
 		)
 	}
-	if s.focus.Is(&s.cmds) {
-		base = append(base,
-			key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
-		)
-		return base
-	}
-	return append(base, s.log.Help()...)
+	return help.SectionsOf(&s.focus, help.Group("Run", own...))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

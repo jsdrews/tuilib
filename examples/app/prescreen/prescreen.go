@@ -37,6 +37,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -199,14 +200,9 @@ func (s *loginScreen) render(r geom.Rect) string {
 	return s.body.View()
 }
 
-func (s *loginScreen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("tab"), key.WithHelp("⇥", "next")),
-		key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧⇥", "prev")),
-		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "submit")),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-	}
-}
+func (s *loginScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *loginScreen) HelpSections() []help.Section { return help.SectionsOf(&s.form) }
 
 func (s *loginScreen) SetTheme(t theme.Theme) {
 	s.t = t

@@ -371,14 +371,38 @@ func (t Theme) Statusbar(left, right string) statusbar.Options {
 
 // Help returns help.Options whose KeyStyle and DescStyle carry the same
 // Background as the bar, so help.ShortView() drops into Statusbar.Left with
-// no banding. Override ShortSeparator, ColumnSpacer, Width/Height, or the
-// styles as needed.
+// no banding. Override ShortSeparator or the styles as needed.
 func (t Theme) Help() help.Options {
 	return help.Options{
-		KeyStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG).Background(t.BarBG),
-		DescStyle:   lipgloss.NewStyle().Foreground(t.BarFG).Background(t.BarBG),
-		Border:      t.shapeInactive(),
-		BorderColor: t.Subtle,
+		KeyStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG).Background(t.BarBG),
+		DescStyle: lipgloss.NewStyle().Foreground(t.BarFG).Background(t.BarBG),
+	}
+}
+
+// HelpOverlay returns help.OverlayOptions pre-filled from the theme — the
+// key column in KeyFG, descriptions in BarFG, section headings bold in
+// Accent, and the overlay border shape the other modals use. Set Title and
+// Searchable before passing to help.NewOverlay.
+//
+// The styles carry no Background: unlike Help(), which is embedded in the
+// statusbar and has to match its band, the overlay draws on the pane's own
+// ground.
+func (t Theme) HelpOverlay() help.OverlayOptions {
+	return help.OverlayOptions{
+		KeyStyle:           lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
+		DescStyle:          lipgloss.NewStyle().Foreground(t.BarFG),
+		SectionStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		EmptyStyle:         lipgloss.NewStyle().Foreground(t.Muted),
+		ActiveColor:        t.BorderActive,
+		InactiveColor:      t.BorderInactive,
+		ActiveBorder:       t.shapeOverlay(),
+		InactiveBorder:     t.shapeOverlay(),
+		Glyphs:             t.glyphs(),
+		SlotBrackets:       t.SlotBrackets,
+		FilterRuleActive:   lipgloss.NewStyle().Foreground(t.BorderActive),
+		FilterRuleInactive: lipgloss.NewStyle().Foreground(t.BorderInactive),
+		Filter:             t.Filter(),
+		Keys:               help.DefaultOverlayKeys(),
 	}
 }
 

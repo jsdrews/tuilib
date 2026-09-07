@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/pane"
@@ -85,13 +86,14 @@ func (s *homeScreen) Layout() layout.Node {
 	)
 }
 
-func (s *homeScreen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+func (s *homeScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *homeScreen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.menu, help.Group("Layouts",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-	}
+	))
 }
 
 func (s *homeScreen) SetTheme(t theme.Theme) {
@@ -246,13 +248,13 @@ func (s *filterableScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *filterableScreen) Layout() layout.Node { return layout.Sized(&s.list) }
 
-func (s *filterableScreen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+func (s *filterableScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *filterableScreen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Filter+list",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *filterableScreen) SetTheme(t theme.Theme) {
@@ -343,19 +345,19 @@ func (s *modalScreen) Layout() layout.Node {
 	return layout.ZStack(body, layout.Center(48, 7, layout.Sized(&s.modal)))
 }
 
-func (s *modalScreen) Help() []key.Binding {
+func (s *modalScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *modalScreen) HelpSections() []help.Section {
 	if s.modalUp {
-		return []key.Binding{
+		return help.Sections(help.Group(help.SectionSubmit,
 			key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "confirm")),
-			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		}
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel"))))
 	}
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+	return help.SectionsOf(&s.actions, help.Group("ZStack",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *modalScreen) SetTheme(t theme.Theme) {

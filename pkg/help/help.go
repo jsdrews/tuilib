@@ -1,28 +1,21 @@
-// Package help renders key-binding hints in three shapes:
+// Package help renders key-binding hints in two shapes:
 //
-//   - ShortView / ShortViewBudget — a single inline line, "key desc • key
-//     desc • …", sized to fit a width budget. The app shell paints this
-//     into the statusbar's left slot. When the bindings don't all fit
-//     and m.Expanded() is false, ShortViewBudget tight-packs bindings
-//     and appends a "? help" affordance. When m.Expanded() is true, the
-//     line becomes row 0 of a column-aligned grid whose last cell is
-//     the "? close" affordance; rows 1+ continue in ExpandedView with
-//     the same column widths, so labels line up vertically across the
-//     footer and the panel.
-//   - ExpandedView / ExpandedRows — the rows-1-and-onward continuation
-//     of the unified grid: same column widths as the footer's row 0,
-//     same " • " column separator, row count clamped to maxRows. The
-//     app shell renders this in a Fixed row above the statusbar when
-//     m.Expanded() is true.
-//   - View — a legacy bordered overlay (kept for parents that want a
-//     standalone popup); uses key/desc column-pair flowing.
+//   - Model — the one-line footer the app shell paints into the
+//     statusbar's left slot. In minimal mode (the default) it is just the
+//     "? help" affordance; in verbose mode bindings are tight-packed
+//     inline until they overflow, and the affordance is appended when
+//     they do. The affordance is the source of truth for whether the help
+//     key does anything: when it isn't drawn, the key is inert.
+//   - Overlay — the modal reference the affordance opens: a bordered,
+//     scrollable, searchable list of every binding the active screen
+//     exposes, grouped into Sections. See overlay.go.
 //
-// The footer + panel together act as one component: when expanded, the
-// footer is row 0 of the grid and the panel is rows 1+, so a single
-// planGridFull pass at the statusbar's left-slot width drives both.
-// Pressing the app's HelpKey ("?" by default) flips m.Expanded(); the
-// shell only listens to the key when the inline flow has overflow, so
-// when everything fits the affordance is hidden and the key is inert.
+// The split is deliberate. A footer answers "what can I press right now"
+// in the space of one line, and stops being able to answer it somewhere
+// around a dozen bindings; the overlay answers "what can I press at all",
+// which needs grouping and room to scroll. Trying to make one shape do
+// both is what the expanded footer panel was, and it inherited the
+// footer's flat binding list — the part that doesn't scale.
 //
 // Components that want to contribute their own bindings can implement the
 // Provider interface; the parent collects bindings from the focused child
@@ -33,9 +26,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
 // Provider is implemented by components that want to surface extra key
@@ -44,85 +35,46 @@ type Provider interface {
 	HelpBindings() []key.Binding
 }
 
-// Options configures a help overlay. Zero-value fields fall back to defaults.
+// Options configures the footer. Zero-value fields fall back to defaults.
 type Options struct {
-	// Width and Height are the outer dimensions of the overlay, including the
-	// border.
-	Width, Height int
 	// KeyStyle is applied to the key column (left side of each pair).
 	KeyStyle lipgloss.Style
 	// DescStyle is applied to the description column.
 	DescStyle lipgloss.Style
-	// Border is the overlay's border. Defaults to lipgloss.NormalBorder().
-	Border lipgloss.Border
-	// BorderColor colors the border. Defaults to "240" (dim grey).
-	BorderColor lipgloss.TerminalColor
-	// ColumnSpacer is placed between column-pairs in the overlay. Defaults
-	// to "   ".
-	ColumnSpacer string
 	// ShortSeparator is placed between bindings in ShortView. Defaults to
 	// "  •  ".
 	ShortSeparator string
 	// Minimal collapses the footer to just the "? help" / "? close"
 	// affordance regardless of how many bindings the model holds — the
 	// inline strip is hidden and pressing the help key is the only way
-	// to see hints. When expanded, every binding flows into the panel
-	// rows. Set via SetMinimal at runtime.
+	// to see hints. Set via SetMinimal at runtime.
 	Minimal bool
 }
 
-// Model renders the help strip + expanded panel + bordered overlay. Call
-// SetBindings whenever the active binding set changes; the three render
-// methods (ShortView/ShortViewBudget, ExpandedView, View) all read from
-// the same compiled list. Visibility of the bordered View is the parent's
-// concern; the footer + panel are wired by pkg/app and follow the
-// Expanded() state plus overflow detection from ShortViewBudget.
+// Model renders the footer strip. Call SetBindings whenever the active
+// binding set changes; both render methods read from the same compiled
+// list. Whether the overlay is open is the host's state, mirrored here via
+// SetOpen so the affordance can say "close".
 type Model struct {
-	rect geom.Rect
-
-	width, height int
-	bindings      []key.Binding
+	bindings []key.Binding
 
 	keyStyle, descStyle lipgloss.Style
-	border              lipgloss.Border
-	borderColor         lipgloss.TerminalColor
-	spacer              string
 	shortSep            string
 
-	expanded bool
-	minimal  bool
+	open    bool
+	minimal bool
 }
 
-// New constructs a help overlay.
+// New constructs a footer.
 func New(opts Options) Model {
-	if (opts.Border == lipgloss.Border{}) {
-		opts.Border = lipgloss.NormalBorder()
-	}
-	if opts.BorderColor == nil {
-		opts.BorderColor = lipgloss.Color("240")
-	}
-	if opts.ColumnSpacer == "" {
-		opts.ColumnSpacer = "   "
-	}
 	if opts.ShortSeparator == "" {
 		opts.ShortSeparator = "  •  "
 	}
-	if opts.Width == 0 {
-		opts.Width = 80
-	}
-	if opts.Height == 0 {
-		opts.Height = 6
-	}
 	return Model{
-		width:       opts.Width,
-		height:      opts.Height,
-		keyStyle:    opts.KeyStyle,
-		descStyle:   opts.DescStyle,
-		border:      opts.Border,
-		borderColor: opts.BorderColor,
-		spacer:      opts.ColumnSpacer,
-		shortSep:    opts.ShortSeparator,
-		minimal:     opts.Minimal,
+		keyStyle:  opts.KeyStyle,
+		descStyle: opts.DescStyle,
+		shortSep:  opts.ShortSeparator,
+		minimal:   opts.Minimal,
 	}
 }
 
@@ -148,20 +100,14 @@ func (m Model) ShortView() string {
 }
 
 // ShortViewBudget renders the footer line fitting within width visible
-// cells. Behavior depends on m.Expanded():
-//
-//   - When collapsed (m.Expanded() == false), bindings are tight-packed
-//     inline ("key desc  •  key desc  •  …") until the next one would
-//     not fit; a "? help" affordance is appended on overflow.
-//   - When expanded (m.Expanded() == true), the line becomes row 0 of a
-//     column-aligned grid whose last cell is the "? close" affordance.
-//     ExpandedView renders rows 1+ of the same grid at the same width
-//     so footer and panel columns align vertically.
+// cells. In minimal mode the line is the affordance alone. Otherwise
+// bindings are tight-packed inline until the next one would not fit, and
+// the affordance is appended on overflow.
 //
 // consumed reports how many bindings were placed on the line. overflow
-// reports whether bindings were dropped because they didn't fit (in
-// expanded mode, true when the grid spills into rows 1+). Width 0 or
-// less skips budgeting and falls back to ShortView.
+// reports whether any were dropped — in minimal mode, whether there are
+// any at all, since none of them are shown. Width 0 or less skips
+// budgeting and falls back to ShortView.
 func (m Model) ShortViewBudget(width int) (line string, consumed int, overflow bool) {
 	if len(m.bindings) == 0 {
 		return "", 0, false
@@ -172,18 +118,15 @@ func (m Model) ShortViewBudget(width int) (line string, consumed int, overflow b
 	if m.minimal {
 		return m.minimalRow(width)
 	}
-	if m.expanded {
-		return m.gridRow0(width)
-	}
 
 	spacer := m.descStyle.Render(" ")
 	sep := m.descStyle.Render(m.shortSep)
 	sepVis := lipgloss.Width(sep)
 
-	affordanceText := m.keyStyle.Render("?") + spacer + m.descStyle.Render("help")
+	affordanceText := m.keyStyle.Render("?") + spacer + m.descStyle.Render(m.affordanceLabel())
 	// Reserve space for whichever affordance label is wider ("close" today)
-	// so toggling expanded doesn't shuffle which bindings the footer shows
-	// at the boundary between collapsed and expanded states.
+	// so opening the overlay doesn't shuffle which bindings the footer
+	// shows underneath it.
 	helpW := lipgloss.Width(m.keyStyle.Render("?") + spacer + m.descStyle.Render("help"))
 	closeW := lipgloss.Width(m.keyStyle.Render("?") + spacer + m.descStyle.Render("close"))
 	affordanceCost := sepVis + max(helpW, closeW)
@@ -219,256 +162,36 @@ func (m Model) ShortViewBudget(width int) (line string, consumed int, overflow b
 }
 
 // minimalRow renders the footer in minimal mode: just the affordance
-// pair ("? help" when collapsed, "? close" when expanded), padded to
-// width so the statusbar's background fills the full slot. Overflow is
-// true whenever there are any bindings, so the app shell keeps the help
-// key live as the only path to the panel.
+// pair ("? help", or "? close" while the overlay is up), padded to width
+// so the statusbar's background fills the full slot. Overflow is true
+// whenever there are any bindings, so the app shell keeps the help key
+// live as the only path to them.
 func (m Model) minimalRow(width int) (line string, consumed int, overflow bool) {
 	spacer := m.descStyle.Render(" ")
-	label := "help"
-	if m.expanded {
-		label = "close"
-	}
-	cell := m.keyStyle.Render("?") + spacer + m.descStyle.Render(label)
+	cell := m.keyStyle.Render("?") + spacer + m.descStyle.Render(m.affordanceLabel())
 	line = m.fillToWidth(cell, width)
 	return line, 0, len(m.bindings) > 0
 }
 
-// gridRow0 renders row 0 of the unified grid: bindings 0..row0Count-1
-// followed by the affordance cell, all sized to per-column widths from
-// planGridFull. Returns line padded to width so any background color
-// from DescStyle extends to the full slot width.
-func (m Model) gridRow0(width int) (line string, consumed int, overflow bool) {
-	cols, keyW, descW, row0Count := m.planGridFull(width)
-	if cols == 0 {
-		return "", 0, false
+func (m Model) affordanceLabel() string {
+	if m.open {
+		return "close"
 	}
-	spacer := m.descStyle.Render(" ")
-	sep := m.descStyle.Render(m.shortSep)
-
-	var cells []string
-	for c := 0; c < row0Count; c++ {
-		b := m.bindings[c]
-		cells = append(cells, m.keyStyle.Render(padRight(b.Help().Key, keyW[c]))+
-			spacer+
-			m.descStyle.Render(padRight(b.Help().Desc, descW[c])))
-	}
-	// Affordance cell at the last column.
-	affCol := cols - 1
-	cells = append(cells, m.keyStyle.Render(padRight("?", keyW[affCol]))+
-		spacer+
-		m.descStyle.Render(padRight("close", descW[affCol])))
-
-	line = strings.Join(cells, sep)
-	line = m.fillToWidth(line, width)
-	overflow = row0Count < len(m.bindings)
-	return line, row0Count, overflow
+	return "help"
 }
 
-// Expanded reports whether the multi-row panel view should be rendered
-// (the app shell consults this when deciding whether to reserve rows
-// for ExpandedView above the statusbar).
-func (m Model) Expanded() bool { return m.expanded }
+// Open reports whether the host is showing the overlay.
+func (m Model) Open() bool { return m.open }
 
-// SetExpanded controls whether the model is in the expanded state.
-// Use ToggleExpanded for the keyboard-driven flip.
-func (m *Model) SetExpanded(b bool) { m.expanded = b }
+// SetOpen tells the footer whether the overlay is up, which is all the
+// affordance needs to know to say "close" instead of "help".
+func (m *Model) SetOpen(b bool) { m.open = b }
 
 // SetMinimal flips minimal-footer mode at runtime. See Options.Minimal.
 func (m *Model) SetMinimal(b bool) { m.minimal = b }
 
 // Minimal reports whether the footer is in minimal mode.
 func (m Model) Minimal() bool { return m.minimal }
-
-// ToggleExpanded flips the expanded state and reports the new value.
-func (m *Model) ToggleExpanded() bool {
-	m.expanded = !m.expanded
-	return m.expanded
-}
-
-// ExpandedRows reports how many panel rows ExpandedView needs at width,
-// clamped to maxRows. The unified grid puts the footer at row 0 and the
-// panel at rows 1+; this returns the number of rows 1+ that hold the
-// remaining bindings. Width or maxRows ≤ 0, model not expanded, or all
-// bindings fit in row 0 yields 0.
-func (m Model) ExpandedRows(width, maxRows int) int {
-	if !m.expanded || width <= 0 || maxRows <= 0 {
-		return 0
-	}
-	cols, _, _, row0Count := m.planGridFull(width)
-	if cols == 0 {
-		return 0
-	}
-	remaining := len(m.bindings) - row0Count
-	if remaining <= 0 {
-		return 0
-	}
-	rows := (remaining + cols - 1) / cols
-	if rows > maxRows {
-		return maxRows
-	}
-	return rows
-}
-
-// ExpandedView renders rows 1+ of the unified grid at width. Column
-// widths come from the same planGridFull pass that ShortViewBudget
-// uses for row 0, so labels line up vertically across the footer and
-// panel. Each row is padded to width with DescStyle so any background
-// color set on DescStyle fills the row edge to edge. Stops when it has
-// filled rows lines or run out of bindings, whichever comes first.
-// Returns empty when not expanded or when all bindings fit on row 0.
-func (m Model) ExpandedView(width, rows int) string {
-	if !m.expanded || width <= 0 || rows <= 0 {
-		return ""
-	}
-	cols, keyW, descW, row0Count := m.planGridFull(width)
-	if cols == 0 {
-		return ""
-	}
-	n := len(m.bindings)
-	remaining := n - row0Count
-	if remaining <= 0 {
-		return ""
-	}
-	panelRows := (remaining + cols - 1) / cols
-	if panelRows > rows {
-		panelRows = rows
-	}
-	spacer := m.descStyle.Render(" ")
-	sep := m.descStyle.Render(m.shortSep)
-
-	var lines []string
-	for r := 0; r < panelRows; r++ {
-		var cells []string
-		for c := 0; c < cols; c++ {
-			idx := row0Count + r*cols + c
-			if idx >= n {
-				break
-			}
-			b := m.bindings[idx]
-			cells = append(cells, m.keyStyle.Render(padRight(b.Help().Key, keyW[c]))+
-				spacer+
-				m.descStyle.Render(padRight(b.Help().Desc, descW[c])))
-		}
-		lines = append(lines, m.fillToWidth(strings.Join(cells, sep), width))
-	}
-	return strings.Join(lines, "\n")
-}
-
-// PadLines wraps each line of s with leftPad and rightPad DescStyle-
-// rendered spaces so a background color from DescStyle extends across
-// the padded edges. Use it in the app shell to align the panel with
-// the statusbar's left-slot padding (so panel columns sit at the same
-// visible x as the footer's row 0) and to fill the row's right edge
-// to full terminal width.
-func (m Model) PadLines(s string, leftPad, rightPad int) string {
-	if leftPad <= 0 && rightPad <= 0 {
-		return s
-	}
-	left := ""
-	if leftPad > 0 {
-		left = m.descStyle.Render(strings.Repeat(" ", leftPad))
-	}
-	right := ""
-	if rightPad > 0 {
-		right = m.descStyle.Render(strings.Repeat(" ", rightPad))
-	}
-	lines := strings.Split(s, "\n")
-	for i, ln := range lines {
-		lines[i] = left + ln + right
-	}
-	return strings.Join(lines, "\n")
-}
-
-// planGridFull picks the largest column count that fits all bindings
-// plus an affordance cell (always the last cell of row 0) inside width
-// visible cells. Returns per-column key/desc widths and row0Count, the
-// number of regular binding cells on row 0 (= cols-1). Bindings beyond
-// row 0 flow row-major across rows 1+. cols=0 when there are no
-// bindings.
-func (m Model) planGridFull(width int) (cols int, keyW, descW []int, row0Count int) {
-	n := len(m.bindings)
-	if n == 0 {
-		return 0, nil, nil, 0
-	}
-	sepVis := lipgloss.Width(m.descStyle.Render(m.shortSep))
-
-	// Reserve affordance widths from the wider of "? help" / "? close"
-	// so the column doesn't reshuffle when the label flips between them.
-	affKeyW := lipgloss.Width("?")
-	affDescW := lipgloss.Width("close")
-	if w := lipgloss.Width("help"); w > affDescW {
-		affDescW = w
-	}
-
-	chosen := 0
-	var chosenKW, chosenDW []int
-	chosenRow0 := 0
-
-	for try := 1; try <= n+1; try++ {
-		kw := make([]int, try)
-		dw := make([]int, try)
-
-		row0BindingCount := try - 1
-		if row0BindingCount > n {
-			row0BindingCount = n
-		}
-		if m.minimal {
-			row0BindingCount = 0
-		}
-		for c := 0; c < row0BindingCount; c++ {
-			b := m.bindings[c]
-			if w := lipgloss.Width(b.Help().Key); w > kw[c] {
-				kw[c] = w
-			}
-			if w := lipgloss.Width(b.Help().Desc); w > dw[c] {
-				dw[c] = w
-			}
-		}
-		// Affordance always occupies the last cell of row 0.
-		affCol := try - 1
-		if affKeyW > kw[affCol] {
-			kw[affCol] = affKeyW
-		}
-		if affDescW > dw[affCol] {
-			dw[affCol] = affDescW
-		}
-
-		remaining := n - row0BindingCount
-		if remaining > 0 {
-			extraRows := (remaining + try - 1) / try
-			for r := 0; r < extraRows; r++ {
-				for c := 0; c < try; c++ {
-					idx := row0BindingCount + r*try + c
-					if idx >= n {
-						break
-					}
-					b := m.bindings[idx]
-					if w := lipgloss.Width(b.Help().Key); w > kw[c] {
-						kw[c] = w
-					}
-					if w := lipgloss.Width(b.Help().Desc); w > dw[c] {
-						dw[c] = w
-					}
-				}
-			}
-		}
-
-		total := 0
-		for c := 0; c < try; c++ {
-			total += kw[c] + 1 + dw[c] // 1 for key↔desc spacer
-		}
-		total += (try - 1) * sepVis
-		if total > width {
-			break
-		}
-		chosen = try
-		chosenKW = kw
-		chosenDW = dw
-		chosenRow0 = row0BindingCount
-	}
-	return chosen, chosenKW, chosenDW, chosenRow0
-}
 
 // fillToWidth pads s on the right with DescStyle-rendered spaces so
 // its visible width matches width. Used by row renderers so the
@@ -495,101 +218,34 @@ func padRight(s string, width int) string {
 // Count reports how many bindings the model currently holds.
 func (m Model) Count() int { return len(m.bindings) }
 
-func (m Model) Init() tea.Cmd                     { return nil }
-func (m Model) Update(_ tea.Msg) (Model, tea.Cmd) { return m, nil }
-func (m *Model) SetRect(r geom.Rect)              { m.rect = r; m.width, m.height = r.W, r.H }
-func (m *Model) SetBindings(b []key.Binding)      { m.bindings = Compile(b) }
-func (m Model) Width() int                        { return m.width }
+// SetBindings replaces the footer's binding list, deduped by keys.
+func (m *Model) SetBindings(b []key.Binding) { m.bindings = Compile(b) }
 
 // AffordanceSpan reports where the "? help" / "? close" affordance sits
 // within the footer line rendered at width: its start offset in cells and
 // its width. ok is false when no affordance is drawn. The app shell uses it
 // to route a click there to the same toggle the help key drives.
 //
-// The offset is not simply "the end of the line" — each of the three footer
-// shapes places it differently. Minimal mode renders it first and pads after
-// it; the collapsed flow appends it last; the expanded grid makes it the
-// final column, padded to that column's width rather than its own. Getting
-// this from one place keeps a click landing on the glyph the user sees.
+// The offset is not simply "the end of the line": minimal mode renders the
+// affordance first and pads after it, while the verbose flow appends it
+// last. Getting this from one place keeps a click landing on the glyph the
+// user sees.
 func (m Model) AffordanceSpan(width int) (start, w int, ok bool) {
 	if len(m.bindings) == 0 || width <= 0 {
 		return 0, 0, false
 	}
-	label := "help"
-	if m.expanded {
-		label = "close"
-	}
 	spacerW := lipgloss.Width(m.descStyle.Render(" "))
 	naturalW := lipgloss.Width(m.keyStyle.Render("?")) + spacerW +
-		lipgloss.Width(m.descStyle.Render(label))
+		lipgloss.Width(m.descStyle.Render(m.affordanceLabel()))
 
-	switch {
-	case m.minimal:
+	if m.minimal {
 		return 0, naturalW, true
-
-	case m.expanded:
-		cols, keyW, descW, row0Count := m.planGridFull(width)
-		if cols == 0 {
-			return 0, 0, false
-		}
-		sepW := lipgloss.Width(m.descStyle.Render(m.shortSep))
-		at := 0
-		for c := 0; c < row0Count; c++ {
-			at += keyW[c] + spacerW + descW[c] + sepW
-		}
-		affCol := cols - 1
-		return at, keyW[affCol] + spacerW + descW[affCol], true
-
-	default:
-		line, _, overflow := m.ShortViewBudget(width)
-		if !overflow {
-			return 0, 0, false
-		}
-		return lipgloss.Width(line) - naturalW, naturalW, true
 	}
-}
-
-func (m Model) Height() int { return m.height }
-
-// View renders the overlay as a bordered box.
-func (m Model) View() string {
-	innerW := max(0, m.width-2)
-	rows := max(1, m.height-2)
-
-	var (
-		pairs []string
-		used  int
-	)
-	for i := 0; i < len(m.bindings); i += rows {
-		end := min(i+rows, len(m.bindings))
-		var keys, descs []string
-		for _, b := range m.bindings[i:end] {
-			keys = append(keys, m.keyStyle.Render(b.Help().Key))
-			descs = append(descs, m.descStyle.Render(b.Help().Desc))
-		}
-		var cols []string
-		if len(pairs) > 0 {
-			cols = append(cols, m.spacer)
-		}
-		cols = append(cols,
-			strings.Join(keys, "\n"),
-			strings.Join(descs, "\n"),
-		)
-		pair := lipgloss.JoinHorizontal(lipgloss.Top, cols...)
-		if used+lipgloss.Width(pair) > innerW {
-			break
-		}
-		pairs = append(pairs, pair)
-		used += lipgloss.Width(pair)
+	line, _, overflow := m.ShortViewBudget(width)
+	if !overflow {
+		return 0, 0, false
 	}
-
-	content := lipgloss.JoinHorizontal(lipgloss.Top, pairs...)
-	return lipgloss.NewStyle().
-		Border(m.border).
-		BorderForeground(m.borderColor).
-		Height(rows).
-		Width(innerW).
-		Render(content)
+	return lipgloss.Width(line) - naturalW, naturalW, true
 }
 
 // Compile flattens multiple binding groups into one, removing duplicates.

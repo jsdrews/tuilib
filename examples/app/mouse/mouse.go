@@ -29,6 +29,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -126,20 +127,24 @@ func (s *Screen) Layout() layout.Node {
 	)
 }
 
-func (s *Screen) Help() []key.Binding {
-	out := s.focus.Help()
-	return append(out,
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		// Mouse affordances carry sentinel keys so they flow through
-		// help.Compile without colliding (keyless bindings all dedup to
-		// one) and never match a real KeyMsg.
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections puts the panes' own groups first and keeps the mouse
+// vocabulary this example exists to demonstrate under one heading.
+//
+// Mouse affordances carry sentinel keys so they flow through help.Compile
+// without colliding (keyless bindings all dedup to one) and never match a
+// real KeyMsg.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.focus, help.Group("Mouse",
 		key.NewBinding(key.WithKeys("mouse:click"), key.WithHelp("click", "focus + select")),
 		key.NewBinding(key.WithKeys("mouse:dblclick"), key.WithHelp("2×click", "open")),
 		key.NewBinding(key.WithKeys("mouse:wheel"), key.WithHelp("wheel", "scroll under pointer")),
 		key.NewBinding(key.WithKeys("mouse:header"), key.WithHelp("click hdr", "sort column")),
 		key.NewBinding(key.WithKeys("mouse:glyph"), key.WithHelp("click ▸", "expand node")),
 		key.NewBinding(key.WithKeys("mouse:drag"), key.WithHelp("drag bar", "scroll")),
-	)
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

@@ -38,6 +38,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/action"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -90,11 +91,14 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 // Help does not mention the actions key: the shell advertises that itself, and
 // only on screens where the menu would actually open. Nor does it mention the
 // individual verbs — moving those off the footer is the entire point.
-func (s *Screen) Help() []key.Binding {
-	return append(s.list.Help(),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the list's own groups through and adds this screen's.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Deployments",
 		key.NewBinding(key.WithKeys("mouse:right"), key.WithHelp("right-click", "actions")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-	)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
@@ -239,9 +243,11 @@ func (s *logScreen) Title() string       { return s.name + " logs" }
 func (s *logScreen) Init() tea.Cmd       { return nil }
 func (s *logScreen) OnEnter(any) tea.Cmd { return nil }
 func (s *logScreen) Layout() layout.Node { return layout.Sized(&s.tv) }
-func (s *logScreen) Help() []key.Binding {
-	return append(s.tv.Help(),
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")))
+func (s *logScreen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+func (s *logScreen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tv, help.Group("Log",
+		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back"))))
 }
 func (s *logScreen) IsCapturingKeys() bool { return s.tv.IsCapturingKeys() }
 

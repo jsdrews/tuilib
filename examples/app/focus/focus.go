@@ -8,6 +8,8 @@
 //   - granting focus to a component that was clicked, since the click arrives
 //     at the component rather than at the screen that knows the ordering
 //   - answering IsCapturingKeys from whichever component currently has focus
+//   - describing every pane's bindings for the key overlay (HelpSections),
+//     grouped and titled by pane rather than merged into one flat list
 //
 // The screen still routes messages itself, because focus is about the
 // keyboard and not about content: keys go to the focused component only —
@@ -22,6 +24,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/focus"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -132,6 +135,13 @@ func (s *focusScreen) Help() []key.Binding {
 	out := s.focus.Help()
 	return append(out, key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")))
 }
+
+// HelpSections is the same delegation as IsCapturingKeys: the Group knows
+// the panes and their order, so it is the one that can name which bindings
+// belong to which. Without this the key overlay would show one flat list
+// under "Focus" — every binding from three components with nothing to say
+// where any of them came from.
+func (s *focusScreen) HelpSections() []help.Section { return s.focus.HelpSections() }
 
 func (s *focusScreen) SetTheme(t theme.Theme) {
 	s.t = t

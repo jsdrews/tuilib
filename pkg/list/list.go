@@ -21,6 +21,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 )
@@ -721,26 +722,39 @@ func (m Model) IsCapturingKeys() bool { return m.Filtering() }
 // Help returns the keys this list responds to. While the embedded filter
 // is focused it returns the filter's keys; otherwise the configured
 // nav/scroll/filter bindings from m.keys.
-func (m Model) Help() []key.Binding {
+func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
+
+// HelpSections groups the same bindings by what they do, for the `?`
+// overlay. The groups are the Keys struct's own shape (rule 26) — the
+// distinction between moving the cursor, filtering and marking already
+// exists in the keymap, and Help is what flattens it away.
+func (m Model) HelpSections() []help.Section {
 	if m.filterable && m.filter.Focused() {
-		return m.filter.Help()
+		return help.Sections(help.Group(help.SectionFilter, m.filter.Help()...))
 	}
-	out := []key.Binding{
-		m.keys.Up, m.keys.Down,
-		m.keys.HalfUp, m.keys.HalfDown,
-		m.keys.Top, m.keys.Bottom,
-	}
+	var scroll []key.Binding
 	if m.hScrollbar {
-		out = append(out, m.body.HelpBindings()...)
+		scroll = m.body.HelpBindings()
 	}
+	var filter []key.Binding
 	if m.filterable {
-		out = append(out, m.keys.Filter)
+		filter = []key.Binding{m.keys.Filter}
 	}
+	var sel []key.Binding
 	if m.markable {
-		out = append(out, m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
-			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")))
+		sel = []key.Binding{m.keys.Mark, m.keys.MarkRange, m.keys.MarkAll, m.keys.ClearMarks,
+			key.NewBinding(key.WithKeys("mouse:mark"), key.WithHelp("click ✓", "mark")),
+			key.NewBinding(key.WithKeys("mouse:shiftclick"), key.WithHelp("shift-click", "mark to here"))}
 	}
-	return out
+	return help.Sections(
+		help.Group(help.SectionNavigate,
+			m.keys.Up, m.keys.Down,
+			m.keys.HalfUp, m.keys.HalfDown,
+			m.keys.Top, m.keys.Bottom),
+		help.Group(help.SectionScroll, scroll...),
+		help.Group(help.SectionFilter, filter...),
+		help.Group(help.SectionSelect, sel...),
+	)
 }
 
 // Value returns the current filter text ("" when not filterable or empty).
@@ -931,6 +945,9 @@ func (m *Model) BlurFilter() {
 func (m *Model) SetTopRight(s string) { m.body.SetTopRight(s) }
 
 func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
+
+// Title returns the label on the pane's border.
+func (m Model) Title() string { return m.body.Title() }
 
 // SetActiveColor updates the body pane's active border color. Useful when
 // reacting to a theme swap without rebuilding the model.

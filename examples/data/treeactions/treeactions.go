@@ -43,6 +43,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/action"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -136,12 +137,16 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	return s, cmd
 }
 
-func (s *Screen) Help() []key.Binding {
-	return append(s.tree.Help(),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the tree's own groups through — Navigate, Expand,
+// Select, Search — and adds this screen's verbs under its own heading.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tree, help.Group("Tree actions",
 		key.NewBinding(key.WithKeys("mouse:right"), key.WithHelp("right-click", "actions")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

@@ -25,6 +25,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/ansi"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/poll"
@@ -117,16 +118,19 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) Layout() layout.Node { return layout.Sized(&s.list) }
 
-func (s *Screen) Help() []key.Binding {
-	return []key.Binding{
-		key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections asks the list for its own groups rather than restating a
+// subset by hand — the list answers to more keys than a screen tends to
+// remember, and this way it cannot drift from what it actually dispatches.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.list, help.Group("Refresh",
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause/resume")),
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh now")),
 		key.NewBinding(key.WithKeys("+", "-"), key.WithHelp("+/-", "interval")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

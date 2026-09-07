@@ -830,7 +830,7 @@ generates the table below, so the doc cannot drift from the code.
 |---|---|---|
 | `q`, `ctrl+c` | `pkg/app` | quit (at stack depth 1) |
 | `esc` | `pkg/app` | pop the stack |
-| `?` | `pkg/app` | expanded help panel |
+| `?` | `pkg/app` | key overlay |
 | `ctrl+z` | `pkg/app` | suspend |
 | `t` | `pkg/app` | cycle theme (opt-in, conventional) |
 | `o` | `pkg/app` | output console (opt-in, conventional) |

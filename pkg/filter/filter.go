@@ -162,6 +162,14 @@ func (m Model) IsCapturingKeys() bool { return m.Focused() }
 
 // Help returns the keys the filter responds to. Empty when blurred
 // (the parent owns the "/" focus binding); commit/clear when focused.
+// Help returns the bindings active while the filter has focus.
+//
+// pkg/help owns the overlay that renders these, and pkg/help embeds a
+// filter.Model of its own for its search field — so this package cannot
+// import it back to group them. The bindings are always surfaced by the
+// component the filter belongs to (list, table, tree, …), which puts them
+// under its own Filter or Search group; there is no path by which a bare
+// filter's keys reach the overlay ungrouped.
 func (m Model) Help() []key.Binding {
 	if !m.input.Focused() {
 		return nil

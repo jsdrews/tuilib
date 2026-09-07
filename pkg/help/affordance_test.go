@@ -34,27 +34,28 @@ func affordanceGlyphAt(t *testing.T, m Model, width int) int {
 	return ansi.StringWidth(plain[:i])
 }
 
-// The affordance sits in a different place in each of the three footer
-// shapes. Whatever AffordanceSpan reports has to bracket the glyph the user
-// can actually see, or a click on "? help" lands somewhere else.
+// The affordance sits in a different place in each footer shape, and its
+// label changes while the overlay is up. Whatever AffordanceSpan reports has
+// to bracket the glyph the user can actually see, or a click on "? help"
+// lands somewhere else.
 func TestAffordanceSpanBracketsRenderedGlyph(t *testing.T) {
 	const width = 60
 
 	for _, tc := range []struct {
-		name     string
-		minimal  bool
-		expanded bool
-		count    int
+		name    string
+		minimal bool
+		open    bool
+		count   int
 	}{
-		{"minimal collapsed", true, false, 8},
-		{"minimal expanded", true, true, 8},
-		{"verbose collapsed overflowing", false, false, 20},
-		{"verbose expanded", false, true, 20},
+		{"minimal closed", true, false, 8},
+		{"minimal open", true, true, 8},
+		{"verbose overflowing", false, false, 20},
+		{"verbose open", false, true, 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := New(Options{})
 			m.SetMinimal(tc.minimal)
-			m.SetExpanded(tc.expanded)
+			m.SetOpen(tc.open)
 			m.SetBindings(bindings(tc.count))
 
 			start, w, ok := m.AffordanceSpan(width)
@@ -85,7 +86,7 @@ func TestAffordanceSpanStartsAtZeroInMinimalMode(t *testing.T) {
 	}
 }
 
-// With no bindings there is nothing to expand, so there is no affordance to
+// With no bindings there is nothing to show, so there is no affordance to
 // click and the help key is inert.
 func TestAffordanceSpanAbsentWithoutBindings(t *testing.T) {
 	m := New(Options{Minimal: true})

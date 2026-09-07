@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -54,12 +55,14 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *Screen) Layout() layout.Node { return layout.Sized(&s.log) }
 
-func (s *Screen) Help() []key.Binding {
-	base := []key.Binding{
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the logview's own groups through to the `?` overlay.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.log, help.Group("Logview",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	}
-	return append(base, s.log.Help()...)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {

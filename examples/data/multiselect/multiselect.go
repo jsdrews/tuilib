@@ -57,6 +57,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/ansi"
+	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -121,13 +122,20 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 // Markable is set — the bindings and the hints come from the same Keys struct
 // (rule 26), so nothing here restates them. The verbs are absent on purpose:
 // moving discovery off the footer and into the menu is most of the point.
-func (s *Screen) Help() []key.Binding {
-	return append(s.tab.Help(),
-		key.NewBinding(key.WithKeys("mouse:shiftclick"), key.WithHelp("shift-click", "mark to here")),
+func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+
+// HelpSections passes the table's own groups through — Navigate, Scroll,
+// Sort, Filter, Select — and adds only what belongs to this screen.
+//
+// The heading over the marking keys is "Select", not "Multi-select": groups
+// are named by what the keys do, and a heading named after the screen ends
+// up over every binding on it, scroll keys included.
+func (s *Screen) HelpSections() []help.Section {
+	return help.SectionsOf(&s.tab, help.Group("Multi-select",
 		key.NewBinding(key.WithKeys("mouse:right"), key.WithHelp("right-click", "actions")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-	)
+	))
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
