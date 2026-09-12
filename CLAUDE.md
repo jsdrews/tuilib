@@ -13,8 +13,8 @@ example in `examples/`.
    auto-esc-pop. Your screen declares a `layout.Node` tree in `Layout()`
    and handles its own state in `Update`. Only drop to a bare
    `tea.Model` + manual layout when you genuinely need something outside
-   the shell's shape (rare). See `examples/app/stack/main.go` and
-   `examples/app/layouts/main.go`.
+   the shell's shape (rare). See `examples/shell/stack/stack.go` and
+   `examples/shell/layouts/layouts.go`.
 
 2. **Describe layout declaratively, not with `m.h - N` math.** Compose
    `layout.VStack` / `HStack` / `ZStack` + `Fixed(n, …)` / `Flex(weight, …)`
@@ -201,15 +201,17 @@ example in `examples/`.
     keys — suspending mid-filter would strand the query — and ignored on
     Windows, where bubbletea has no suspend support.
 
-12. **Stream subprocess output via a chained `tea.Cmd`.** When you want
-    stdout/stderr in a logview rather than a terminal handoff, point
-    `cmd.Stdout` and `cmd.Stderr` at one `io.Pipe`, call `cmd.Start()`,
-    then spawn a goroutine that does `cmd.Wait()` + `pw.Close()`. A
-    `tea.Cmd` reads one line via `bufio.Scanner` and posts a
-    `logLineMsg`; on receipt, `Update` appends + re-dispatches the read.
-    EOF posts `logDoneMsg`. No goroutine touches the model directly. To
-    interrupt or kill, call `cmd.Process.Signal(syscall.SIGINT)` or
-    `cmd.Process.Kill()` (SIGKILL). See `examples/data/runlog`.
+12. **Stream any other producer via a chained `tea.Cmd`.** For a
+    subprocess this is `runner.Capture`'s job and you should not write it
+    yourself (rule 15). For everything else that arrives over time — an
+    SSE response, a tailed file, a websocket — the shape is the same:
+    spawn one goroutine that owns the source and pushes into a channel,
+    then have a `tea.Cmd` read *one* item and post it as a message; on
+    receipt, `Update` appends and re-dispatches the read. EOF posts a
+    done message. No goroutine touches the model directly — every
+    mutation flows through `Update`, which is what keeps the value
+    receiver honest. `pkg/runner`'s `stream` is that pattern if you want
+    a reference implementation.
 
 13. **Cap streaming buffers.** Components that accept open-ended input
     (`pkg/logview`) apply a default `MaxLines` cap so an unbounded
@@ -274,7 +276,7 @@ example in `examples/`.
     `OutputKey`. Left to the screens it would be advertised on the one
     screen whose author happened to remember. The hint flips to "close
     output" while the console is open, since the same key does both.
-    See `examples/app/output` and rule 15.
+    See `examples/shell/output` and rule 15.
 
 15. **Capture a subprocess with `runner.Capture`, hand it the terminal with
     `runner.Run`.** They are counterparts, not modes of each other.
@@ -294,8 +296,10 @@ example in `examples/`.
     subprocess rather than growing without bound.
 
     Don't hand-roll the `io.Pipe` + goroutine + `bufio.Scanner` dance any
-    more. `examples/data/runlog` still shows it because it predates this,
-    but new code has no reason to repeat it.
+    more — `runner.Capture` is that pattern, moved into the library and
+    given real OS pipes, process-group kills and a bounded channel.
+    `examples/patterns/capture` is the whole screen: three message cases,
+    no plumbing.
 
 16. **Enter means "open the focused selection."** In multi-pane screens
     with focus cycling, enter should have a single conceptual meaning
@@ -308,7 +312,7 @@ example in `examples/`.
     object. This matches the launcher's enter-to-push convention and
     avoids the alternative of overloading per-pane keys (e.g. `>`/`d`
     just to drill in). The pattern's payoff is most visible in
-    `examples/data/drilldown` where enter on the cities list loads
+    `examples/patterns/drilldown` where enter on the cities list loads
     detail + shifts focus right, and enter on the focused detail
     pushes the level-3 attribute screen.
 
@@ -344,7 +348,7 @@ example in `examples/`.
     `SetLoading(true)` on refetch so the spinner replaces the previous
     result instead of overlaying it. Theme builders set `SpinnerStyle`
     from `Theme.Accent`; override only when you need a different color.
-    See `examples/data/loading/loading.go`.
+    See `examples/patterns/loading/loading.go`.
 
 18. **Trust the pane to handle long lines.** `pane.Pane` truncates each
     line to the inner width on `SetContent` (ANSI-aware via
@@ -373,7 +377,7 @@ example in `examples/`.
     `Width: 12` for 10-char status text. (This is a change from the old
     bubbles/table-based example, which had to pad the Status column to
     22 to survive non-ANSI-aware truncation in upstream `runewidth`.)
-    See `examples/data/table/table.go` Status column.
+    See `examples/components/table/table.go` Status column.
 
     For URL cells, wrap the visible label with `ansi.Hyperlink(url,
     text)` so shift-click / cmd-click in alacritty/tmux/kitty/iTerm2
@@ -423,7 +427,7 @@ example in `examples/`.
     still holding the rect it had when last drawn); everything else
     (timers, async fetch results, custom messages) fans out to every body
     so a `tea.Tick` re-arm in an inactive tab keeps streaming. See
-    `examples/app/tabs`, where the Logs tab keeps appending lines while
+    `examples/shell/tabs`, where the Logs tab keeps appending lines while
     you're on the Cities or Counter tab.
 
     Clicking a label in the strip switches to that tab. The strip's own
@@ -475,7 +479,7 @@ example in `examples/`.
     centers itself inside whatever bounds it gets, so the outer
     `layout.Center(w, h, ...)` wrapper is redundant. Hosting,
     `IsCapturingKeys`, `Help()` composition, and ZStack placement all
-    follow rule 22. See `examples/data/alert`.
+    follow rule 22. See `examples/patterns/modals`.
 
 24. **For auto-refresh, use `pkg/poll` + keyed rows.** When data backing a
     view changes over time (k8s deployments, Prefect runs, REST endpoints),
@@ -503,7 +507,7 @@ example in `examples/`.
     for transient refresh feedback ("refreshed 14 deployments"); the
     statusbar auto-clears so it doesn't accumulate. For a persistent
     "last refreshed Xs ago" indicator, mutate the component's title via
-    `SetTitle` from a periodic UI tick — see `examples/data/poll`.
+    `SetTitle` from a periodic UI tick — see `examples/patterns/poll`.
 
 25. **Reserve arrows + hjkl for scroll, library-wide.** Every component
     that scrolls in a given axis uses the same bindings on that axis,
@@ -593,7 +597,7 @@ example in `examples/`.
     Rebuild the Group in `SetTheme` over the same field addresses and
     restore the index with `SetIndex` — the components behind those
     addresses are replaced, but the addresses are stable, so the Group
-    keeps pointing at the right panes. See `examples/app/focus`.
+    keeps pointing at the right panes. See `examples/patterns/focus`.
 
     **A filterable component has two focusable regions behind one
     `Focusable`** — its filter and its body — and the two must stay
@@ -625,7 +629,7 @@ example in `examples/`.
     `Group.Update` also declines to cycle while `IsCapturingKeys()` is
     true. Tabbing out of a half-typed filter would strand it, and
     `pkg/table` binds tab to complete a `key:value` term — leave the
-    field with enter or esc, then cycle. `examples/app/filters` is the
+    field with enter or esc, then cycle. `examples/patterns/filters` is the
     two-filterable-pane screen these rules exist for.
 
 28. **Mouse support comes from rects, not from markers.** `pkg/layout`
@@ -728,7 +732,7 @@ example in `examples/`.
     Pagination is a wire protocol, not a UI. The user scrolls; windows
     arrive under them. Don't add `n`/`p` page keys — they collide with
     rule 25's reservations and impose a second navigation model on a
-    component that already scrolls. See `examples/data/remote`.
+    component that already scrolls. See `examples/patterns/remote`.
 
 32. **For multi-select, set `Options.Markable` and read `Selection()`.**
     `pkg/list`, `pkg/table` and `pkg/tree` carry a marked set the user
@@ -795,7 +799,7 @@ example in `examples/`.
     `pkg/inspector` has no marking — it is a record viewer, and there is
     no verb that acts on a set of its fields.
 
-    See `examples/data/multiselect` and rule 8: the verbs that act on a
+    See `examples/patterns/multiselect` and rule 8: the verbs that act on a
     selection belong in an `action.Set`, not on letter keys. (Rules 30 and
     31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
     key table, both shipped but not yet written up here.)
@@ -849,7 +853,7 @@ example in `examples/`.
   width, no escape-byte padding), pins the header at line 0 while still
   scrolling horizontally with the body, and mirrors `pkg/list`'s
   ergonomics (cursor, filterable, `g`/`G`/`ctrl+u/d` nav, `SetLoading`,
-  `SetTheme`-friendly setters). See `examples/data/table/table.go`.
+  `SetTheme`-friendly setters). See `examples/components/table/table.go`.
 - **Don't roll your own confirm modal.** `pkg/confirm` already handles
   selection movement, y/n/esc shortcuts, message-driven results, and
   theme-aware styling. Hand-rolling a `pane.Pane` + `toggle.Model` +
@@ -886,8 +890,8 @@ example in `examples/`.
   `runner.Capture` is that pattern, moved out of an example and into the
   library, with the app shell already chaining the reads. Rolling it again
   per command gets you a second subprocess pipeline that the console can't
-  see. `examples/data/runlog` still shows the manual form because it
-  predates `Capture`; it is not the recommended path any more.
+  see, and a kill that signals the shell while the compiler under it keeps
+  writing into a pipe nobody reads.
 - **Don't use the statusbar as a log.** Its center slot is one truncated
   line and it is wiped by the next `tea.KeyMsg`. If the user might want to
   read it twice, it belongs in `pkg/output` — `app.ErrorDetail` for a
@@ -1103,10 +1107,22 @@ path.
 ## Where to learn more
 
 - **Run the launcher:** `task examples`. Every demo is hosted there as a
-  child screen. For code, each example lives at `examples/<area>/<name>/<name>.go`
-  as a package exposing `New(theme.Theme) screen.Screen`.
-- **Closest examples first:** `examples/app/stack/stack.go` for nav + data
-  flow, `examples/app/layouts/layouts.go` for layout primitives across
+  child screen, grouped the way the directories are. Each example lives at
+  `examples/<area>/<name>/<name>.go` as a package exposing
+  `New(theme.Theme) screen.Screen`, where `<area>` is one of:
+
+  | Area | Holds |
+  |---|---|
+  | `components/` | one demo per UI component, in isolation — `pane`, `list`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
+  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `chrome`, `prescreen` |
+  | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
+
+  When you add a demo, pick the area by what a reader is looking for, not
+  by which package it happens to import: a screen that exists to show one
+  component's options is a component demo, one that shows two components
+  cooperating is a pattern.
+- **Closest examples first:** `examples/shell/stack/stack.go` for nav + data
+  flow, `examples/shell/layouts/layouts.go` for layout primitives across
   five sub-screens. Copy one and strip what you don't need.
 - **Launcher pattern:** `examples/launcher/main.go` shows how to compose
   multiple screens into a single app — a filterable menu pushing the
@@ -1164,18 +1180,18 @@ path.
   pulls extra pages ahead of the screen to hide the placeholder flash at
   boundaries. It imports `pkg/query` and nothing else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the
-  screen does the translating. See rule 29 and `examples/data/remote`.
+  screen does the translating. See rule 29 and `examples/patterns/remote`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
   cycling, click grants), the `Focusable` interface every component
   satisfies, and the optional `Capturer` that answers rule 5. Components
   identify themselves in focus requests by `Token` rather than by
   pointer — bubbletea's value receiver on `Update` means a component
-  cannot name its own address. See rule 27 and `examples/app/focus`.
+  cannot name its own address. See rule 27 and `examples/patterns/focus`.
 - **Mouse:** `pkg/mouse` is the `Msg` components actually handle
   (bubbletea's event plus a resolved `Clicks` count) and the `Tracker`
   that counts rapid repeat presses in the same cell. The app shell owns
   one tracker, so no component carries mouse state or a threshold. See
-  rule 28 and `examples/app/mouse`; run the launcher to try it, since
+  rule 28 and `examples/patterns/mouse`; run the launcher to try it, since
   `app.Options.Mouse` is set there for the whole suite.
 - **Help footer + key overlay:** the statusbar's left slot shows a
   `? help` affordance (and, with `app.Options.HelpVerbose`, as many of
@@ -1213,16 +1229,16 @@ path.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
-  `tea.KeyMsg`. See `examples/app/status` and rule 20.
+  `tea.KeyMsg`. See `examples/shell/status` and rule 20.
 - **Confirm modal:** `pkg/confirm` is a yes/no dialog meant to live in a
   ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
   as `tea.Cmd`s the parent matches in its own `Update`. See
-  `examples/data/confirm` and rule 22.
+  `examples/patterns/modals` and rule 22.
 - **Alert modal:** `pkg/alert` is the acknowledgement counterpart to
   confirm — a single OK button, `alert.DismissedMsg` result, identical
   hosting pattern. Override `ActiveColor` with `t.ErrorBG` for an
   error-tinted look. Use it for "stop and acknowledge" feedback; prefer
-  `app.Info` / `app.Error` for passive notices. See `examples/data/alert`
+  `app.Info` / `app.Error` for passive notices. See `examples/patterns/modals`
   and rule 23.
 - **Atomic screen swap:** `screen.Replace(s)` swaps the active top of the
   stack in one tick. Use it for "fresh instance of this view" (reset
@@ -1246,7 +1262,7 @@ path.
   in `internal/componenttest/marking_test.go` rather than in any one
   package, for the reason the "don't test shared behaviour in one
   component's package" anti-pattern gives. See rule 32,
-  `examples/data/multiselect`, and `docs/actions.md` decisions 19-20.
+  `examples/patterns/multiselect`, and `docs/actions.md` decisions 19-20.
 - **Keyed items / rows:** `pkg/list` (`SetKeyedItems` + `KeyedItem{Key,
   Display}` + `SelectedKey`) and `pkg/table` (`SetKeyedRows` +
   `KeyedRow{Key, Cells}` + `SelectedKey`) are the auto-refresh primitive.
@@ -1255,7 +1271,7 @@ path.
   the previous-cursor index is the fallback only when the key is gone.
   `SetItems`/`SetRows` clear any keys, so reach for the keyed variant
   consistently across a screen — mixing them resets the keys mid-flight.
-  Pair with `pkg/poll` for the cadence; see `examples/data/poll`.
+  Pair with `pkg/poll` for the cadence; see `examples/patterns/poll`.
 - **Table component:** `pkg/table` is the cursor-driven tabular companion
   to `pkg/list`. `Column{Title, Width, Align, Sortable, Less, Flex,
   MaxWidth}` declares the layout; rows are `[]string` cells. The
@@ -1340,7 +1356,7 @@ path.
   `Window()` reports `(offset, count, total)`; `ViewportChangedMsg`
   reports the logical range on screen, which is the signal to fetch.
   `SetRows` / `SetKeyedRows` leave windowed mode. See
-  `examples/data/table` and `theme.Table()`.
+  `examples/components/table` and `theme.Table()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`
   (or `SetContent(s)` at runtime — replaces + resets scroll to top).
@@ -1355,7 +1371,7 @@ path.
   (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
   rule 25). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
   rebuilds via `SetContent`/`SetQuery`/`SetWrap` — the theme swap
-  pattern from rule 4. See `examples/data/textview` and `theme.TextView()`.
+  pattern from rule 4. See `examples/components/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by
@@ -1375,7 +1391,7 @@ path.
   the cursor to its previous path when it survives the swap — the
   primitive that auto-refresh will lean on. Carry
   `Cursor()`/`Query()` across `SetTheme` rebuilds via
-  `SetCursor`/`SetQuery`. See `examples/data/inspector` and
+  `SetCursor`/`SetQuery`. See `examples/components/inspector` and
   `theme.Inspector()`.
 - **Inline metrics:** `pkg/metrics` is a small set of cell-fitting renderers
   for the monitoring shape — `Badge(ok, warn, down)` for status-count
@@ -1390,7 +1406,7 @@ path.
   non-severity colorization (e.g. CPU usage that should always be blue
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
-  `examples/data/metrics` and rule 24 (auto-refresh).
+  `examples/components/metrics` and rule 24 (auto-refresh).
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options
   {Interval: d})`, batch `m.poll.Init()` into the screen's Init, and
@@ -1403,7 +1419,7 @@ path.
   the prior cadence is dropped on arrival — your screen never sees a
   stale RefreshMsg. Pair with the keyed-row APIs on `pkg/list` /
   `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor
-  + expansion state survive every swap. See `examples/data/poll` and
+  + expansion state survive every swap. See `examples/patterns/poll` and
   rule 24.
 - **Output console:** `pkg/output` is the app-wide log — `Record` (one
   flat line's worth of structure: time, level, source, text, head/body,
@@ -1427,7 +1443,7 @@ path.
   `pkg/theme` for `SetTheme`, so a `Theme` method returning
   `output.Options` would close an import cycle. Inverting the dependency
   is what keeps the screen in its own package and testable without an app
-  shell. See `examples/app/output` and rules 14 and 15.
+  shell. See `examples/shell/output` and rules 14 and 15.
 - **Capturing subprocesses:** `runner.Capture(cmd)` /
   `runner.CaptureWith(runner.CaptureOptions{Cmd, Label})` run a
   subprocess without suspending the TUI, posting `CaptureStarted`, a

@@ -1,19 +1,15 @@
-// Package polltable demonstrates pkg/poll driving auto-refresh of a
-// table.Model, with SetKeyedRows pinning the cursor to the same row by
-// Key across every refresh.
+// Package metrics demonstrates pkg/metrics inline primitives — Badge,
+// Ratio, Bar, Spark — composed into a polled deployments table. Each row
+// shows a deployment with its replica ratio, pod-status badge, CPU bar,
+// and a 12-sample CPU sparkline. The data ticks every 2s; pkg/poll +
+// SetKeyedRows keep the cursor pinned to the same deployment ID across
+// every refresh.
 //
-// The synthetic data is a deployments table — fixed set of services,
-// each with a Sync state, Health state, replica count, and "age". On
-// every tick the underlying state mutates (a deployment flips Syncing
-// → Synced, a Health goes Degraded → Healthy or vice versa, replica
-// counts drift, ordering changes), and the table is re-applied via
-// SetKeyedRows. Because each row carries a stable deployment ID, the
-// cursor sticks even when the row's display position moves — the
-// payoff that "keyed rows for auto-refresh" makes visible.
-//
-// Keys: p pauses/resumes, r refreshes immediately, +/- adjust cadence,
-// /↑↓ behave normally on the table, [/]/s sort by column.
-package polltable
+// Demonstrates: Badge for state breakdowns, Ratio for "N of M", Bar for
+// utilization, Spark for short history. The history buffer is owned by
+// this screen — pkg/metrics is rendering-only, so each tick the screen
+// rolls the buffer (drop oldest, append newest) and re-renders.
+package metrics
 
 import (
 	"fmt"
@@ -26,9 +22,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/metrics"
 	"github.com/jsdrews/tuilib/pkg/poll"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -39,17 +35,22 @@ const (
 	defaultInterval = 2 * time.Second
 	minInterval     = 500 * time.Millisecond
 	maxInterval     = 10 * time.Second
+	historyLen      = 12
+	sparkWidth      = 12
+	barWidth        = 8
 )
 
 type deployment struct {
 	id       string
 	name     string
 	env      string
-	sync     string // Synced, Syncing, OutOfSync
-	health   string // Healthy, Degraded, Down
 	replicas int
 	want     int
-	age      time.Duration
+	healthy  int
+	warn     int
+	down     int
+	cpuPct   float64
+	cpuHist  []float64
 }
 
 type Screen struct {
@@ -60,7 +61,7 @@ type Screen struct {
 	rng  *rand.Rand
 }
 
-// New returns the polled-table demo screen.
+// New returns the metrics demo screen.
 func New(t theme.Theme) screen.Screen {
 	s := &Screen{
 		rng:  rand.New(rand.NewSource(time.Now().UnixNano())),
@@ -71,7 +72,7 @@ func New(t theme.Theme) screen.Screen {
 	return s
 }
 
-func (s *Screen) Title() string         { return "PollTable" }
+func (s *Screen) Title() string         { return "Metrics" }
 func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
 func (s *Screen) IsCapturingKeys() bool { return s.tab.Filtering() }
 
@@ -92,12 +93,10 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			switch m.String() {
 			case "p":
 				if s.poll.Paused() {
-					cmd := s.poll.Resume()
-					s.refreshTitle()
-					return s, cmd
+					return s, s.poll.Resume()
 				}
 				s.poll.Pause()
-				s.refreshTitle()
+				s.applyRows()
 				return s, nil
 			case "r":
 				return s, s.poll.Refresh()
@@ -125,8 +124,9 @@ func (s *Screen) Layout() layout.Node { return layout.Sized(&s.tab) }
 
 func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
 
-// HelpSections keeps the polling verbs — which belong to this screen, not to
-// the table — under their own heading.
+// HelpSections passes the table's own groups through and keeps the polling
+// verbs — which belong to this screen, not to the table — under their own
+// heading.
 func (s *Screen) HelpSections() []help.Section {
 	return help.SectionsOf(&s.tab, help.Group("Refresh",
 		key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "pause/resume")),
@@ -146,14 +146,14 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	opts := t.Table()
 	opts.Title = "deployments"
 	opts.Filterable = true
-	opts.Filter.Placeholder = "filter, env:prod, health:~degraded…"
+	opts.Filter.Placeholder = "filter, env:prod…"
 	opts.Columns = []table.Column{
 		{Title: "Deployment", Width: 22, Sortable: true},
 		{Title: "Env", Width: 8, Sortable: true},
-		{Title: "Sync", Width: 12, Sortable: true, Less: syncLess},
-		{Title: "Health", Width: 14, Sortable: true, Less: healthLess},
-		{Title: "Replicas", Width: 10, Sortable: true, Less: replicasLess},
-		{Title: "Age", Width: 8, Sortable: true, Less: ageLess},
+		{Title: "Replicas", Width: 10, Sortable: true, Less: ratioLess},
+		{Title: "Pods", Width: 14},
+		{Title: "CPU", Width: 14, Sortable: true, Less: cpuLess},
+		{Title: "CPU 24s", Width: sparkWidth},
 	}
 	s.tab = table.New(opts)
 	s.applyRows()
@@ -196,35 +196,26 @@ func depCells(d deployment) []string {
 	return []string{
 		d.name,
 		d.env,
-		colorSync(d.sync),
-		colorHealth(d.health),
-		fmt.Sprintf("%d/%d", d.replicas, d.want),
-		d.age.Round(time.Second).String(),
+		metrics.Ratio(d.replicas, d.want),
+		metrics.Badge(d.healthy, d.warn, d.down),
+		metrics.BarStyled(d.cpuPct, 100, barWidth, ansiColorForCPU(d.cpuPct)) +
+			fmt.Sprintf(" %3.0f%%", d.cpuPct),
+		metrics.Spark(d.cpuHist, sparkWidth),
 	}
 }
 
-func colorSync(s string) string {
-	switch s {
-	case "Synced":
-		return ansi.CellColor(2, "✓ Synced")
-	case "Syncing":
-		return ansi.CellColor(4, "↻ Syncing")
-	case "OutOfSync":
-		return ansi.CellColor(3, "● OutOfSync")
+// ansiColorForCPU is a non-severity colorization (CPU is always blue
+// when low and shifts warm at high utilization). Demonstrates BarStyled
+// for cases where the default severity inference doesn't apply.
+func ansiColorForCPU(pct float64) int {
+	switch {
+	case pct >= 90:
+		return 1 // red
+	case pct >= 70:
+		return 3 // yellow
+	default:
+		return 4 // blue
 	}
-	return s
-}
-
-func colorHealth(h string) string {
-	switch h {
-	case "Healthy":
-		return ansi.CellColor(2, "✓ Healthy")
-	case "Degraded":
-		return ansi.CellColor(3, "● Degraded")
-	case "Down":
-		return ansi.CellColor(1, "✗ Down")
-	}
-	return h
 }
 
 func (s *Screen) refreshTitle() {
@@ -241,53 +232,44 @@ func (s *Screen) refreshTitle() {
 	s.tab.SetTitle(fmt.Sprintf("deployments · refreshed %ds ago · every %s", int(ago.Seconds()), s.poll.Interval()))
 }
 
-// advance mutates the deployments slice — flip sync states, drift health,
-// drift replica counts, bump ages, then re-sort. The reorder is what makes
-// keyed cursor preservation visible.
+// advance simulates one tick: drift CPU, occasionally lose/recover pods,
+// roll the CPU history ring buffer.
 func (s *Screen) advance() {
 	for i := range s.deps {
-		s.deps[i].age += defaultInterval
-		switch s.deps[i].sync {
-		case "Syncing":
-			if s.rng.Float64() < 0.6 {
-				s.deps[i].sync = "Synced"
-			}
-		case "Synced":
-			if s.rng.Float64() < 0.1 {
-				s.deps[i].sync = "Syncing"
-			} else if s.rng.Float64() < 0.05 {
-				s.deps[i].sync = "OutOfSync"
-			}
-		case "OutOfSync":
-			if s.rng.Float64() < 0.4 {
-				s.deps[i].sync = "Syncing"
+		d := &s.deps[i]
+		// Drift CPU with a random walk, clamped.
+		d.cpuPct += (s.rng.Float64() - 0.5) * 18
+		if d.cpuPct < 5 {
+			d.cpuPct = 5
+		}
+		if d.cpuPct > 99 {
+			d.cpuPct = 99
+		}
+		d.cpuHist = append(d.cpuHist, d.cpuPct)
+		if len(d.cpuHist) > historyLen {
+			d.cpuHist = d.cpuHist[len(d.cpuHist)-historyLen:]
+		}
+		// Pod state drift.
+		if d.healthy < d.want && s.rng.Float64() < 0.5 {
+			d.healthy++
+			if d.warn > 0 {
+				d.warn--
+			} else if d.down > 0 {
+				d.down--
 			}
 		}
-		switch s.deps[i].health {
-		case "Healthy":
-			if s.rng.Float64() < 0.08 {
-				s.deps[i].health = "Degraded"
-			}
-		case "Degraded":
+		if s.rng.Float64() < 0.06 && d.healthy > 0 {
+			d.healthy--
 			if s.rng.Float64() < 0.5 {
-				s.deps[i].health = "Healthy"
-			} else if s.rng.Float64() < 0.1 {
-				s.deps[i].health = "Down"
-			}
-		case "Down":
-			if s.rng.Float64() < 0.4 {
-				s.deps[i].health = "Degraded"
+				d.warn++
+			} else {
+				d.down++
 			}
 		}
-		// Drift replicas toward want, occasionally a pod dies.
-		if s.deps[i].replicas < s.deps[i].want && s.rng.Float64() < 0.4 {
-			s.deps[i].replicas++
-		}
-		if s.deps[i].replicas > 0 && s.rng.Float64() < 0.05 {
-			s.deps[i].replicas--
-		}
+		d.replicas = d.healthy + d.warn
 	}
-	// Reorder so dirty rows float up — visible cursor drift without keys.
+	// Resort with troubled rows (down > 0 or short replicas) on top so
+	// the cursor-by-key pinning is visible.
 	sort.SliceStable(s.deps, func(i, k int) bool {
 		ri, rk := dirtiness(s.deps[i]), dirtiness(s.deps[k])
 		if ri != rk {
@@ -298,17 +280,11 @@ func (s *Screen) advance() {
 }
 
 func dirtiness(d deployment) int {
-	score := 0
-	if d.sync != "Synced" {
+	score := d.down*4 + d.warn*2
+	if d.replicas < d.want {
 		score += 2
 	}
-	switch d.health {
-	case "Down":
-		score += 4
-	case "Degraded":
-		score += 2
-	}
-	if d.replicas != d.want {
+	if d.cpuPct >= 90 {
 		score++
 	}
 	return score
@@ -319,70 +295,52 @@ func seedDeployments() []deployment {
 		name string
 		env  string
 		want int
+		cpu  float64
 	}{
-		{"api-gateway", "prod", 6},
-		{"api-gateway", "stage", 3},
-		{"orders-service", "prod", 4},
-		{"orders-service", "stage", 2},
-		{"payments-svc", "prod", 5},
-		{"payments-svc", "stage", 2},
-		{"events-ingest", "prod", 8},
-		{"events-ingest", "stage", 3},
-		{"warehouse-loader", "prod", 2},
-		{"recs-ml", "prod", 4},
-		{"notifications", "prod", 3},
-		{"notifications", "stage", 2},
-		{"static-site", "prod", 2},
+		{"api-gateway", "prod", 6, 42},
+		{"api-gateway", "stage", 3, 28},
+		{"orders-service", "prod", 4, 65},
+		{"orders-service", "stage", 2, 31},
+		{"payments-svc", "prod", 5, 71},
+		{"payments-svc", "stage", 2, 22},
+		{"events-ingest", "prod", 8, 88},
+		{"events-ingest", "stage", 3, 47},
+		{"warehouse-loader", "prod", 2, 18},
+		{"recs-ml", "prod", 4, 54},
+		{"notifications", "prod", 3, 33},
+		{"notifications", "stage", 2, 19},
+		{"static-site", "prod", 2, 8},
 	}
 	out := make([]deployment, len(specs))
 	for i, sp := range specs {
+		hist := make([]float64, historyLen)
+		for h := range hist {
+			hist[h] = sp.cpu + (float64(h%4)-1.5)*5 // mild oscillation
+		}
 		out[i] = deployment{
 			id:       fmt.Sprintf("%s/%s", sp.env, sp.name),
 			name:     sp.name,
 			env:      sp.env,
-			sync:     "Synced",
-			health:   "Healthy",
-			replicas: sp.want,
 			want:     sp.want,
-			age:      time.Duration(60+i*23) * time.Second,
+			healthy:  sp.want,
+			replicas: sp.want,
+			cpuPct:   sp.cpu,
+			cpuHist:  hist,
 		}
 	}
-	// Seed a few mid-flight states so the first frame shows variety.
-	out[2].sync = "Syncing"
-	out[5].health = "Degraded"
-	out[7].sync = "OutOfSync"
-	out[7].health = "Down"
-	out[10].replicas = 1
+	// Seed a few troubled rows so the first frame shows variety.
+	out[2].healthy = 3
+	out[2].warn = 1
+	out[6].healthy = 6
+	out[6].down = 2
+	out[6].replicas = 6
+	out[10].healthy = 2
+	out[10].warn = 1
 	return out
 }
 
-func syncLess(a, b string) bool     { return syncRank(a) < syncRank(b) }
-func healthLess(a, b string) bool   { return healthRank(a) < healthRank(b) }
-func replicasLess(a, b string) bool { return parseRatio(a) < parseRatio(b) }
-func ageLess(a, b string) bool      { return parseDur(a) < parseDur(b) }
-
-func syncRank(s string) int {
-	switch {
-	case strings.Contains(s, "OutOfSync"):
-		return 2
-	case strings.Contains(s, "Syncing"):
-		return 1
-	case strings.Contains(s, "Synced"):
-		return 0
-	}
-	return -1
-}
-
-func healthRank(s string) int {
-	switch {
-	case strings.Contains(s, "Down"):
-		return 2
-	case strings.Contains(s, "Degraded"):
-		return 1
-	case strings.Contains(s, "Healthy"):
-		return 0
-	}
-	return -1
+func ratioLess(a, b string) bool {
+	return parseRatio(a) < parseRatio(b)
 }
 
 func parseRatio(s string) float64 {
@@ -398,7 +356,22 @@ func parseRatio(s string) float64 {
 	return float64(have) / float64(want)
 }
 
-func parseDur(s string) time.Duration {
-	d, _ := time.ParseDuration(strings.TrimSpace(s))
-	return d
+func cpuLess(a, b string) bool {
+	return parseCPU(a) < parseCPU(b)
+}
+
+func parseCPU(s string) float64 {
+	// CPU cell is "<bar>  42%". Find the trailing percent number.
+	idx := strings.LastIndex(s, "%")
+	if idx <= 0 {
+		return 0
+	}
+	// Walk backwards for digits.
+	end := idx
+	start := end
+	for start > 0 && (s[start-1] >= '0' && s[start-1] <= '9') {
+		start--
+	}
+	v, _ := strconv.ParseFloat(s[start:end], 64)
+	return v
 }

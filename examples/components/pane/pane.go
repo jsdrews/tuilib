@@ -1,7 +1,7 @@
-// Package showcase demonstrates pane border styles, title positions, and
+// Package pane demonstrates pane border styles, title positions, and
 // slot-bracket variants in a single screen. Four panes arranged 2x2, each
 // with a different combination. No interaction beyond esc-to-back.
-package showcase
+package pane
 
 import (
 	"github.com/charmbracelet/bubbles/key"

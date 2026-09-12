@@ -59,7 +59,7 @@ messages — is handled by the framework so screens can focus on data.
 
     go get github.com/jsdrews/tuilib
 
-Then compose a screen inside the app shell — see examples/app/stack for
+Then compose a screen inside the app shell — see examples/shell/stack for
 the canonical "one master list pushing a detail screen" shape, or
 examples/launcher for how the examples themselves are wired.
 

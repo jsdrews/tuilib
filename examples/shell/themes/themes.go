@@ -2,7 +2,7 @@
 // every built-in theme; moving the cursor re-skins the whole app live via
 // app.SetTheme. Enter drills into a detail screen that dumps every Theme
 // field with a swatch and the value rendered in that color.
-package themecheck
+package themes
 
 import (
 	"fmt"

@@ -5,11 +5,11 @@ and still proposed. `pkg/action`, `geom.AnchorIn`, `mouse.IsRightPress` /
 `IsPointPress`, `theme.Actions()`, marking in `pkg/list` and `pkg/table`,
 `runner.Go` / `runner` correlation tags, the app shell wiring
 (`Options.ActionsKey`, the overlay routing mode, right-click, the statusbar
-receipt), `examples/data/actions` and `examples/data/multiselect` are all
-in. Marking is demonstrated in `examples/data/multiselect` and summarised
+receipt), `examples/patterns/actions` and `examples/patterns/multiselect` are all
+in. Marking is demonstrated in `examples/patterns/multiselect` and summarised
 as CLAUDE.md rule 32 — rules 30 and 31 below are still unwritten, so the
 marking rule took the next free number rather than one they had
-reserved. `examples/data/actions` stays single-target on purpose.
+reserved. `examples/patterns/actions` stays single-target on purpose.
 Decisions 6, 7, 15 and 19
 record where the built thing corrected the design.
 
@@ -617,7 +617,7 @@ lines, and the same thing `list` itself does.
 
 **This does not block the hosting decision.** The component emits
 `ChosenMsg` / `CancelledMsg` exactly as `pkg/confirm` does, so it can be
-built, tested and demoed against a host screen (as `examples/data/confirm`
+built, tested and demoed against a host screen (as `examples/patterns/modals`
 already does) before anything in `pkg/app` changes.
 
 ### 9b. A right press points; only a left press acts.
@@ -916,7 +916,7 @@ shape here:
 | `pkg/app` | `Options.ActionsKey`; overlay slot + routing mode; right-press handling; invocation logging; outcome → statusbar; hint gating. |
 | components | right press treated as focus + cursor move (`list`, `table`, `tree`, `inspector`, `logview`, `textview`, `form`, `input`, `toggle`). |
 | `internal/componenttest` | reserved-key conformance; right-press-focuses conformance; marks-survive-a-keyed-swap conformance across `list` and `table`. |
-| `examples/app/actions` | **new.** Marking, menu from key and right-click, a background action over a marked set, a `Confirm` action, a `Disabled` action, a `Do` action that pushes a screen. |
+| `examples/patterns/actions` | **new.** Marking, menu from key and right-click, a background action over a marked set, a `Confirm` action, a `Disabled` action, a `Do` action that pushes a screen. |
 | `CLAUDE.md` | rules 30, 31, 32 (drafted below). |
 
 **Build order.** `action.Menu` first, hosted by a screen in an example the way
@@ -1012,7 +1012,7 @@ measuring instrument.
 
 ### 21c. One subject per example.
 
-`examples/data/actions` originally demonstrated the menu *and* marking. Both
+`examples/patterns/actions` originally demonstrated the menu *and* marking. Both
 worked; neither read. A reader met it as a menu demo, found a picker that runs
 one verb and closes — correct behaviour — and never discovered that rows could
 be marked first, because nothing on screen said so.
@@ -1032,7 +1032,7 @@ routing — they arrive at the top of `Update` like any other message, and the
 shell has to claim them there.
 
 Claiming them unconditionally would break every screen that hosts its own
-confirm modal (`examples/data/confirm`, `pkg/output`'s kill picker): the shell
+confirm modal (`examples/patterns/modals`, `pkg/output`'s kill picker): the shell
 would swallow the result and the screen would never dismiss. So both branches
 are guarded on the shell actually having a dialog up. It is one `if`, and the
 failure it prevents is silent — the modal simply stops responding.

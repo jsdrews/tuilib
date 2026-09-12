@@ -1,15 +1,21 @@
-// Package stack demonstrates a screen stack with data flowing in two
-// directions:
+// Package stack demonstrates a screen stack: how screens are pushed and
+// popped, how data flows between them, and how a screen replaces itself.
 //
 //	Parent → child: via the constructor. cityList pushes newCityDetail(city).
 //	Child → parent: via Pop(result). timezonePicker calls Pop(chosenTZ),
 //	                which lands in cityDetail.OnEnter(chosenTZ).
+//	Self → self:    via Replace. Both the list and the detail bind r to
+//	                screen.Replace(fresh instance of themselves) — an atomic
+//	                top-of-stack swap. Stack depth doesn't change, nothing
+//	                flickers, and the screen underneath is untouched: its
+//	                OnEnter does not fire. A pop+push would do both.
 //
 // Each screen uses a different layout to show that the stack doesn't care
 // what its children look like — it just hosts layout.Node trees.
 package stack
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -25,7 +31,9 @@ import (
 )
 
 // New returns the stack demo's root screen.
-func New(t theme.Theme) screen.Screen {
+func New(t theme.Theme) screen.Screen { return newCityList(t) }
+
+func newCityList(t theme.Theme) *cityList {
 	s := &cityList{}
 	s.SetTheme(t)
 	return s
@@ -69,6 +77,12 @@ func (s *cityList) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			return s, screen.Push(newCityDetail(city, s.t))
 		}
 	}
+	// Filter something, move the cursor, then r: the screen swaps for a fresh
+	// instance of itself. Both are state this screen owns, so both reset —
+	// while the breadcrumb depth stays at 1, because nothing was pushed.
+	if k, ok := msg.(tea.KeyMsg); ok && !s.list.Filtering() && k.String() == "r" {
+		return s, screen.Replace(newCityList(s.t))
+	}
 	var cmd tea.Cmd
 	s.list, cmd = s.list.Update(msg)
 	return s, cmd
@@ -81,6 +95,7 @@ func (s *cityList) Help() []key.Binding { return help.Flatten(s.HelpSections()) 
 func (s *cityList) HelpSections() []help.Section {
 	return help.SectionsOf(&s.list, help.Group("Cities",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset (Replace)")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
 	))
@@ -110,6 +125,7 @@ type cityDetail struct {
 	t       theme.Theme
 	city    string
 	chosen  string // last-picked timezone (or "")
+	visits  int    // local state, so Replace has something visible to reset
 	info    pane.Pane
 	actions list.Model
 }
@@ -135,6 +151,15 @@ func (s *cityDetail) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			}
 		}
 	}
+	if k, ok := msg.(tea.KeyMsg); ok && !s.actions.Filtering() {
+		switch k.String() {
+		case "+", "=":
+			s.visits++
+			s.rebuildInfo()
+		case "r":
+			return s, screen.Replace(newCityDetail(s.city, s.t))
+		}
+	}
 	var cmd tea.Cmd
 	s.actions, cmd = s.actions.Update(msg)
 	return s, cmd
@@ -152,6 +177,8 @@ func (s *cityDetail) Help() []key.Binding { return help.Flatten(s.HelpSections()
 func (s *cityDetail) HelpSections() []help.Section {
 	return help.SectionsOf(&s.actions, help.Group("City",
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
+		key.NewBinding(key.WithKeys("+"), key.WithHelp("+", "visit")),
+		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset (Replace)")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	))
@@ -191,11 +218,18 @@ func (s *cityDetail) rebuildInfo() {
 	s.info.SetContent(strings.Join([]string{
 		"Name:       " + s.city,
 		"Timezone:   " + tz,
+		"Visits:     " + strconv.Itoa(s.visits),
 		"",
 		"The city name was passed into this screen via its",
-		"constructor (NewCityDetail(city)). The timezone",
+		"constructor (newCityDetail(city)). The timezone",
 		"arrived via OnEnter after the picker screen popped",
 		"with the selected value.",
+		"",
+		"+/= bumps the visit counter. r replaces this screen",
+		"with a fresh one for the same city: the counter",
+		"resets, but the list underneath is untouched and its",
+		"OnEnter does not fire. A pop+push would flicker and",
+		"retrigger the parent's activation side effects.",
 	}, "\n"))
 }
 

@@ -246,7 +246,7 @@ func Gruvbox() Theme {
 }
 
 // All returns every built-in theme, in display order. Handy for theme
-// pickers and examples/themecheck.
+// pickers and examples/shell/themes.
 func All() []Theme {
 	return []Theme{
 		// core (this file)

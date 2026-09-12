@@ -5,11 +5,11 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
-	appmouse "github.com/jsdrews/tuilib/examples/app/mouse"
-	appoutput "github.com/jsdrews/tuilib/examples/app/output"
-	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
-	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
+	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
+	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
+	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
+	patmouse "github.com/jsdrews/tuilib/examples/patterns/mouse"
+	shelloutput "github.com/jsdrews/tuilib/examples/shell/output"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -23,7 +23,7 @@ import (
 // looks like a component bug rather than a routing one.
 //
 // This drives real example screens rather than components, because that is
-// the layer where the mistake lives. It caught runlog, drilldown and loading
+// the layer where the mistake lives. It caught capture, drilldown and loading
 // forwarding mouse events only to whichever pane already had focus.
 func TestScreensFanMouseOutToEveryComponent(t *testing.T) {
 	const (
@@ -32,11 +32,11 @@ func TestScreensFanMouseOutToEveryComponent(t *testing.T) {
 	)
 
 	screens := map[string]func(theme.Theme) screen.Screen{
-		"app/mouse":    appmouse.New,
-		"app/filters":  appfilters.New,
-		"data/loading": dataloading.New,
-		"data/runlog":  datarunlog.New,
-		"app/output":   appoutput.New,
+		"patterns/mouse":   patmouse.New,
+		"patterns/filters": patfilters.New,
+		"patterns/loading": patloading.New,
+		"patterns/capture": patcapture.New,
+		"shell/output":     shelloutput.New,
 	}
 
 	for name, build := range screens {
@@ -80,9 +80,9 @@ func TestClickOnUnfocusedPaneIsDelivered(t *testing.T) {
 	const w, h = 100, 30
 
 	for name, build := range map[string]func(theme.Theme) screen.Screen{
-		"app/filters":  appfilters.New,
-		"data/loading": dataloading.New,
-		"data/runlog":  datarunlog.New,
+		"patterns/filters": patfilters.New,
+		"patterns/loading": patloading.New,
+		"patterns/capture": patcapture.New,
 		// app/output is deliberately absent: its right-hand side is a
 		// read-only pane.Pane, so there is no second focusable component
 		// for a click to be misrouted away from. It is covered by the
