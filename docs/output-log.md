@@ -12,10 +12,10 @@ The string is overwritten and gone.
 
 Worse, the output worth reading usually never reaches that call at all.
 `runner.Run` hands the real TTY to the subprocess and returns
-`Result{Cmd, Err}` — it captures **nothing**. `examples/data/runlog` is the
-only capturing path in the codebase, and it is ~40 lines of `io.Pipe` +
-goroutine + `bufio.Scanner` + chained `tea.Cmd` that every author re-types per
-command.
+`Result{Cmd, Err}` — it captures **nothing**. At the time of writing, the one
+capturing path in the codebase was an example (the ancestor of
+`examples/patterns/capture`): ~40 lines of `io.Pipe` + goroutine +
+`bufio.Scanner` + chained `tea.Cmd` that every author re-typed per command.
 
 So: run a command, watch a sliver of a footer flash by, press a key, lose it.
 
@@ -373,7 +373,7 @@ how `clickChrome` handles the `? help` affordance.
    translation into records (label as source, `RunID` threading).
 6. **Screen actions** — `c` clear, `x` kill (confirm + pick), `w` export with
    filter scoping and the `# filter:` header.
-7. **`examples/app/output`** + launcher entry; a rule in `CLAUDE.md`; a
+7. **`examples/shell/output`** + launcher entry; a rule in `CLAUDE.md`; a
    `internal/componenttest` routing case so the screen isn't the fourth one to
    ship with mouse routed to the focused component only.
 

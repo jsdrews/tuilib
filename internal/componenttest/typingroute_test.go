@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	appfilters "github.com/jsdrews/tuilib/examples/app/filters"
-	dataloading "github.com/jsdrews/tuilib/examples/data/loading"
-	datarunlog "github.com/jsdrews/tuilib/examples/data/runlog"
+	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
+	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
+	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -30,9 +30,9 @@ func TestClickingAPaneMovesTheKeyboard(t *testing.T) {
 	const w, h = 100, 30
 
 	for name, build := range map[string]func(theme.Theme) screen.Screen{
-		"app/filters":  appfilters.New,
-		"data/loading": dataloading.New,
-		"data/runlog":  datarunlog.New,
+		"patterns/filters": patfilters.New,
+		"patterns/loading": patloading.New,
+		"patterns/capture": patcapture.New,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := build(theme.Dark())
@@ -147,15 +147,15 @@ func flatten(cmd tea.Cmd) []tea.Msg {
 // Enter and double-click are one verb (rule 14), but a screen has to opt in:
 // the component reports the activation and the screen decides what "open"
 // means. A screen that only matches an enter KeyMsg silently ignores double
-// clicks, which is what runlog did — the commands list looked interactive
-// and double-clicking a command did nothing.
+// clicks, which is what the capture demo's ancestor did — the commands list
+// looked interactive and double-clicking a command did nothing.
 //
 // The assertion watches for the "$ <label>" line the screen appends before
 // launching, so nothing is actually executed.
-func TestRunlogDoubleClickStartsACommand(t *testing.T) {
+func TestCaptureDoubleClickStartsACommand(t *testing.T) {
 	const w, h = 100, 30
 
-	s := datarunlog.New(theme.Dark())
+	s := patcapture.New(theme.Dark())
 	s.Init()
 	s.OnEnter(nil)
 	render := func() string {

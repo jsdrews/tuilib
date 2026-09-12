@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jsdrews/tuilib/examples/data/multiselect"
+	"github.com/jsdrews/tuilib/examples/patterns/multiselect"
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/screen"

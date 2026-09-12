@@ -1,20 +1,22 @@
-// Package runlog demonstrates streaming a subprocess's stdout/stderr
-// into pkg/logview, with tab-cycling focus between a command picker on
-// the left and the logview on the right.
+// Package capture demonstrates streaming a subprocess's output into an
+// on-screen pkg/logview with runner.Capture, next to a command picker, with
+// tab cycling focus between the two.
 //
-// The streaming pattern: cmd.Stdout/Stderr point at a shared io.Pipe;
-// a goroutine waits on the process and closes the pipe when it exits;
-// a tea.Cmd reads one line at a time from the pipe and posts logLineMsg,
-// chaining itself for the next line until EOF (logDoneMsg). No goroutine
-// touches the model directly — every mutation flows through Update.
-package runlog
+// Capture is the counterpart to runner.Run: Run hands the real terminal to
+// a full-screen program and the TUI suspends, while Capture pipes
+// stdout/stderr and the TUI stays live — so the user keeps scrolling,
+// filtering and searching while the command runs (rule 15).
+//
+// Under the app shell there is no plumbing to write. The shell chains the
+// reads and forwards every message on, so a screen that wants the output in
+// place just matches the three messages a capture emits: CaptureStarted,
+// one CapturedLine per line, then one Captured. The same stream is feeding
+// the app-wide console at the same time — press o and the run is all there,
+// with its exit status, after this screen has scrolled it away.
+package capture
 
 import (
-	"bufio"
-	"fmt"
-	"io"
 	"os/exec"
-	"syscall"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -26,11 +28,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/list"
 	lv "github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// New returns the runlog demo screen.
+// New returns the capture demo screen.
 func New(t theme.Theme) screen.Screen {
 	s := &Screen{}
 	s.SetTheme(t)
@@ -38,11 +41,16 @@ func New(t theme.Theme) screen.Screen {
 }
 
 type Screen struct {
-	t       theme.Theme
-	cmds    list.Model
-	log     lv.Model
-	focus   focus.Group
-	running *exec.Cmd
+	t     theme.Theme
+	cmds  list.Model
+	log   lv.Model
+	focus focus.Group
+
+	// started is the live run, kept so x can kill it. Zero value means
+	// nothing is running — runner.Kill on a finished run is a no-op, but the
+	// help strip still needs to know whether to advertise the key.
+	started runner.CaptureStarted
+	running bool
 }
 
 type entry struct {
@@ -61,41 +69,44 @@ var entries = []entry{
 	{"echo to stdout + stderr", func() *exec.Cmd {
 		return exec.Command("sh", "-c", "echo OUT && echo ERR 1>&2 && echo MORE")
 	}},
+	{"exit 2 after a few lines", func() *exec.Cmd {
+		return exec.Command("sh", "-c", "echo building…; echo 'cc: error: undefined symbol' 1>&2; exit 2")
+	}},
 	{"ping -c 5 8.8.8.8", func() *exec.Cmd { return exec.Command("ping", "-c", "5", "8.8.8.8") }},
 }
 
-type startedMsg struct {
-	cmd     *exec.Cmd
-	scanner *bufio.Scanner
-	waitErr chan error
-}
-type logLineMsg struct {
-	line    string
-	scanner *bufio.Scanner
-	waitErr chan error
-}
-type logDoneMsg struct{ err error }
-
-func (s *Screen) Title() string         { return "Runlog" }
+func (s *Screen) Title() string         { return "Capture" }
 func (s *Screen) Init() tea.Cmd         { return textinput.Blink }
 func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
 func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
+	// The three messages a capture emits. Nothing chains the next read here:
+	// the app shell does that, unconditionally, because a capture nobody
+	// drains eventually stalls the subprocess.
 	switch m := msg.(type) {
-	case startedMsg:
-		s.running = m.cmd
-		return s, readLine(m.scanner, m.waitErr)
-	case logLineMsg:
-		s.log.Append(m.line)
-		return s, readLine(m.scanner, m.waitErr)
-	case logDoneMsg:
-		s.running = nil
-		suffix := "exited"
-		if m.err != nil {
-			suffix = fmt.Sprintf("exited: %s", m.err)
+	case runner.CaptureStarted:
+		// Only the handle is new here — the command line was echoed when the
+		// user launched it, so the log doesn't wait on the process to show
+		// that something is happening.
+		s.started, s.running = m, true
+		return s, nil
+	case runner.CapturedLine:
+		// Stderr is a stream, not a severity — a tool writing progress there
+		// is well behaved, so the marker is informational.
+		if m.Stderr {
+			s.log.Append("2> " + m.Text)
+		} else {
+			s.log.Append(m.Text)
 		}
-		s.log.Append("─── " + suffix)
+		return s, nil
+	case runner.Captured:
+		s.running = false
+		if m.Err != nil {
+			s.log.Append("─── " + m.Label + " failed: " + m.Err.Error())
+		} else {
+			s.log.Append("─── " + m.Label + " completed")
+		}
 		return s, nil
 	}
 
@@ -107,29 +118,24 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 	// Enter and double-click both mean "run the selected command", so they
 	// resolve through one predicate rather than two branches that can drift.
-	if s.focus.Is(&s.cmds) && s.running == nil && s.cmds.IsActivate(msg) {
+	if s.focus.Is(&s.cmds) && !s.running && s.cmds.IsActivate(msg) {
 		if idx := s.cmds.Cursor(); idx >= 0 && idx < len(entries) {
+			e := entries[idx]
 			s.log.Clear()
-			s.log.Append("$ " + entries[idx].label)
-			return s, tea.Batch(gcmd, startCmd(entries[idx].build()))
+			s.log.Append("$ " + e.label)
+			return s, tea.Batch(gcmd, runner.CaptureWith(runner.CaptureOptions{
+				Cmd:   e.build(),
+				Label: e.label,
+			}))
 		}
 	}
 
-	if k, ok := msg.(tea.KeyMsg); ok && !s.log.Searching() {
-		switch k.String() {
-		case "c":
-			if s.running != nil {
-				_ = s.running.Process.Signal(syscall.SIGINT)
-				s.log.Append("─── SIGINT sent")
-			}
-			return s, nil
-		case "x":
-			if s.running != nil {
-				_ = s.running.Process.Kill()
-				s.log.Append("─── SIGKILL sent")
-			}
-			return s, nil
+	if k, ok := msg.(tea.KeyMsg); ok && !s.log.Searching() && k.String() == "x" {
+		if s.running {
+			_ = runner.Kill(s.started)
+			s.log.Append("─── killed")
 		}
+		return s, nil
 	}
 
 	// Mouse goes to every component so each can test the click against its
@@ -159,19 +165,16 @@ func (s *Screen) Layout() layout.Node {
 func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
 
 // HelpSections forwards to the Group — which names both panes and their
-// groups — and adds this screen's own verbs, the process-control pair
-// appearing only while something is running.
+// groups — and adds this screen's own verbs, the kill key appearing only
+// while something is running.
 func (s *Screen) HelpSections() []help.Section {
 	own := []key.Binding{
 		key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 	}
-	if s.running != nil {
-		own = append(own,
-			key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "interrupt (SIGINT)")),
-			key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "force-kill (SIGKILL)")),
-		)
+	if s.running {
+		own = append(own, key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "kill")))
 	}
 	return help.SectionsOf(&s.focus, help.Group("Run", own...))
 }
@@ -219,45 +222,4 @@ func labels() []string {
 		out[i] = e.label
 	}
 	return out
-}
-
-// startCmd starts cmd with stdout+stderr merged into a single pipe and
-// returns a tea.Cmd whose first message is startedMsg (carrying a scanner
-// over the pipe). A background goroutine waits on the process and closes
-// the pipe when it exits — that's what lets readLine see EOF and post
-// logDoneMsg.
-func startCmd(cmd *exec.Cmd) tea.Cmd {
-	return func() tea.Msg {
-		pr, pw := io.Pipe()
-		cmd.Stdout = pw
-		cmd.Stderr = pw
-		if err := cmd.Start(); err != nil {
-			return logDoneMsg{err: err}
-		}
-		waitErr := make(chan error, 1)
-		go func() {
-			err := cmd.Wait()
-			_ = pw.Close()
-			waitErr <- err
-		}()
-		return startedMsg{cmd: cmd, scanner: bufio.NewScanner(pr), waitErr: waitErr}
-	}
-}
-
-// readLine pulls one line from the scanner. If the scanner is at EOF it
-// drains the wait error and returns logDoneMsg; otherwise it returns
-// logLineMsg carrying the line and the same scanner+waitErr so Update
-// can chain readLine again for the next line.
-func readLine(scanner *bufio.Scanner, waitErr chan error) tea.Cmd {
-	return func() tea.Msg {
-		if scanner.Scan() {
-			return logLineMsg{line: scanner.Text(), scanner: scanner, waitErr: waitErr}
-		}
-		select {
-		case err := <-waitErr:
-			return logDoneMsg{err: err}
-		default:
-			return logDoneMsg{}
-		}
-	}
 }
