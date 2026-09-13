@@ -40,6 +40,7 @@ import (
 	comptextview "github.com/jsdrews/tuilib/examples/components/textview"
 	comptree "github.com/jsdrews/tuilib/examples/components/tree"
 	patactions "github.com/jsdrews/tuilib/examples/patterns/actions"
+	patactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
 	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
 	patdrilldown "github.com/jsdrews/tuilib/examples/patterns/drilldown"
 	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
@@ -162,6 +163,9 @@ var entries = []entry{
 	{groupPatterns, "Actions", "patterns/actions",
 		"The verb menu. Press a or right-click a row to open action.Menu: it sizes itself to its widest row and anchors where you asked. This screen is single-target on purpose — Multi-select is the one that marks rows. Start a Restart and reopen the menu to see the Exclusive gate. Single click commits, click-away dismisses, Delete confirms first.",
 		patactions.New},
+	{groupPatterns, "Activity", "patterns/activity",
+		"Per-row in-flight state, from all three directions at once. Press a and pick Sync: the row spins before any request is answered, because the screen put its Selection() into action.Set.Targets and the shell broadcast the verb's Busy label against it — then hands over to the server's own \"Syncing\" as the poll catches up. Meanwhile scheduled syncs fire with nobody pressing anything and spin because ActivityWhen recognises the status in the polled data. Refresh is the case worth watching: it finishes server-side long before the next poll, and the row keeps moving until that poll lands, because the indicator covers the gap between asking and being told rather than the work. Operations that begin and end between two polls flash • instead, off a hidden revision column.",
+		patactivity.New},
 	{groupPatterns, "Multi-select", "patterns/multiselect",
 		"table.Model with Options.Markable: x marks the cursor row, X (or shift+click) extends the selection between the anchor and the cursor in either direction, A marks everything the filter shows, D drops the selection, and clicking the ✓ gutter toggles without opening the row. Marks are held by Key (SetKeyedRows), so they survive filtering — mark a row, filter it away, and the count on the border does not move — and survive a theme swap via SetMarks. Press a or right-click for the menu: it is titled with what it will act on (\"3 items\"), and Describe, which did not declare Multi, dims itself with a reason as soon as a second row is marked.",
 		patmultiselect.New},

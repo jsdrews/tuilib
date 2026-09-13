@@ -222,3 +222,56 @@ func TestGoLinesAreNotMarkedStderr(t *testing.T) {
 		}
 	}
 }
+
+// Progress must not be interleaved into a half-written line, and must not wait
+// for a newline the caller has no reason to send.
+func TestGoProgressIsSeparateFromOutput(t *testing.T) {
+	var (
+		statuses []string
+		lines    []string
+	)
+	cmd := GoWith(GoOptions{
+		Label: "sync",
+		Tag:   "t1",
+		Run: func(_ context.Context, out io.Writer) error {
+			fmt.Fprint(out, "partial ")
+			if p, ok := out.(interface{ Progress(string) }); ok {
+				p.Progress("syncing 1/2")
+			}
+			fmt.Fprint(out, "line\n")
+			return nil
+		},
+	})
+
+	msg := cmd()
+	started, ok := msg.(CaptureStarted)
+	if !ok {
+		t.Fatalf("first message = %T, want CaptureStarted", msg)
+	}
+	for next := Next(started); next != nil; {
+		m := next()
+		if m == nil {
+			break
+		}
+		switch v := m.(type) {
+		case CaptureStatus:
+			if v.Tag != "t1" || v.RunID != started.RunID {
+				t.Errorf("status carries %q/%d, want the run's own tag and id", v.Tag, v.RunID)
+			}
+			statuses = append(statuses, v.Text)
+		case CapturedLine:
+			lines = append(lines, v.Text)
+		case Captured:
+			next = nil
+			continue
+		}
+		next = Next(m)
+	}
+
+	if len(statuses) != 1 || statuses[0] != "syncing 1/2" {
+		t.Errorf("statuses = %v, want one report", statuses)
+	}
+	if len(lines) != 1 || lines[0] != "partial line" {
+		t.Errorf("lines = %v, want the split write reassembled into one line", lines)
+	}
+}

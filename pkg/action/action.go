@@ -49,6 +49,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -80,6 +81,20 @@ type Action struct {
 	// in the screen's Help(), since moving discovery off the footer and into
 	// the menu is most of the point.
 	Key key.Binding
+
+	// Busy is what this action's target rows say while it runs — "syncing",
+	// "refreshing", "deleting". Defaults to Label lowercased.
+	//
+	// A field rather than a derivation because the verb and the state are
+	// different words and the gap is exactly where the user's attention is:
+	// "Sync" is what you chose, "syncing" is what is happening. It reaches
+	// the rows through the shell, which broadcasts it against Set.Targets;
+	// a Set with no Targets shows nothing anywhere and this is inert.
+	//
+	// Ignored for a Do action. Do returns an opaque tea.Cmd with no
+	// completion to wait for, so a spinner started for one could never be
+	// stopped.
+	Busy string
 
 	// Confirm, when non-empty, puts a yes/no modal between the pick and the
 	// run. Use it for anything destructive rather than hand-rolling the
@@ -129,6 +144,14 @@ type Action struct {
 	Do func() tea.Cmd
 }
 
+// BusyLabel is what the target rows should say while this action runs.
+func (a Action) BusyLabel() string {
+	if a.Busy != "" {
+		return a.Busy
+	}
+	return strings.ToLower(a.Label)
+}
+
 // Ident is the action's identity for the Exclusive check. Defaults to Label.
 func (a Action) Ident() string {
 	if a.ID != "" {
@@ -162,6 +185,20 @@ type Set struct {
 	// single target; above that, actions without Multi are disabled.
 	Count int
 
+	// Targets are the keys the verbs will act on — what Selection() returned,
+	// not what SelectionLabel() rendered. Optional.
+	//
+	// Two fields rather than one because they answer different questions and
+	// only one of them is renderable: "3 items" is the right menu title and a
+	// useless key, while a key is identity and reads badly on a border.
+	// Neither can be derived from the other.
+	//
+	// Supplying them is what lets the shell put a spinner on the rows an
+	// action is working on, and what sharpens the Exclusive gate from
+	// per-selection to per-target. A Set that leaves them empty behaves
+	// exactly as it did before they existed.
+	Targets []string
+
 	Actions []Action
 }
 
@@ -185,6 +222,12 @@ type Provider interface {
 type ChosenMsg struct {
 	Action Action
 	Target string
+
+	// Targets is Set.Targets, carried through so a host can start indicators
+	// on the rows. It has to ride the message because the pick may detour
+	// through a confirm modal before anything runs, and by the time the host
+	// acts the selection it came from is several messages ago.
+	Targets []string
 }
 
 // CancelledMsg reports that the menu was dismissed without a pick.
@@ -204,8 +247,11 @@ type RetargetMsg struct {
 	Event mouse.Msg
 }
 
-func chosen(a Action, target string) tea.Cmd {
-	return func() tea.Msg { return ChosenMsg{Action: a, Target: target} }
+func chosen(a Action, s Set) tea.Cmd {
+	targets := append([]string(nil), s.Targets...)
+	return func() tea.Msg {
+		return ChosenMsg{Action: a, Target: s.Target, Targets: targets}
+	}
 }
 
 func cancelled() tea.Cmd {
@@ -217,7 +263,8 @@ func retarget(e mouse.Msg) tea.Cmd {
 }
 
 // Validate reports everything structurally wrong with a Set: a missing label,
-// neither or both of Run and Do, a duplicate shortcut, a duplicate identity.
+// neither or both of Run and Do, a duplicate shortcut, a duplicate identity,
+// and Targets filled in without Count.
 //
 // It exists to be called from a test. These are all authoring mistakes whose
 // symptoms show up far from their cause — a duplicate shortcut silently
@@ -228,6 +275,16 @@ func Validate(s Set) []error {
 	var errs []error
 	idents := map[string]int{}
 	keys := map[string]int{}
+
+	// Targets without Count is a screen that filled in the newer field and
+	// forgot the older one — and Count == 0 means "one target", so every
+	// non-Multi action goes on working and the mistake stays invisible until
+	// someone marks a second row.
+	if len(s.Targets) > 1 && s.Count <= 1 {
+		errs = append(errs, fmt.Errorf(
+			"set: %d Targets but Count is %d; the arity gate reads Count",
+			len(s.Targets), s.Count))
+	}
 
 	for i, a := range s.Actions {
 		switch {

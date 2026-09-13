@@ -97,3 +97,38 @@ func TestRunKeySeparatesTargets(t *testing.T) {
 		t.Error("RunKey must distinguish targets, or exclusivity blocks unrelated runs")
 	}
 }
+
+func TestValidateTargetsWithoutCount(t *testing.T) {
+	errs := Validate(Set{
+		Target:  "3 items",
+		Targets: []string{"a", "b", "c"},
+		Actions: []Action{{Label: "Sync", Run: noop}},
+	})
+	if len(errs) != 1 {
+		t.Fatalf("errs = %v, want one complaint about Count", errs)
+	}
+	if !strings.Contains(errs[0].Error(), "Count") {
+		t.Errorf("error = %q, want it to name Count", errs[0])
+	}
+}
+
+func TestValidateTargetsWithCountIsClean(t *testing.T) {
+	errs := Validate(Set{
+		Target:  "3 items",
+		Targets: []string{"a", "b", "c"},
+		Count:   3,
+		Actions: []Action{{Label: "Sync", Multi: true, Run: noop}},
+	})
+	if len(errs) != 0 {
+		t.Errorf("errs = %v, want none", errs)
+	}
+}
+
+func TestBusyLabelDefaultsToTheLabel(t *testing.T) {
+	if got := (Action{Label: "Restart"}).BusyLabel(); got != "restart" {
+		t.Errorf("BusyLabel = %q, want the lowercased label", got)
+	}
+	if got := (Action{Label: "Sync", Busy: "syncing"}).BusyLabel(); got != "syncing" {
+		t.Errorf("BusyLabel = %q, want the explicit value", got)
+	}
+}

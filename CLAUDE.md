@@ -804,6 +804,79 @@ example in `examples/`.
     31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
     key table, both shipped but not yet written up here.)
 
+33. **For per-row in-flight state, use `pkg/activity` — and let the data
+    have a vote.** When something is working on one row rather than on the
+    whole component, that row shows a spinner and a status label. This is
+    the row-scale counterpart to `SetLoading` (rule 17), which means "no
+    data yet" and replaces the entire body; activity says "two of these
+    forty rows are busy and the other thirty-eight are still true", which
+    the pane has no way to express.
+
+    Entries are held by key — `SetKeyedItems` / `SetKeyedRows` / a tree
+    path — for rule 32's reason and more sharply, since the premise of
+    showing a spinner is that something is changing the data underneath. On
+    anonymous rows and under `SetWindow` it is inert. Carry it across a
+    `SetTheme` rebuild with `ActivityState()` / `SetActivityState()` the way
+    you carry the cursor (rule 4); every setter returns a `tea.Cmd` you must
+    batch, exactly as `SetLoading` does.
+
+    **Three ways in, and a screen may use any mix of them.**
+
+    *The data*, for work nobody in this session started — a scheduled AWX
+    job, a rollout someone else triggered. One predicate, evaluated on every
+    keyed swap:
+
+    ```go
+    o.ActivityColumn = "Status"          // table only: which cell to replace
+    o.ActivityWhen = func(c table.Row) (string, bool) {
+        return activity.Busy("running", "pending")(c[statusCol])
+    }
+    ```
+
+    A row that matches spins; one that stops matching stops, with **no
+    outcome glyph** — the cell's own value already says `failed`, in the
+    app's own colours, and a `✗` held over the top restates it less
+    precisely. A `pkg/poll` refresh is then the whole mechanism, and a
+    read-only dashboard needs nothing else.
+
+    *An action*, free: put the keys in `action.Set.Targets` (alongside
+    `Target`, which stays the display label) and give the verb a `Busy`
+    string. The shell broadcasts against those keys and rule 6 delivers.
+    `activity.Progress(out, "syncing 3/7")` relabels the rows from inside
+    the run, riding the `io.Writer` the action already holds; it is
+    deliberately **not** logged, being a UI state change rather than news.
+
+    *Directly*, for a fetch a screen kicks off itself:
+    `s.apps.SetActivity(key, "refreshing")`.
+
+    **Local beats derived, and that ordering is load-bearing.** A poll
+    already in flight when the user acted comes back carrying the pre-click
+    value; if derived state could retire a local entry, every action would
+    flicker off and on once, at a moment set by the poll phase.
+
+    **A finished local entry waits for the data rather than expiring on a
+    timer.** An action that dispatches and returns in 200ms would otherwise
+    show a tick and then a cell reading exactly as it did before —
+    indistinguishable from nothing having happened. So a *successful* finish
+    keeps the row moving until the next observation: the indicator covers
+    the gap between "we asked" and "we have been told", which is the window
+    in which the TUI has nothing true to say. A *failed* one reports at once,
+    since a failed dispatch started nothing to confirm, and a component with
+    no `ActivityWhen` falls back to the plain hold because nothing would ever
+    confirm it.
+
+    **What no polling can see** is work that begins and ends between two
+    observations. Point `ActivityRevision` at a field whose contract is to
+    change when the work does — `finished_at`, `resourceVersion`, an ETag —
+    and such a row flashes `•` rather than passing unnoticed. Unset, nothing
+    happens; there is no row-diffing fallback, because a poll that reformats
+    a timestamp would then flash everything.
+
+    Give a column that carries an indicator an explicit `Width`. Widths come
+    from the rows the table holds, so activity can never reflow anything —
+    but a column auto-sized to `Synced` has room for the glyph and not the
+    word. See `examples/patterns/activity` and `docs/activity.md`.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -1032,6 +1105,31 @@ example in `examples/`.
   Without a TTY lipgloss falls back to the Ascii profile and strips every
   style, so a render comparison silently passes no matter what the code
   does. `lipgloss.SetColorProfile(termenv.TrueColor)` in TestMain.
+- **Don't animate a row by re-pushing the rows.** A screen that owns a
+  `spinner.Model` and calls `SetKeyedRows` on every tick is fighting whatever
+  else writes those rows — usually a `pkg/poll` refresh two seconds away — and
+  whichever ran last wins. `pkg/activity` is an overlay on render: the rows are
+  pushed when the data changes, and the component animates on top of them.
+- **Don't clear a row indicator when the request returns.** For anything that
+  dispatches work to a server — an AWX launch, an argo sync — the action's
+  lifetime is not the work's, and clearing on its return shows a tick followed
+  by a cell that reads exactly as it did before the user acted. Let the
+  successful finish wait for the next observation (rule 33), which is what the
+  handoff does for free once `ActivityWhen` is set.
+- **Don't give a derived indicator an outcome glyph.** When `running` becomes
+  `failed` the cell goes back to rendering the row's own value, which already
+  says `failed` in the app's own colours. A `✗` over the top of it is the
+  library restating the data less precisely than the data states itself. The
+  hold exists for locally-started entries, where the outcome has nowhere else
+  to appear.
+- **Don't let derived state retire a local one.** A poll already in flight when
+  the user acted returns the pre-click value, so a "not busy" observation that
+  could clear a local entry makes every action flicker off and on once, at a
+  moment set by the poll phase. Local wins; see rule 33.
+- **Don't log a progress report.** `activity.Progress` relabels rows; it is a
+  UI state change, not news. Routing it into `pkg/output` too would put ten
+  records into an event whose badge counts one (rule 14), and force authors to
+  write progress text that reads well both in a 12-cell column and in a log.
 - **Don't add a comment explaining what well-named code does.** Component
   doc comments belong at the package and exported-symbol level; inline
   code should be self-describing.
@@ -1115,7 +1213,7 @@ path.
   |---|---|
   | `components/` | one demo per UI component, in isolation — `pane`, `list`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
   | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `chrome`, `prescreen` |
-  | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
+  | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `activity`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
 
   When you add a demo, pick the area by what a reader is looking for, not
   by which package it happens to import: a screen that exists to show one
@@ -1407,6 +1505,16 @@ path.
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
   `examples/components/metrics` and rule 24 (auto-refresh).
+- **Row activity:** `pkg/activity` is the per-row spinner and status label —
+  `State`, `Set`, the `StartMsg`/`UpdateMsg`/`EndMsg` the shell broadcasts,
+  `Derive` for a polled source of truth, `Busy` for the ordinary predicate,
+  `Change`/`Revise` for work that finished unobserved, and `Progress` for
+  relabelling from inside an action. It holds two layers — what this session
+  started and what the data last said — and prefers the first. It imports only
+  `pkg/glyph`, and emits no escapes of its own: `Render` hands back text the
+  component colours, because a table cell needs a foreground-only escape (rule
+  19) and a list row does not. See rule 33, `docs/activity.md`, and
+  `examples/patterns/activity`.
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options
   {Interval: d})`, batch `m.poll.Init()` into the screen's Init, and

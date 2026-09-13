@@ -24,6 +24,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/action"
+	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/alert"
 	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
@@ -458,6 +459,7 @@ func (t Theme) List() list.Options {
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
+		Activity:       t.Activity(),
 		Filter:         t.Filter(),
 		Keys:           list.DefaultKeys(),
 	}
@@ -579,6 +581,7 @@ func (t Theme) Table() table.Options {
 		SlotBrackets:   t.SlotBrackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
+		Activity:       t.activityCell(),
 		Filter:         t.Filter(),
 		Borders: table.Borders{
 			Vertical:   cellColor(t.Subtle, t.glyphs().ColumnSep),
@@ -650,6 +653,7 @@ func (t Theme) Tree() tree.Options {
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		MarkStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		Activity:         t.Activity(),
 		Filter:           t.Filter(),
 		Keys:             tree.DefaultKeys(),
 	}
@@ -699,6 +703,58 @@ func (t Theme) Form() form.Options {
 			ErrorText:           lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
 			Submit:              lipgloss.NewStyle().Foreground(t.BarFG),
 			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
+		},
+	}
+}
+
+// Activity returns activity.Options pre-filled from the theme — the running
+// spinner and its label in Accent, the outcome glyphs in the Info and Error
+// colors, and the theme's glyph set for ✓ / ✗.
+//
+// Nested into List() and Tree(), which render their own rows and can use
+// lipgloss freely. pkg/table needs the cell-safe form instead; see
+// activityCell.
+//
+// Reading InfoBG and ErrorBG as foregrounds is the same reach rule 23 already
+// makes for an error-tinted alert: they are the palette's "this went well" and
+// "this did not", and the Theme has no separate foreground pair for them.
+func (t Theme) Activity() activity.Options {
+	running := lipgloss.NewStyle().Foreground(t.Accent)
+	ok := lipgloss.NewStyle().Foreground(t.InfoBG)
+	failed := lipgloss.NewStyle().Foreground(t.ErrorBG)
+	return activity.Options{
+		Glyphs: t.glyphs(),
+		Style: func(st activity.State, text string) string {
+			switch {
+			case st.Failed():
+				return failed.Render(text)
+			case st.Done:
+				return ok.Render(text)
+			default:
+				return running.Render(text)
+			}
+		},
+	}
+}
+
+// activityCell is Activity with foreground-only escapes.
+//
+// A table draws its cursor row as one styled run over the whole row, so a
+// lipgloss render inside a cell closes the highlight at its first reset and
+// punches a hole in the selected row's background (rule 19). cellColor emits
+// \x1b[39m instead, which the row's Background survives.
+func (t Theme) activityCell() activity.Options {
+	return activity.Options{
+		Glyphs: t.glyphs(),
+		Style: func(st activity.State, text string) string {
+			switch {
+			case st.Failed():
+				return cellColor(t.ErrorBG, text)
+			case st.Done:
+				return cellColor(t.InfoBG, text)
+			default:
+				return cellColor(t.Accent, text)
+			}
 		},
 	}
 }

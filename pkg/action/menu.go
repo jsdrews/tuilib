@@ -612,7 +612,7 @@ func (m Menu) Update(msg tea.Msg) (Menu, tea.Cmd) {
 			if m.reason(a) != "" {
 				return m, nil
 			}
-			return m, chosen(a, m.set.Target)
+			return m, chosen(a, m.set)
 		}
 	}
 	return m, nil
@@ -681,7 +681,7 @@ func (m Menu) handleMouse(e mouse.Msg) (Menu, tea.Cmd) {
 		// first press.
 		m.cursor = row
 		m.reflow()
-		return m, chosen(m.set.Actions[row], m.set.Target)
+		return m, chosen(m.set.Actions[row], m.set)
 	}
 	return m, nil
 }
@@ -757,7 +757,7 @@ func (m Menu) choose() tea.Cmd {
 	if !ok || m.reason(a) != "" {
 		return nil
 	}
-	return chosen(a, m.set.Target)
+	return chosen(a, m.set)
 }
 
 func (m Menu) halfPage() int {

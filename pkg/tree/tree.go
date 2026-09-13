@@ -35,6 +35,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -131,6 +132,22 @@ type Options struct {
 
 	// MarkStyle colors the ✓ on a marked row that is not under the cursor.
 	MarkStyle lipgloss.Style
+
+	// Activity configures the per-node spinner and status label shown while
+	// work runs against a path — see activity.go. Theme.Tree() pre-fills it.
+	// Nothing to opt into: the badge occupies no space until something runs.
+	Activity activity.Options
+
+	// ActivityWhen derives in-flight state from a node itself, for work that
+	// changes without anyone in this session doing anything. Evaluated over
+	// every node on SetRoot, collapsed ones included. A locally-started
+	// indicator wins over a derived one.
+	ActivityWhen func(n Node) (label string, busy bool)
+
+	// ActivityRevision, when set, is a per-node value that changes whenever
+	// the node's underlying work does. A change observed while the node is not
+	// busy flashes a brief mark. Unset, nothing happens.
+	ActivityRevision func(n Node) string
 
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
@@ -272,6 +289,15 @@ type Model struct {
 	markAnchor string
 	markStyle  lipgloss.Style
 
+	// act is per-node in-flight state, keyed by path like the marks beside it.
+	act     activity.Set
+	actWhen func(Node) (string, bool)
+	actRev  func(Node) string
+
+	// actCmd carries a tick that observe produced inside a setter with no
+	// return value, flushed on the next Update.
+	actCmd tea.Cmd
+
 	matchStyle       lipgloss.Style
 	currentLineStyle lipgloss.Style
 
@@ -326,6 +352,9 @@ func New(opts Options) Model {
 		searchable:       opts.Searchable,
 		markable:         opts.Markable,
 		markStyle:        opts.MarkStyle,
+		act:              activity.New(opts.Activity),
+		actWhen:          opts.ActivityWhen,
+		actRev:           opts.ActivityRevision,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
 		keys:             opts.Keys,
@@ -359,6 +388,12 @@ func New(opts Options) Model {
 
 	if opts.Root != nil {
 		m.preExpand(opts.Root, rootPath(opts.Root), 0, opts.InitialDepth)
+		// A tree handed its data at construction has been observed, exactly as
+		// one populated through SetRoot has. Skipping it here would leave a
+		// tree that never calls SetRoot with no source of truth to hand off to
+		// (decision 19), so its first action would report an outcome the data
+		// had not confirmed.
+		m.observe()
 	}
 	m.refresh()
 	return m
@@ -389,7 +424,22 @@ func (m Model) Init() tea.Cmd { return nil }
 // Update handles cursor movement, expand/collapse, search, and forwards
 // everything else to the body pane (so pgup/pgdn/arrows/mouse-wheel and
 // horizontal scroll keep working).
+// Update handles keys, mouse and the messages node activity rides on.
+//
+// The activity pass runs first and outside the key/mouse split, because its
+// messages are neither: a spinner tick and the shell's start/end broadcasts
+// have to land whatever else the tree is doing, and a focused filter that has
+// swallowed the keyboard must not swallow them too.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if actCmd := m.act.Handle(msg, m.holdsKey); actCmd != nil {
+		m, cmd := m.update(msg)
+		m.refresh()
+		return m, tea.Batch(cmd, actCmd)
+	}
+	return m.update(msg)
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if mm, ok := msg.(mouse.Msg); ok {
 		return m.handleMouse(mm)
 	}
@@ -561,6 +611,7 @@ func (m *Model) SetRoot(n Node) {
 	}
 	m.refresh()
 	m.pruneExpanded()
+	m.observe()
 	m.restoreCursor(prevPath)
 	m.refresh()
 }
@@ -1007,20 +1058,21 @@ func (m *Model) noteFocus() {
 // flushMsgs returns a tea.Cmd carrying the pending SelectedChangedMsg
 // (or nil when nothing has changed) and clears the pending flag.
 func (m *Model) flushMsgs() tea.Cmd {
+	act := m.flushActivity()
 	if !m.focusPending {
-		return nil
+		return act
 	}
 	m.focusPending = false
 	m.focusInit = true
 	if m.focusPath == nil {
-		return func() tea.Msg { return SelectedChangedMsg{Empty: true} }
+		return tea.Batch(act, func() tea.Msg { return SelectedChangedMsg{Empty: true} })
 	}
 	path := append([]string(nil), m.focusPath...)
 	label := path[len(path)-1]
 	depth := len(path) - 1
-	return func() tea.Msg {
+	return tea.Batch(act, func() tea.Msg {
 		return SelectedChangedMsg{Path: path, Label: label, Depth: depth}
-	}
+	})
 }
 
 // splitPath breaks the "/"-separated internal path string into segments,
@@ -1101,7 +1153,7 @@ func (m *Model) renderContent() string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(m.formatRow(r, i == m.cursor))
+		b.WriteString(m.withBadge(r.path, m.formatRow(r, i == m.cursor)))
 	}
 	return b.String()
 }

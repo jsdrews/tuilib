@@ -15,25 +15,32 @@ import "strconv"
 //     set is precisely the drift this design refuses to ship. Marking there
 //     is inert rather than approximate.
 
-// gutterW is the width the mark column takes from the columns. Zero when
-// marking is off, so a table that does not opt in is laid out exactly as
-// before.
+// gutterW is the width the leading columns take from the row: the mark
+// column, then the activity column when activity is on but has no named
+// column to draw into. Zero when neither applies, so a table that opts into
+// nothing is laid out exactly as before.
+//
+// Mark comes first so onMarkColumn's hit test stays a plain "pos < 2"
+// regardless of what follows it.
 func (m Model) gutterW() int {
-	if !m.markable {
-		return 0
+	w := 0
+	if m.markable {
+		w = 2
 	}
-	return 2
+	return w + m.actGutterW()
 }
 
-// gutterFor is the leading cell pair for logical row i.
+// gutterFor is the leading cells for logical row i.
 func (m Model) gutterFor(i int) string {
-	if !m.markable {
-		return ""
+	s := ""
+	if m.markable {
+		if m.isMarkedAt(i) {
+			s = m.glyphs.Mark + " "
+		} else {
+			s = "  "
+		}
 	}
-	if m.isMarkedAt(i) {
-		return m.glyphs.Mark + " "
-	}
-	return "  "
+	return s + m.actGutterFor(i)
 }
 
 // keyAt maps a logical row index to its row key.
