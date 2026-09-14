@@ -1,8 +1,19 @@
 # Demo API — design
 
-Status: **proposed.** Nothing here is built. It depends on nothing new: the
-whole thing is `net/http` plus `encoding/json`, which is the property that
-decides where it lives (decision 2).
+Status: **implemented.** `demoapi` is in, with `cmd/demoapi` and `task
+server`; `examples/patterns/remote` and `examples/patterns/activity` are
+clients of it; and `internal/integration` holds the race tests that were the
+reason to build it. Stdlib only, plus `pkg/query` from this module, so `go.mod`
+gained nothing.
+
+The race tests were checked against deliberately broken code before being
+believed: removing `source.Deliver`'s generation check fails
+`TestStalePageIsDroppedWhenItLandsLast`, and letting a `Derive` retire a local
+entry fails `TestStalePollDoesNotWipeALocalIndicator`. A race test that passes
+against the bug it names is worse than no test.
+
+Eight places the build corrected the design are marked **Corrected during
+implementation** (decisions 8, 13, and new 15 through 20).
 
 ## Problem
 
@@ -216,6 +227,22 @@ A fixture that grows a noun per demo becomes a second product to maintain. If a
 demo needs a shape these two do not have, the question to ask first is whether
 the demo is really about that shape.
 
+### 8b. Corrected during implementation: filtering takes two forms, not one.
+
+The design had one filter parameter, `?q=`, carrying pkg/query's grammar whole.
+Building the client showed that a screen driving `source.Query` does not have
+a raw string worth forwarding — it has `[]query.Term`, each already resolved,
+and `Term.Title` exists precisely so a scoped term becomes a parameter name
+without a lookup. Making it re-serialise those back into `key:value` text for
+the server to re-parse would be a round trip through a format neither end
+wanted, and would have quietly deleted the reason `Title` is on the struct.
+
+So the list endpoint takes both, AND-ed: `?q=` for a client forwarding what the
+user typed, and one parameter per column (`?region=eu-west`) for one driving a
+`source.Query`. `examples/patterns/remote` sends scoped terms as parameters and
+bare ones through `q`, which is what a real client would do and what the
+`Title` field is for.
+
 ### 9. Errors are HTTP status codes and a JSON body.
 
 ```json
@@ -281,6 +308,24 @@ what it currently demonstrates is that loop against a slice and a sleep in the
 same goroutine. Nothing in it crosses a request boundary, which is where the
 interesting failures live.
 
+**Corrected during implementation: `examples/patterns/poll` should not
+migrate.** The design listed it with the other two, on the grounds that it also
+fakes a backend. It does, and the fake is the point: its subject is the
+*ticker*, and its synthetic job list churns far harder than any real backend
+would — statuses flipping, rows appearing and vanishing, the order changing
+every two seconds — precisely so the keyed-cursor property is visible in a few
+seconds of watching. Pointed at demoapi, whose world changes every six seconds
+by design, the demo would look static and would demonstrate its subject worse.
+
+The rule that falls out: **the fixture is for demos whose subject is talking to
+something.** A demo about a component's own behaviour is better served by data
+it controls.
+
+**What did migrate gained a failure path.** `remote` now has an `e` key that
+makes the next fetch return a 503, because a screen talking to anything real
+has to handle a status code — and a slice in the same goroutine could not
+produce one to handle.
+
 ### 14. It does not replace `internal/componenttest`.
 
 Component contracts stay where they are: synchronous, no I/O, no clock. A test
@@ -318,6 +363,12 @@ type Options struct {
     // Latency is the floor applied to every request, before any per-request
     // ?latency=. Zero means none.
     Latency time.Duration
+
+    // Schedule is how often the world starts work nobody asked for. Zero
+    // means DefaultSchedule (6s). A demo wants this short — background work
+    // is what a screen with ActivityWhen exists to show, and a viewer who has
+    // to wait out two intervals to see one concludes the feature is broken.
+    Schedule time.Duration
 }
 
 // Client returns an *http.Client that dispatches into h without a socket.
@@ -358,25 +409,136 @@ finished-between-two-polls case would miss the one thing that case needs.
 
 ## Implementation order
 
-1. **`demoapi/state.go`** — the world, the clock, seeded generation, job
+1. ~~**`demoapi/state.go`**~~ — the world, the clock, seeded generation, job
    transitions. No HTTP. Unit-testable on its own, and the part most likely to
    be wrong.
-2. **`demoapi/apps.go`** — list with offset/limit/filter/sort, facets, detail.
+2. ~~**`demoapi/apps.go`**~~ — list with offset/limit/filter/sort, facets, detail.
    Paging arithmetic and filter semantics have to match what `pkg/query` parses,
    or the fixture teaches a grammar the library does not implement.
-3. **`demoapi/demoapi.go`** — `New`, `Options`, the mux, the `latency`/`fail`/
+3. ~~**`demoapi/demoapi.go`**~~ — `New`, `Options`, the mux, the `latency`/`fail`/
    `flaky` middleware.
-4. **`demoapi/client.go`** — the in-process transport, over `io.Pipe`.
-5. **`demoapi/jobs.go`** — POST endpoints, job list, the log stream.
-6. **`demoapi/cmd/demoapi`** + the `task server` entry.
-7. **Migrate `examples/patterns/remote`**, which is the demo whose current
-   simulation is furthest from what it claims to demonstrate.
-8. **Migrate `examples/patterns/activity`** and **`poll`**.
-9. **The race tests** — the two orderings in the Problem section, which are the
-   reason to build any of this.
+4. ~~**`demoapi/client.go`**~~ — the in-process transport, over `io.Pipe`.
+5. ~~**`demoapi/jobs.go`**~~ — POST endpoints, job list, the log stream.
+6. ~~**`demoapi/cmd/demoapi`**~~ + the `task server` entry.
+7. ~~**Migrate `examples/patterns/remote`**~~, which was the demo whose
+   simulation was furthest from what it claimed to demonstrate.
+8. ~~**Migrate `examples/patterns/activity`**~~. Not `poll` — see decision 13.
+9. ~~**The race tests**~~ — the two orderings in the Problem section, which
+   are the reason to build any of this. They live in `internal/integration`,
+   per decision 14: a package for whole screens driven against demoapi, as
+   distinct from `internal/componenttest`'s synchronous component contracts.
 
-Steps 1-6 are the fixture. 7-9 are the payoff, and 9 is the one that finds
-bugs.
+All nine steps are done.
+
+### 20. Corrected during implementation: a second command has to be refused.
+
+`launch` accepted a command for an application that already had one running, so
+two jobs raced on one row and whichever finished last set the result. Nothing in
+the client could have coped, because nothing in the client could see it: the
+newest thing a screen knows is an observation that may be a poll interval old,
+and a schedule can fire inside that window.
+
+It answers 409 with a body saying what is in progress. That is the layer the
+whole conflict story rests on — see decision 21 of `docs/activity.md` — and the
+reason it belongs in the fixture is that a client cannot be taught to handle a
+conflict against a server that never produces one.
+
+### 19. Corrected during implementation: background work has to happen where the demo is looking.
+
+The world picked a random application out of all of them to start scheduled work
+on. That is what a real cluster does, and it made the fixture useless for the
+thing it was built to demonstrate: with 5,000 applications and an event every
+few seconds, a screen showing six rows sees one roughly never. The activity demo
+appeared not to work at all — the server was busily syncing `app-02998` while
+every screen watched the top of the list.
+
+Two things compounded it under `task demo`. `From` ignores `Options` on the live
+path by design (decision 6), so the example's `Apps: 6, Schedule: 3s` were
+discarded and the shared server ran 5,000 apps on the 6s default; and the
+example fetches the first six rows, so the odds of overlap were about one in a
+thousand per event.
+
+So: scheduled work now picks from the first `scheduleWindow` (8) applications
+only, the binary takes `--schedule`, and `task demo` passes 3s. Paging screens
+still have all 5,000 rows to page through; screens showing the top of the list
+see background work constantly. A demo server should put its activity where the
+demo is looking, and `TestScheduledWorkLandsWhereADemoIsLooking` holds it.
+
+This one was found by running it, not by reading it — and the first two attempts
+to observe it were themselves wrong, because the diagnostic truncated statuses
+to four characters and `Synced` and `Syncing` both print as `Sync`.
+
+### 18. Corrected during implementation: a failed job left the world lying.
+
+`complete` applied a job's resting status only when the job succeeded, so a
+failed one kept the `Syncing` that starting it had set and nothing ever cleared
+it. The app reported itself working forever, and every client faithfully spun a
+row for it — the layering in `pkg/activity` was correct throughout, which is
+what made it hard to see: the row was true to the server and the server was
+wrong.
+
+Failing means a job lands `OutOfSync` rather than `Synced`, not that it lands
+nowhere. The status is now applied either way, and the job carries where it
+goes. `TestFailedJobLandsInARestingState` asserts it here and
+`TestRowConvergesOnTheServerAfterAFailedSync` asserts it through the whole
+stack — the second is the one that says what a fixture is *for*: a convergence
+property is only worth asserting against something that can disagree with you.
+
+A failing sync also fails fast now (1.5s rather than 4s). The log stream is
+what tells the client it failed, and a four-second job would still be reporting
+`Syncing` for seconds after the client had given up on it.
+
+### 17. Corrected during implementation: two small ones from running it.
+
+**The log lines used `%s` and half of them took no argument.** Every line
+without a placeholder came out with `%!(EXTRA string=app-00000)` appended, which
+is Sprintf reporting an argument the format string did not consume. They use a
+`{app}` token and `strings.ReplaceAll` now: a token substitution has no such
+failure mode, so the two kinds of line stop being different kinds of line.
+
+**`demo:stop` needed a fallback that does not depend on the pidfile.** A
+`kill -9`, a crash, or a stray `rm` loses the file, and then the port stays
+bound by a process nothing has a handle on — so every later `demo:start` fails
+to listen and the only clue is a line in a log nobody is tailing. It now falls
+back to `lsof -t -iTCP:$port -sTCP:LISTEN`, and `demo:status` says so rather
+than reporting "not running" about a port that is plainly busy. Borrowed from
+the kube tasks in the tui-builder repo, which stop by port throughout.
+
+### 16. Corrected during implementation: the server writes its own pidfile.
+
+Backgrounding a process and recording its pid is the obvious shell one-liner
+and it does not work here: **Task's embedded shell (mvdan/sh) does not populate
+`$!`**. The first version wrote an empty pidfile, so `demo:stop` had nothing to
+kill and the server survived every attempt to stop it — with the port held and
+no handle on the process holding it.
+
+So `cmd/demoapi` takes `--pidfile`, writes its own pid there atomically, and
+removes it on the way out under `SIGINT`/`SIGTERM`. That is better than a shell
+capture on three counts beyond portability: the file's existence means the
+listener is up, because the pid is written after `net.Listen` returns; the file
+is removed on clean shutdown, so "is it running" can be answered by looking at
+it; and the pid is the server's rather than `go run`'s, which is the other way
+this goes wrong — kill go and the server it spawned keeps the port.
+
+### 15. Corrected during implementation: advance applies events in timestamp order.
+
+Not a design decision so much as a bug the design's phrasing invited, and the
+first test written against it caught it.
+
+The world advanced by completing every due job and then firing every due
+scheduled event. That is correct only if the two never interleave, and they
+always do: a scheduled sync fired inside one `advance` starts a job that
+finishes inside the same one. Advancing sixty seconds in a single jump left
+that job running forever, while advancing a second at a time completed it — so
+the world depended on how often it was read, which is exactly the property
+decision 5 exists to guarantee and decision 6 needs in order to mean anything.
+
+`advance` now picks the earliest due event, applies it, and repeats. The
+invariant is worth stating because it is easy to break again:
+**`advance(T)` must produce the same world however many calls it is split
+across**, and `TestAdvanceIsIndependentOfReadFrequency` holds it.
+
+---
 
 ## Rejected, worth remembering
 
@@ -422,7 +584,9 @@ bugs.
 - The in-process client streams the log endpoint incrementally rather than in
   one read.
 
-**The tests the fixture makes possible**, which are the reason for it:
+**The tests the fixture makes possible**, which are the reason for it — now in
+`internal/integration`, driven through a small event loop that runs commands on
+their own goroutines so replies land in the order they actually complete:
 
 - A slow reply to an abandoned filter arriving after a fast reply to the
   current one is dropped, and the table shows the current filter's rows —
@@ -436,6 +600,23 @@ bugs.
 - A job that starts and finishes between two polls flashes rather than passing
   unnoticed — decision 20, which needs a server whose clock does not wait for
   the client.
+
+And the join none of the per-package suites reach: the **whole stack**, in
+`action_stack_test.go`. `pkg/app`'s action tests drive hand-built rows and
+assert on broadcasts; `internal/componenttest` asserts a component renders what
+it is told; neither watches a keypress become a POST. So one test runs
+`examples/patterns/activity` under a real `app.Model` against a real
+`httptest` server — press `a`, pick Sync, and follow it through: the row saying
+so before the server has been asked, `activity.Progress` relabelling it, the
+server's own log line arriving in the console under the action's label, and the
+indicator settling when an observation ends the handoff. It uses the example
+rather than a purpose-built screen because the example is the thing people
+copy, and it reaches the server through `demoapi.From`, so it covers the
+`TUILIB_DEMO_API` path `task demo` uses as well.
+
+Its companion reproduces the spinner freeze: open the console over a working
+row, come back, and assert the glyph reaches two *distinct* frames — one frame
+proves only that something is drawn, and a frozen spinner draws forever.
 
 ## Open questions
 
@@ -462,8 +643,26 @@ nothing demonstrates it. Chunked HTTP (decision 10) exercises the same client
 shape with none of the protocol, so this is probably a no — but if a demo is
 ever written for rule 12 specifically, this is where the server side would go.
 
-**4. Should `task examples` be able to point at a real server?** An env var
-(`TUILIB_DEMO_API=http://…`) would let the same examples run against the
-in-process handler by default and a real one when set, which is a nice way to
-watch two clients share a world. Cheap to add, easy to skip, and nothing else
-depends on the answer.
+**4. ~~Should `task examples` be able to point at a real server?~~ Built.**
+`demoapi.From(Options)` reads `TUILIB_DEMO_API`: unset it builds the in-process
+handler from `Options`, set it talks over the network to that base URL and
+**ignores `Options`** — the server already has a world, and a second one
+generated in the client would answer none of the requests. `Target.Live` is on
+it so a screen can say so, which both migrated examples do by appending
+"· live" to their pane title.
+
+Three tasks, plus a composite that sequences them:
+
+```
+task demo:start    # build, background it, wait until it answers
+task demo:run      # the launcher with TUILIB_DEMO_API set
+task demo:stop     # signal it, escalate if it lingers
+task demo          # all three, with the stop deferred
+```
+
+`task demo` registers the stop with Task's `defer:`, so the server does not
+outlive the launcher whether it exits cleanly, crashes, or is interrupted —
+verified by running it with no TTY, which fails the launcher and still tears
+down. `demo:status` and `demo:log` are conveniences; `task clean` stops it too,
+so the port is never left held by something the next `demo:start` has no pid
+for.

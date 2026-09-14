@@ -96,6 +96,22 @@ type Action struct {
 	// stopped.
 	Busy string
 
+	// Receipt replaces the statusbar and log text the shell writes when this
+	// action's Run returns. Default: "<Label> completed".
+	//
+	// It exists because Run returning means the *function* finished, which is
+	// not the same as the work finishing, and only the author knows which this
+	// is. An action that performs the work — a build, a file write — is
+	// completed when it returns, and the default is right. An action that
+	// dispatches work to a server returns as soon as the request is accepted,
+	// and "Sync completed" then claims something it cannot know: the server
+	// may still be syncing, and the row will keep saying so for seconds
+	// afterwards. "Sync requested" is true of both.
+	//
+	// The failure text is not affected: an error is an error whenever it
+	// arrives.
+	Receipt string
+
 	// Confirm, when non-empty, puts a yes/no modal between the pick and the
 	// run. Use it for anything destructive rather than hand-rolling the
 	// sequence.
@@ -142,6 +158,14 @@ type Action struct {
 	// no second one to push. It is a Do that does not navigate, one that
 	// fires a request and returns, that may still want Exclusive.
 	Do func() tea.Cmd
+}
+
+// ReceiptText is what the shell reports when this action's Run returns.
+func (a Action) ReceiptText() string {
+	if a.Receipt != "" {
+		return a.Receipt
+	}
+	return a.Label + " completed"
 }
 
 // BusyLabel is what the target rows should say while this action runs.

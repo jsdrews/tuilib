@@ -2,6 +2,20 @@ version: '3'
 
 silent: true
 
+vars:
+  # Where the background demo API listens, and where its pid/log/binary live.
+  DEMO_ADDR: '127.0.0.1:8099'
+  # Split out so demo:stop can find a listener by port when the pidfile is
+  # gone — see there.
+  DEMO_PORT: '8099'
+  # Short, because background work is what the activity demo exists to show and
+  # the default is tuned for not being noisy rather than for being watched.
+  DEMO_SCHEDULE: '3s'
+  DEMO_DIR: '.task'
+  DEMO_PID: '.task/demoapi.pid'
+  DEMO_LOG: '.task/demoapi.log'
+  DEMO_BIN: '.task/demoapi'
+
 tasks:
   default:
     cmds:
@@ -37,12 +51,119 @@ tasks:
   clean:
     desc: Remove build artifacts
     cmds:
+      - task: demo:stop
+      - rm -rf {{.DEMO_DIR}}
       - go clean ./...
 
   examples:
-    desc: Open the examples launcher (menu of all demos)
+    desc: Open the examples launcher (each demo builds its own in-process API)
     cmds:
       - go run ./examples/launcher
+
+  demo:
+    desc: Start the demo API, open the launcher against it, then stop the API
+    cmds:
+      - task: demo:start
+      # defer runs at the end of this task whether the launcher exits cleanly,
+      # fails, or is interrupted — so the server never outlives the thing it
+      # was started for.
+      - defer: { task: demo:stop }
+      - task: demo:run
+
+  demo:start:
+    desc: Start the demo API in the background on {{.DEMO_ADDR}}
+    cmds:
+      - |
+        mkdir -p {{.DEMO_DIR}}
+        if [ -f {{.DEMO_PID}} ] && kill -0 "$(cat {{.DEMO_PID}})" 2>/dev/null; then
+          echo "demoapi already running (pid $(cat {{.DEMO_PID}}))"
+          exit 0
+        fi
+
+        # Build first, then run the binary. Backgrounding `go run` would leave
+        # the server as go's child, so stopping it means finding a grandchild.
+        go build -o {{.DEMO_BIN}} ./demoapi/cmd/demoapi
+
+        # The server writes its own pidfile: Task's embedded shell does not
+        # populate $!, so a shell here has no way to learn the pid it just
+        # backgrounded.
+        rm -f {{.DEMO_PID}}
+        nohup {{.DEMO_BIN}} --addr {{.DEMO_ADDR}} --pidfile {{.DEMO_PID}} \
+          --schedule {{.DEMO_SCHEDULE}} >{{.DEMO_LOG}} 2>&1 &
+
+        # Wait for it to answer, not merely to exist. Without this the
+        # launcher's first fetch can race the listener and the demo opens on an
+        # error.
+        for i in $(seq 1 50); do
+          if curl -fsS -o /dev/null "http://{{.DEMO_ADDR}}/apps?limit=1" 2>/dev/null; then
+            echo "demoapi listening on {{.DEMO_ADDR}} (pid $(cat {{.DEMO_PID}} 2>/dev/null))"
+            exit 0
+          fi
+          sleep 0.1
+        done
+
+        echo "demoapi did not come up; see {{.DEMO_LOG}}" >&2
+        cat {{.DEMO_LOG}} >&2
+        exit 1
+
+  demo:run:
+    desc: Open the examples launcher against the background demo API
+    env:
+      TUILIB_DEMO_API: 'http://{{.DEMO_ADDR}}'
+    cmds:
+      - go run ./examples/launcher
+
+  demo:stop:
+    desc: Stop the background demo API
+    cmds:
+      - |
+        # The pidfile first, then whoever is holding the port. The fallback
+        # matters because the pidfile can go missing — a kill -9, a crash, a
+        # stray rm — and then the port stays bound by a process nothing has a
+        # handle on, so every later demo:start fails to listen and the only
+        # clue is a line in the log.
+        pid=""
+        if [ -f {{.DEMO_PID}} ]; then
+          pid="$(cat {{.DEMO_PID}} 2>/dev/null)"
+          rm -f {{.DEMO_PID}}
+        fi
+        if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+          pid="$(lsof -t -iTCP:{{.DEMO_PORT}} -sTCP:LISTEN 2>/dev/null | head -1)"
+        fi
+        if [ -z "$pid" ]; then
+          exit 0
+        fi
+
+        kill "$pid" 2>/dev/null || true
+        # Give it a moment to close the listener, then insist.
+        for i in $(seq 1 20); do
+          kill -0 "$pid" 2>/dev/null || { echo "demoapi stopped (pid $pid)"; exit 0; }
+          sleep 0.1
+        done
+        kill -9 "$pid" 2>/dev/null || true
+        echo "demoapi killed (pid $pid)"
+
+  demo:status:
+    desc: Report whether the background demo API is running
+    cmds:
+      - |
+        if [ -f {{.DEMO_PID}} ] && kill -0 "$(cat {{.DEMO_PID}})" 2>/dev/null; then
+          echo "running on {{.DEMO_ADDR}} (pid $(cat {{.DEMO_PID}}))"
+        elif pid="$(lsof -t -iTCP:{{.DEMO_PORT}} -sTCP:LISTEN 2>/dev/null | head -1)" && [ -n "$pid" ]; then
+          echo "port {{.DEMO_PORT}} held by pid $pid with no pidfile — demo:stop will clear it"
+        else
+          echo "not running"
+        fi
+
+  demo:log:
+    desc: Tail the background demo API's log
+    cmds:
+      - tail -f {{.DEMO_LOG}}
+
+  server:
+    desc: Run the demo API in the foreground (ctrl+c to stop)
+    cmds:
+      - go run ./demoapi/cmd/demoapi --addr {{.DEMO_ADDR}}
 
   list:
     desc: List available tasks

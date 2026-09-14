@@ -288,6 +288,25 @@ API at all — and wrong twice: it makes every incidental log line a UI change,
 and it forces authors to write log lines that read acceptably in a 12-cell
 column.
 
+**Corrected during implementation: `Progress` is narrower than this reads.**
+The decision presents relabelling as the normal way to report a running action,
+and building the example that way produced two bad outcomes. A single-target run
+read "submitting" then "applying" while a multi-target run counted "1/3",
+"2/3" — two vocabularies for one verb, so the row said something different
+depending on how many rows were marked. And the counter was run-scoped but drawn
+per row, so every marked row showed "2/3" as if that were its own progress,
+which is not merely inconsistent but wrong.
+
+The example now calls `Progress` nowhere. A row shows one word — the verb's
+`Busy` text, set to the *server's own* status string — and holds it until an
+observation says the work is settled. That is simpler to read, identical at
+every arity, and makes the handoff invisible because both layers say the same
+thing.
+
+`Progress` stays, for an action with genuinely long and genuinely per-target
+phases. It is not decoration for a two-second request, and a run-scoped value
+must not be drawn as a per-row one.
+
 `CaptureStatus` deliberately does **not** enter the log. It is a UI state
 change, not news; a run that reports progress ten times would otherwise post
 ten records the badge counts as one event but the reader has to scroll past.
@@ -393,6 +412,12 @@ whenever someone has the case in front of them. Building it now means guessing
 at how per-key failure should interact with the run's single `error` return,
 and that guess is better made against a real action.
 
+**Demonstrated as of `examples/patterns/activity` growing `Markable`.** Mark
+several rows, pick Sync, and one run spins all of them, logs one event, and
+retires them together. The last part is the deferral made visible rather than
+hidden, and `TestOneRunSpinsEveryMarkedRow` asserts it — so if per-target
+completion is ever built, that test is the one that should change.
+
 ### 12. `Exclusive` gets sharper for free.
 
 `RunKey(a, target)` pairs the action's identity with the *display* target, so a
@@ -444,6 +469,41 @@ without the component having to disambiguate.
 Setters return `tea.Cmd` and the caller must batch it, exactly as
 `pane.SetLoading` does (rule 17). The tick chain runs while any key is active
 and stops when the last one clears, so an idle screen schedules nothing.
+
+**Corrected during implementation: the tick chain has to heal itself.** The
+chain lives in `tea.Cmd`s and survives only while the ticks it asks for come
+back. `screen.Stack.Update` forwards to the **top screen only**, so pushing
+anything over a screen with a spinner — the output console, a child view — has
+its ticks delivered somewhere that drops them. The chain ends; `ticking` stays
+true because nothing told the Set otherwise; `armTick` then refuses to start a
+new one. The spinner is frozen for the rest of the session, on a row that is
+still working.
+
+`pkg/pane`'s loading spinner had the identical defect for the identical reason,
+and so did `pkg/poll` — whose chain dying is worse, because then no observation
+ever arrives to end a handoff (decision 19) and the row sits on a stale phase
+until the user presses something. Three components, one cause.
+
+**The first fix was per-component and insufficient.** Each Set learned to notice
+a stalled chain and re-arm on the next message it saw. That is a real
+improvement and it is not enough: after the action finishes, *nothing sends the
+screen a message*, so "the next message" is the user's next keystroke. The
+reported symptom was exactly that — the spinner resumed on a keypress and not
+before, and the row stayed on "applying" indefinitely.
+
+**The root fix is in `screen.Stack`, and it makes the library consistent with
+itself.** `pkg/tab` already fans non-input messages out to every body, and rule
+21 says why: a `tea.Tick` re-arm in an inactive tab has to keep working. The
+screen stack delivered everything to the top screen alone. It now routes as tab
+does — `tea.KeyMsg` and `mouse.Msg` to the top screen, everything else to every
+screen — so the chains never die and there is nothing to revive. The cost is
+that a covered screen keeps working, which is also the point: return from the
+console and the data is current.
+
+The per-component revival stays as defence for anyone driving components without
+the stack, and because over-arming is provably harmless — bubbles tags each tick
+and a spinner rejects one from a superseded chain, so two chains collapse into
+one on the next frame.
 
 **No new key bindings, so `Help()` and `HelpSections()` are untouched** (rule
 10). Activity has no verbs: it is not clickable, not cancellable from the row,
@@ -622,11 +682,18 @@ says "not busy"; the local entry is untouched, because derived does not retire
 local. Without that rule every action would flicker off and on once, at a
 moment determined by the poll phase.
 
-`activity.Busy(values...)` is the helper for the ordinary case — a
-case-insensitive value match returning the matched value as the label. The
-predicate itself takes the whole row rather than one cell, because the status
-worth watching is not always the status worth showing, and a hidden column or a
-second field is a normal thing to want.
+Two helpers, and the second is usually the right one.
+`activity.Busy(values...)` matches the statuses that mean work, labelled with
+the matched value. `activity.Settled(values...)` inverts it: it names the
+terminal states and treats everything else as work. Prefer `Settled` — it is
+how these APIs document themselves, and it keeps spinning when a server learns
+a new in-progress status, where `Busy` would treat that one as done. The mirror
+risk is a new *settled* status spinning forever, so pick the list the server is
+less likely to extend.
+
+Either way the predicate takes the whole row rather than one cell, because the
+status worth watching is not always the status worth showing, and a hidden
+column or a second field is a normal thing to want.
 
 ### 19. A local entry hands off to the data, rather than expiring on a timer.
 
@@ -709,6 +776,47 @@ busy, plus keys whose handoff this one just retired. See decision 20.
 **What this does not fix, and cannot.** If the user never acted and the job
 both starts and finishes between two polls, nothing in the library can know it
 happened — see decision 20.
+
+### 21. Conflict with the source of truth is three layers, and the server is the only authority.
+
+What happens when the user acts on a row the server just started working on?
+Nothing in decisions 1-20 answers that. `Exclusive` looks like the answer and is
+not: it gates runs *this session* launched, held in the shell's own registry,
+and it knows nothing about work that arrived on a poll.
+
+The honest structure has three layers, and none of them is optional.
+
+**The server refuses.** It is the only thing that knows, because the client's
+newest information is an observation that may be a poll interval old. A real API
+answers 409; `demoapi` now does too, and used to accept both commands and let
+two jobs race on one row with the later completion overwriting the earlier
+one's result. A fixture cannot teach a client to handle a conflict it never
+produces.
+
+**The action surfaces the refusal.** A non-2xx is an error, the action returns
+it, and the existing path carries it: `EndMsg{Err}` puts ✗ on the row, the
+statusbar says why, and the console keeps the body. No new machinery — this is
+decision 19's failure branch doing its job.
+
+**The screen pre-empts, best-effort.** `Action.Disabled` already exists for
+"this verb does not apply right now", and the screen already holds what it needs:
+a derived entry with no `RunID` means the last poll said the server was working
+on that row. So `Actions()` dims the verbs and names the reason — "already
+syncing" — and the ordinary case never reaches the server at all.
+
+Best-effort is the accurate description, and calling it anything stronger would
+be the mistake. The check reads the last observation; a schedule can fire in the
+window between that observation and the POST. Which is precisely why the server
+still has to reject and the action still has to report.
+
+**The read side needs the same discipline, and a plainly polled screen gets no
+help with it.** `source.Deliver` carries a generation so an overtaken reply
+cannot paint stale rows under a newer one. A screen that just polls and calls
+`SetKeyedRows` has nothing equivalent, and over a real network replies do arrive
+out of order. `examples/patterns/activity` therefore stamps each fetch and drops
+anything older than the newest applied — five lines, and the same idea the
+coordinator encodes for windowed tables. A library helper here is an open
+question rather than a gap with an obvious shape.
 
 ### 20. What no amount of polling can see, and the one escape hatch.
 
@@ -1001,6 +1109,12 @@ source of truth drive it with no actions at all.
   `Exclusive` release and the log record right. `x` in the console already
   kills the run, which ends the activity.
 - **Auto-scrolling to a row that finishes.** The cursor belongs to the user.
+- **Deriving the row label from the log line just written.** The activity
+  example did exactly this, taking the first word of each line, and put
+  "found", "waiting" and finally "sync" on the row — the last from "sync
+  operation complete". Decision 7 had already rejected it in the abstract; a
+  demo doing it anyway is how it came back. Phases are written deliberately, at
+  the two or three points the client actually knows about.
 - **Holding a local spinner for a fixed grace period** so a poll might catch
   the work (decision 19). Too short does nothing, too long lies, and the right
   number is the poll interval the component does not know. Waiting for the next

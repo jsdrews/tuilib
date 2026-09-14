@@ -156,7 +156,12 @@ type Set struct {
 	hold    time.Duration
 	confirm time.Duration
 	style   func(State, string) string
-	ticking bool
+
+	// ticking is a claim that a tick chain is in flight, and lastTick is when
+	// that claim was last true. Both, because the claim can become false
+	// without this Set hearing about it — see reviveTick.
+	ticking  bool
+	lastTick time.Time
 }
 
 type entry struct {
@@ -170,6 +175,10 @@ type entry struct {
 	// entry is holding the row until the data is next observed. It still
 	// renders as running, because that is what the TUI last knew.
 	awaiting bool
+
+	// base is the label this entry started with, kept so a progress phase
+	// cannot outlive the work it described. See finish.
+	base string
 }
 
 // New builds a Set from opts.
@@ -268,7 +277,11 @@ func (s *Set) Handle(msg tea.Msg, holds func(key string) bool) tea.Cmd {
 	case expireMsg:
 		return s.expire(m.key, m.gen)
 	}
-	return nil
+
+	// Any message at all is a chance to notice the animation has stalled. This
+	// is the only hook available: a component cannot return a command from
+	// SetRect or View, so being drawn is not something it can react to.
+	return s.reviveTick()
 }
 
 // Start begins activity on one key, replacing any entry already there.
@@ -299,6 +312,7 @@ func (s *Set) start(key, label string, runID int64) tea.Cmd {
 	}
 	e.gen++
 	e.awaiting = false
+	e.base = label
 	e.State = State{Label: label, RunID: runID, Since: time.Now()}
 	return s.armTick()
 }
@@ -353,6 +367,16 @@ func (s *Set) FinishRun(runID int64, err error) tea.Cmd {
 
 func (s *Set) finish(key string, e *entry, err error) tea.Cmd {
 	e.gen++
+
+	// Back to the label the work started with. A progress phase describes a
+	// step that is now over, so carrying it into an outcome or a handoff
+	// misreports what the row is doing: a failed sync read "✗ applying", and a
+	// row waiting for confirmation sat on "applying" long after the action had
+	// stopped applying anything. Progress is for work in flight.
+	if e.base != "" {
+		e.Label = e.base
+	}
+
 	if err == nil && s.derives {
 		// Decision 19. The dispatch worked, so whatever it started is now the
 		// source of truth's business. Reporting ✓ here would clear the row
@@ -614,6 +638,7 @@ func (s *Set) armTick() tea.Cmd {
 		return nil
 	}
 	s.ticking = true
+	s.lastTick = time.Now()
 	return s.spin.Tick
 }
 
@@ -622,9 +647,41 @@ func (s *Set) tick(m spinner.TickMsg) tea.Cmd {
 		s.ticking = false
 		return nil
 	}
+	s.lastTick = time.Now()
 	var cmd tea.Cmd
 	s.spin, cmd = s.spin.Update(m)
 	return cmd
+}
+
+// reviveTick restarts an animation whose chain was broken from outside.
+//
+// The chain lives in tea.Cmds, and a component only keeps it alive by
+// receiving the ticks it asked for. screen.Stack forwards messages to the top
+// screen only, so pushing anything over this one — the output console, a
+// child screen — sends its ticks somewhere that drops them. The chain ends,
+// ticking stays true because nothing told this Set otherwise, and armTick
+// then refuses to start a new one: the spinner is frozen for good, on a row
+// that is still working.
+//
+// Stopping while hidden is correct; staying stopped is not. So instead of
+// trusting the flag, check whether a tick has actually arrived recently and
+// re-arm if not. A duplicate chain would be harmless anyway — bubbles tags
+// each tick and a spinner rejects one from a superseded chain, so two chains
+// collapse back into one on the next frame.
+func (s *Set) reviveTick() tea.Cmd {
+	if !s.running() {
+		return nil
+	}
+	if !s.ticking {
+		return s.armTick()
+	}
+	// Generous against the frame interval: normal jitter must not look like a
+	// dead chain, and being slightly late to revive costs nothing.
+	if fps := s.spin.Spinner.FPS; fps > 0 && time.Since(s.lastTick) < 4*fps {
+		return nil
+	}
+	s.lastTick = time.Now()
+	return s.spin.Tick
 }
 
 // Derive replaces the derived layer from one observation of the data.
@@ -766,6 +823,37 @@ func Busy(values ...string) func(value string) (label string, busy bool) {
 			return plain, true
 		}
 		return "", false
+	}
+}
+
+// Settled is Busy inverted: it names the values that mean nothing is happening,
+// and reports everything else as in flight, labelled with the value as it
+// appeared.
+//
+//	activity.Settled("successful", "failed", "canceled")
+//
+// Prefer it when the API documents a set of *terminal* states, which is how
+// most of them are written — and because it keeps working when the server
+// learns a new in-progress status. A list of busy values would quietly treat
+// that new one as settled and stop spinning for it; this treats it as work,
+// which is the safer way to be wrong.
+//
+// The trade is the mirror image: a new *settled* status this does not know
+// about spins forever. Pick the list the server is less likely to extend, and
+// remember the row only ever reports what it was told.
+//
+// An empty value is settled: a blank cell is not work in progress.
+func Settled(values ...string) func(value string) (label string, busy bool) {
+	set := make(map[string]bool, len(values))
+	for _, v := range values {
+		set[strings.ToLower(strings.TrimSpace(v))] = true
+	}
+	return func(value string) (string, bool) {
+		plain := strings.TrimSpace(xansi.Strip(value))
+		if plain == "" || set[strings.ToLower(plain)] {
+			return "", false
+		}
+		return plain, true
 	}
 }
 

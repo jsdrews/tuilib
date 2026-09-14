@@ -371,6 +371,17 @@ Every action produces exactly one statusbar flash and one console event. No
 `Quiet` flag: an action that shouldn't tell the user it happened is not an
 action, it's a keystroke, and rule 20 already covers keystrokes.
 
+**Corrected later: "completed" is not always true, so the text is the
+author's.** `Captured` means the action's *function* returned. For an action
+that performs the work — a build, a file write — that is completion and the
+default reads correctly. For one that dispatches work to a server it returns as
+soon as the request is accepted, and "Sync completed" then claims something the
+shell cannot know: the server may still be syncing, and with row activity
+(`docs/activity.md`) the row is visibly still saying so while the receipt says
+it is done. `Action.Receipt` overrides the success text — "Sync requested" is
+true of both cases. The failure text is unaffected, since an error is an error
+whenever it arrives.
+
 **Scoped to actions, not to every capture.** The worry when this was written
 was that painting the bar on `runner.Captured` would change behaviour for every
 existing `runner.Capture` caller — a shipped feature with callers of its own.

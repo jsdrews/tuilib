@@ -61,6 +61,17 @@ example in `examples/`.
    intercepted a key for your own shortcut, still forward it so focus +
    viewport behavior stays correct.
 
+   The screen stack routes the same way, for the same reason `pkg/tab` does
+   (rule 21): `tea.KeyMsg` and `mouse.Msg` reach the **top screen only**, and
+   everything else fans out to **every screen on the stack**. A covered screen
+   must not act on input meant for what covers it — but it must keep receiving
+   timers, because a self-chained `tea.Tick` survives only while the ticks it
+   asked for come back. Delivered top-only, a spinner froze and a `pkg/poll`
+   stopped polling the moment the user glanced at the output console, and
+   neither resumed on the way back: the chain was gone and nothing re-armed it.
+   So a covered screen keeps working, which is also why the data is current
+   when you return rather than as stale as the moment you left.
+
    Two deliberate exceptions, both about *user input aimed at what's on
    screen*. A screen with a focus.Group sends `tea.KeyMsg` to the
    focused component only — otherwise typing in an input would also
@@ -849,6 +860,39 @@ example in `examples/`.
     *Directly*, for a fetch a screen kicks off itself:
     `s.apps.SetActivity(key, "refreshing")`.
 
+    **Say what the action's return actually means.** The shell reports
+    "<Label> completed" when a `Run` returns, which is true of an action that
+    *performs* the work and false of one that dispatches it — a POST returns
+    when the request is accepted, and the row will keep spinning for seconds
+    afterwards. Set `Action.Receipt` ("Sync requested") wherever the verb hands
+    work to something else, or the receipt contradicts the row beside it.
+
+    **One word per state, and let the source of truth choose it.** Where a
+    screen both derives and acts, set `Action.Busy` to the *server's own*
+    status string. Then a row says the same thing from the moment it is asked
+    to the moment a poll says it is done, and the handoff from local to derived
+    is invisible because there is nothing to change. Inventing a client-side
+    label instead means maintaining a mapping, and getting it wrong shows up as
+    `syncing` becoming `Syncing` mid-flight — which reads as a glitch.
+
+    **`activity.Settled(values...)` is usually the better predicate.** It names
+    the statuses that mean nothing is happening and treats everything else as
+    work, which is how these APIs document themselves and which keeps working
+    when a server learns a new in-progress status — `activity.Busy` would
+    quietly treat that one as done and stop spinning. The mirror risk is a new
+    *settled* status spinning forever, so pick the list the server is less
+    likely to extend.
+
+    **`activity.Progress` is for long work with real per-target phases, and
+    nothing else.** A label that changes three times in two seconds is harder
+    to read than one that does not change at all, and detail belongs in the
+    console. Two specific traps, both of which `examples/patterns/activity`
+    shipped with: deriving the phase from the log line just written (the
+    alternative decision 7 of `docs/activity.md` rejected), and reporting a
+    **run-scoped counter** — "2/3" drawn on every marked row, as though it were
+    that row's own progress. A run has one label; if you need per-row progress
+    you need per-key state, which is decision 11's deferred refinement.
+
     **Local beats derived, and that ordering is load-bearing.** A poll
     already in flight when the user acted comes back carrying the pre-click
     value; if derived state could retire a local entry, every action would
@@ -864,6 +908,32 @@ example in `examples/`.
     since a failed dispatch started nothing to confirm, and a component with
     no `ActivityWhen` falls back to the plain hold because nothing would ever
     confirm it.
+
+    **Conflict with the source of truth is three layers.** `Exclusive` is not
+    one of them — it gates runs this session launched and knows nothing about
+    work that arrived on a poll. The server refuses (409), because it is the
+    only thing that knows; the action returns that error, so the existing
+    failure path puts ✗ on the row and the reason in the statusbar; and
+    `Actions()` sets `Disabled` when a derived entry (one with no `RunID`) says
+    the row is already busy, so the ordinary case never asks. The third layer is
+    best-effort by construction — it reads an observation that can be a poll
+    interval old — which is why the first two are not optional.
+
+    **A polled screen must drop out-of-order replies itself.** `pkg/source`
+    carries a generation so an overtaken page cannot paint stale rows under a
+    newer one; a screen that polls and calls `SetKeyedRows` has no equivalent,
+    and over a real network replies do arrive out of order. Stamp each fetch and
+    ignore anything older than the newest applied — see
+    `examples/patterns/activity`.
+
+    **A read trues the row up.** The derived layer is replaced wholesale by
+    every observation, so it is never anything but the last read; a local entry
+    retires on its own outcome, on the first observation after a successful
+    finish, or on `Options.Confirm`'s expiry. Nothing accumulates, and the row
+    converges on the server within a poll interval. The corollary is worth
+    keeping in mind when a row looks stuck: the client is usually right about
+    what it was told, so check what the server is actually reporting before
+    looking here.
 
     **What no polling can see** is work that begins and ends between two
     observations. Point `ActivityRevision` at a field whose contract is to

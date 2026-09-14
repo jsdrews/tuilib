@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
 
@@ -683,5 +684,158 @@ func TestAdoptCarriesBothLayers(t *testing.T) {
 	fresh.Derive(map[string]string{})
 	if _, ok := fresh.State("b"); ok {
 		t.Error("the adopted entry lost its pending handoff")
+	}
+}
+
+// --- a starved tick chain ------------------------------------------------
+
+// screen.Stack forwards messages to the top screen only, so pushing anything
+// over a screen with a spinner sends its ticks somewhere that drops them. The
+// chain ends, and before reviveTick existed it never came back: ticking stayed
+// true, armTick refused, and the row was frozen mid-spin for the rest of the
+// session. Reported from the output console, reachable from any child screen.
+func TestTickChainRevivesAfterBeingStarved(t *testing.T) {
+	fast := spinner.Spinner{Frames: []string{"1", "2"}, FPS: time.Millisecond}
+	s := New(Options{Hold: time.Minute, Spinner: &fast})
+
+	if cmd := s.Start("a", "syncing"); cmd == nil {
+		t.Fatal("Start armed no tick")
+	}
+	// The chain is nominally in flight; never deliver its tick, which is what
+	// a hidden screen does to it.
+	time.Sleep(20 * time.Millisecond)
+
+	if got := s.Handle(struct{}{}, nil); got == nil {
+		t.Error("a starved animation was never revived")
+	}
+}
+
+// The revival must not fire on a healthy chain, or every message would arm
+// another one.
+func TestHealthyTickChainIsNotRearmed(t *testing.T) {
+	s := newSet(t, time.Minute)
+	s.Start("a", "syncing")
+	if got := s.Handle(struct{}{}, nil); got != nil {
+		t.Error("re-armed a chain that had only just started")
+	}
+}
+
+func TestIdleSetIsNotRevived(t *testing.T) {
+	fast := spinner.Spinner{Frames: []string{"1", "2"}, FPS: time.Millisecond}
+	s := New(Options{Hold: time.Minute, Spinner: &fast})
+	time.Sleep(20 * time.Millisecond)
+
+	if got := s.Handle(struct{}{}, nil); got != nil {
+		t.Error("an idle Set scheduled a tick")
+	}
+
+	// And a held outcome is not running either.
+	s.Start("a", "syncing")
+	s.Finish("a", nil)
+	time.Sleep(20 * time.Millisecond)
+	if got := s.Handle(struct{}{}, nil); got != nil {
+		t.Error("a held outcome kept the animation alive")
+	}
+}
+
+// A derived entry animates too, so it must be revivable on the same terms.
+func TestDerivedEntryIsRevived(t *testing.T) {
+	fast := spinner.Spinner{Frames: []string{"1", "2"}, FPS: time.Millisecond}
+	s := New(Options{Hold: time.Minute, Spinner: &fast})
+
+	s.Derive(map[string]string{"a": "running"})
+	time.Sleep(20 * time.Millisecond)
+
+	if got := s.Handle(struct{}{}, nil); got == nil {
+		t.Error("a starved derived entry was never revived")
+	}
+}
+
+// --- a progress phase must not outlive the work ---------------------------
+
+// Progress describes a step in flight. Carried into an outcome it misreports
+// the row: a failed sync read "✗ applying", naming a step that had finished,
+// and one waiting for confirmation sat on "applying" after the action had
+// stopped applying anything.
+func TestOutcomeRevertsToTheBaseLabel(t *testing.T) {
+	s := newSet(t, time.Minute)
+	s.Start("a", "syncing")
+	s.Relabel("a", "applying")
+	if st, _ := s.State("a"); st.Label != "applying" {
+		t.Fatalf("Label = %q, want the progress phase while running", st.Label)
+	}
+
+	s.Finish("a", errors.New("boom"))
+	st, _ := s.State("a")
+	if st.Label != "syncing" {
+		t.Errorf("Label = %q after failing, want the base label", st.Label)
+	}
+	if !st.Failed() {
+		t.Error("the outcome was lost with the label")
+	}
+}
+
+func TestHandoffRevertsToTheBaseLabel(t *testing.T) {
+	s := newSet(t, time.Minute)
+	s.Derive(map[string]string{}) // a source of truth exists
+	s.Start("a", "refreshing")
+	s.Relabel("a", "submitting")
+
+	s.Finish("a", nil) // awaiting confirmation, still moving
+	st, ok := s.State("a")
+	if !ok || st.Done {
+		t.Fatalf("state = %+v, %v; want the handoff still running", st, ok)
+	}
+	if st.Label != "refreshing" {
+		t.Errorf("Label = %q while awaiting, want the base label", st.Label)
+	}
+}
+
+// A restart re-bases, so a phase from the previous run cannot survive into the
+// next one's outcome.
+func TestRestartRebasesTheLabel(t *testing.T) {
+	s := newSet(t, time.Minute)
+	s.Start("a", "syncing")
+	s.Relabel("a", "applying")
+	s.Start("a", "deleting")
+	s.Finish("a", errors.New("nope"))
+
+	if st, _ := s.State("a"); st.Label != "deleting" {
+		t.Errorf("Label = %q, want the new run's base", st.Label)
+	}
+}
+
+func TestSettledPredicate(t *testing.T) {
+	pred := Settled("Synced", "OutOfSync")
+	for _, tc := range []struct {
+		in    string
+		label string
+		busy  bool
+	}{
+		{"Synced", "", false},
+		{"OutOfSync", "", false},
+		{"  synced ", "", false},     // case- and space-insensitive
+		{"Syncing", "Syncing", true}, // labelled with the server's word
+		{"Refreshing", "Refreshing", true},
+		{"Terminating", "Terminating", true}, // a status it has never heard of
+		{"", "", false},                      // a blank cell is not work
+		{"\x1b[32mSynced\x1b[0m", "", false},
+	} {
+		label, busy := pred(tc.in)
+		if busy != tc.busy || label != tc.label {
+			t.Errorf("Settled(%q) = (%q, %v), want (%q, %v)", tc.in, label, busy, tc.label, tc.busy)
+		}
+	}
+}
+
+// The reason to prefer Settled: a server that learns a new in-progress status
+// keeps spinning, where a list of busy values would treat it as done.
+func TestSettledAndBusyDisagreeOnAnUnknownStatus(t *testing.T) {
+	const novel = "Terminating"
+	if _, busy := Busy("Syncing")(novel); busy {
+		t.Error("Busy claimed to recognise a status it was not given")
+	}
+	if _, busy := Settled("Synced", "OutOfSync")(novel); !busy {
+		t.Error("Settled treated an unknown status as done")
 	}
 }

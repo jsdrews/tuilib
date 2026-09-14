@@ -388,8 +388,9 @@ type Model struct {
 
 // actionRun is what one in-flight action was launched for.
 type actionRun struct {
-	keys []string
-	busy string
+	keys    []string
+	busy    string
+	receipt string
 }
 
 // runningFor is the run registry as the set the menu wants, expressed in the
@@ -1010,9 +1011,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// keeps behaving exactly as it always has, which matters because it
 		// is a shipped feature with callers of its own.
 		var actCmd tea.Cmd
+		// Captured means the action's function returned. Whether that means the
+		// work is done is the author's to say, through Action.Receipt.
+		receipt := msg.Label + " completed"
 		if msg.Tag != "" {
-			if run, ok := m.running[msg.Tag]; ok && len(run.keys) > 0 {
-				m.stack, actCmd = m.stack.Update(activity.EndMsg{RunID: msg.RunID, Err: msg.Err})
+			if run, ok := m.running[msg.Tag]; ok {
+				if run.receipt != "" {
+					receipt = run.receipt
+				}
+				if len(run.keys) > 0 {
+					m.stack, actCmd = m.stack.Update(activity.EndMsg{RunID: msg.RunID, Err: msg.Err})
+				}
 			}
 			delete(m.running, msg.Tag)
 			// Every gate this run held, not just the one matching its own
@@ -1029,7 +1038,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Err != nil {
 				m.sb.SetError(msg.Label + " failed: " + msg.Err.Error())
 			} else {
-				m.sb.SetInfo(msg.Label + " completed")
+				m.sb.SetInfo(receipt)
 			}
 		}
 		if m.outputEnabled() {
@@ -1037,7 +1046,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A continuation, not a head: one run is one event however many
 			// lines it emitted. Its level is what tints the badge, which is
 			// why stderr lines alone don't.
-			lvl, text := output.LevelInfo, msg.Label+" completed"
+			lvl, text := output.LevelInfo, receipt
 			if msg.Err != nil {
 				lvl, text = output.LevelError, msg.Label+" failed: "+msg.Err.Error()
 			}
@@ -1565,8 +1574,9 @@ func (m *Model) runAction(a action.Action, target string, targets []string) tea.
 
 	tag := action.RunKey(a, target)
 	m.running[tag] = actionRun{
-		keys: append([]string(nil), targets...),
-		busy: a.BusyLabel(),
+		keys:    append([]string(nil), targets...),
+		busy:    a.BusyLabel(),
+		receipt: a.ReceiptText(),
 	}
 	// One gate per target, so Sync on {a, b} and Sync on {b, c} collide on b
 	// alone. Only when the screen supplied keys — without them RunKey is held
