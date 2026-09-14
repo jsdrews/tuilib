@@ -77,6 +77,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -329,6 +330,44 @@ type Options struct {
 	// CellStyle is applied to non-selected rows. Defaults to no style.
 	CellStyle lipgloss.Style
 
+	// ActivityColumn names the column whose cell is replaced by a spinner and
+	// status label while work runs against that row — "Status", "Sync".
+	// Matched on Title, case-insensitively, by prefix, the way a filter's
+	// key:value scope is. A name matching no column (or an ambiguous one)
+	// falls back to a two-cell gutter.
+	//
+	// Unset turns the whole feature off: no gutter, no cost, and the setters
+	// in activity.go are no-ops. Widths never grow to fit the indicator, so
+	// give a column that will carry one enough Width for its longest label.
+	ActivityColumn string
+
+	// Activity configures the row indicators. Theme.Table() pre-fills it with
+	// cell-safe styling; overriding Style with a lipgloss render will punch a
+	// hole in the selected row's background (rule 19).
+	Activity activity.Options
+
+	// ActivityWhen derives in-flight state from a row's own cells, for work
+	// that changes without anyone in this session doing anything — a scheduled
+	// AWX job, an Argo rollout someone else triggered. Evaluated on every
+	// SetKeyedRows; a row that matches spins, a row that stops matching stops,
+	// with no outcome glyph, because the cell's own value already says how it
+	// ended.
+	//
+	//	o.ActivityWhen = func(c table.Row) (string, bool) {
+	//	    return activity.Busy("running", "pending")(c[statusCol])
+	//	}
+	//
+	// A locally-started indicator wins over a derived one, so a poll already
+	// in flight when the user acted cannot wipe their spinner.
+	ActivityWhen func(cells Row) (label string, busy bool)
+
+	// ActivityRevision, when set, is a per-row value that changes whenever the
+	// row's underlying work does — finished_at, resourceVersion, an ETag. A
+	// change observed while the row is not busy flashes a brief mark, which is
+	// the only way to notice work that began and ended between two polls.
+	// Unset, nothing happens.
+	ActivityRevision func(cells Row) string
+
 	// SpinnerStyle styles the loading-state spinner glyph. Pass via
 	// theme.Table() for a sensible default.
 	SpinnerStyle lipgloss.Style
@@ -494,6 +533,19 @@ type Model struct {
 	// cannot slide the anchor onto a different row.
 	markAnchor string
 	markStyle  lipgloss.Style
+
+	// act is per-row in-flight state; actEnabled is Options.ActivityColumn
+	// having been set at all, which is the switch for the whole feature.
+	act        activity.Set
+	actEnabled bool
+	actColName string
+	actWhen    func(Row) (string, bool)
+	actRev     func(Row) string
+
+	// actCmd carries a tick that observe produced inside a setter with no
+	// return value, flushed on the next Update like a pending viewport msg.
+	actCmd tea.Cmd
+
 	visible    []Row
 	visibleIdx []int
 	cursor     int
@@ -604,6 +656,11 @@ func New(opts Options) Model {
 		markable:      opts.Markable,
 		marks:         map[string]bool{},
 		markStyle:     opts.MarkStyle,
+		act:           activity.New(opts.Activity),
+		actEnabled:    opts.ActivityColumn != "",
+		actColName:    opts.ActivityColumn,
+		actWhen:       opts.ActivityWhen,
+		actRev:        opts.ActivityRevision,
 		hScrollbar:    opts.HScrollbar,
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
@@ -658,7 +715,26 @@ func (m Model) Init() tea.Cmd { return nil }
 
 // Update consumes cursor + filter keys; non-key messages flow to the body
 // pane so spinner ticks reach the loading-state animation.
+// Update handles keys, mouse and the messages row activity rides on.
+//
+// The activity pass runs ahead of everything else and outside the key/mouse
+// split, because its messages are neither: a spinner tick and the shell's
+// start/end broadcasts have to land whatever else the table is doing, and a
+// filter that has swallowed the keyboard must not swallow them too.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	var actCmd tea.Cmd
+	if m.actEnabled {
+		actCmd = m.act.Handle(msg, m.holdsKey)
+	}
+	m, cmd := m.update(msg)
+	if actCmd != nil {
+		m.refresh()
+		return m, tea.Batch(cmd, actCmd)
+	}
+	return m, cmd
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if mm, ok := msg.(mouse.Msg); ok {
 		return m.handleMouse(mm)
@@ -978,6 +1054,9 @@ func (m *Model) SetKeyedRows(rows []KeyedRow) {
 	m.rebuildDistinct()
 	m.recomputeWidths()
 	m.applyFilter()
+	// Before the cursor work, so refresh draws the observation this swap
+	// carried rather than the previous one.
+	m.observe()
 
 	if hadKey {
 		for i, src := range m.visibleIdx {
@@ -1663,7 +1742,7 @@ func (m *Model) noteFocus() {
 // single tea.Cmd. Update return paths call this so callers don't need to
 // know which specific subset changed on any given tick.
 func (m *Model) flushMsgs() tea.Cmd {
-	return tea.Batch(m.flushViewport(), m.flushFocus(), m.flushQuery())
+	return tea.Batch(m.flushViewport(), m.flushFocus(), m.flushQuery(), m.flushActivity())
 }
 
 // currentQuery samples the query a remote source should be answering. A
@@ -2019,6 +2098,7 @@ func (m *Model) refresh() {
 		if !resident {
 			cells = m.placeholder
 		}
+		cells = m.withActivity(i, cells)
 		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
 		switch {
 		case i == m.cursor:
@@ -2027,7 +2107,8 @@ func (m *Model) refresh() {
 			// punch a hole in the selected row's background (rule 19).
 			b.WriteString(m.selectedStyle.Render(m.gutterFor(i) + row))
 		case m.markable && m.isMarkedAt(i):
-			b.WriteString(m.markStyle.Render(m.glyphs.Mark) + m.cellStyle.Render(" "+row))
+			b.WriteString(m.markStyle.Render(m.glyphs.Mark) +
+				m.cellStyle.Render(" "+m.actGutterFor(i)+row))
 		default:
 			b.WriteString(m.cellStyle.Render(m.gutterFor(i) + row))
 		}

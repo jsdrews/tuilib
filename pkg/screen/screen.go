@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -189,10 +190,37 @@ func (s Stack) Update(msg tea.Msg) (Stack, tea.Cmd) {
 	if len(s.items) == 0 {
 		return s, nil
 	}
-	top := s.items[len(s.items)-1]
-	top, cmd := top.Update(msg)
-	s.items[len(s.items)-1] = top
-	return s, cmd
+
+	// Input goes to the top screen alone: a covered screen must not act on a
+	// keypress meant for the thing covering it, and must not claim a click.
+	switch msg.(type) {
+	case tea.KeyMsg, mouse.Msg:
+		top := s.items[len(s.items)-1]
+		top, cmd := top.Update(msg)
+		s.items[len(s.items)-1] = top
+		return s, cmd
+	}
+
+	// Everything else — timers, fetch results, the shell's own broadcasts —
+	// goes to every screen on the stack.
+	//
+	// This is rule 21's routing, which pkg/tab already applies to its hidden
+	// bodies for exactly this reason: a self-chained tea.Tick survives only
+	// while the ticks it asks for come back, so a screen that stops receiving
+	// messages loses every timer it owns and has no way to restart them. Top
+	// only, a spinner froze and a pkg/poll stopped polling the moment the user
+	// glanced at the output console, and neither resumed on the way back.
+	//
+	// The cost is that a covered screen keeps working — polling, animating —
+	// which is also the point: come back from the console and the data is
+	// current rather than as stale as the moment you left.
+	cmds := make([]tea.Cmd, 0, len(s.items))
+	for i := range s.items {
+		next, cmd := s.items[i].Update(msg)
+		s.items[i] = next
+		cmds = append(cmds, cmd)
+	}
+	return s, tea.Batch(cmds...)
 }
 
 // SetTheme fans the new theme out to every screen on the stack. A screen

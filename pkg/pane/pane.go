@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -96,7 +97,10 @@ type Pane struct {
 	header   string
 	titlePos BorderPosition
 
-	loading      bool
+	loading bool
+	// lastTick is when the loading spinner last advanced, so a chain broken
+	// from outside can be noticed and restarted. See reviveSpinner.
+	lastTick     time.Time
 	spinner      spinner.Model
 	loadingLabel string
 
@@ -226,6 +230,7 @@ func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 		if !p.loading {
 			return p, nil
 		}
+		p.lastTick = time.Now()
 		var cmd tea.Cmd
 		p.spinner, cmd = p.spinner.Update(msg)
 		return p, cmd
@@ -256,7 +261,31 @@ func (p Pane) Update(msg tea.Msg) (Pane, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	p.viewport, cmd = p.viewport.Update(msg)
-	return p, cmd
+	return p, tea.Batch(cmd, p.reviveSpinner())
+}
+
+// reviveSpinner restarts a loading animation whose chain was broken from
+// outside.
+//
+// The chain lives in tea.Cmds and survives only while the ticks it asked for
+// come back. screen.Stack forwards messages to the top screen only, so a pane
+// left loading underneath a pushed screen — the output console, a child view —
+// has its ticks delivered somewhere that drops them. It then stays frozen
+// after the user returns, because SetLoading only arms a tick when the state
+// changes and the state did not change.
+//
+// Stopping while hidden is right; staying stopped is not. A duplicate chain
+// would be harmless regardless: bubbles tags each tick and rejects one from a
+// superseded chain, so two collapse into one on the next frame.
+func (p *Pane) reviveSpinner() tea.Cmd {
+	if !p.loading {
+		return nil
+	}
+	if fps := p.spinner.Spinner.FPS; fps > 0 && time.Since(p.lastTick) < 4*fps {
+		return nil
+	}
+	p.lastTick = time.Now()
+	return p.spinner.Tick
 }
 
 // View renders the pane: content inside viewport, scrollbar on the right,
@@ -348,6 +377,7 @@ func (p *Pane) SetLoading(b bool) tea.Cmd {
 	}
 	p.loading = b
 	if b {
+		p.lastTick = time.Now()
 		return p.spinner.Tick
 	}
 	return nil

@@ -48,25 +48,38 @@ type Set struct {
 	ColumnSep string
 	// Placeholder fills a row a windowed table has not received yet.
 	Placeholder string
+
+	// ActivityOK / ActivityFail are the outcomes a row shows for a moment
+	// after work against it finishes, in place of the spinner.
+	ActivityOK   string
+	ActivityFail string
+
+	// ActivityChanged marks a row whose work changed somewhere the TUI never
+	// saw running — deliberately neither of the two above, because "this
+	// changed under you" is all that is actually known.
+	ActivityChanged string
 }
 
 // Default is the library's glyph vocabulary — what every component drew
 // before Set existed, so an app that sets nothing sees no change.
 func Default() Set {
 	return Set{
-		Cursor:       "▸",
-		Mark:         "✓",
-		ExpandOpen:   "▾",
-		ExpandClosed: "▸",
-		Rule:         "─",
-		ScrollThumb:  "█",
-		ScrollTrack:  "░",
-		HScrollThumb: "━",
-		HScrollTrack: "─",
-		SortAsc:      "▲",
-		SortDesc:     "▼",
-		ColumnSep:    "│",
-		Placeholder:  "·",
+		Cursor:          "▸",
+		Mark:            "✓",
+		ExpandOpen:      "▾",
+		ExpandClosed:    "▸",
+		Rule:            "─",
+		ScrollThumb:     "█",
+		ScrollTrack:     "░",
+		HScrollThumb:    "━",
+		HScrollTrack:    "─",
+		SortAsc:         "▲",
+		SortDesc:        "▼",
+		ColumnSep:       "│",
+		Placeholder:     "·",
+		ActivityOK:      "✓",
+		ActivityFail:    "✗",
+		ActivityChanged: "•",
 	}
 }
 
@@ -92,6 +105,9 @@ func (s Set) Resolve() Set {
 		{&s.SortDesc, d.SortDesc},
 		{&s.ColumnSep, d.ColumnSep},
 		{&s.Placeholder, d.Placeholder},
+		{&s.ActivityOK, d.ActivityOK},
+		{&s.ActivityFail, d.ActivityFail},
+		{&s.ActivityChanged, d.ActivityChanged},
 	}
 	for _, f := range fields {
 		if *f.dst == "" {

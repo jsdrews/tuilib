@@ -1,11 +1,13 @@
 // Package remote demonstrates the full windowed-source loop: pkg/source
-// coordinating a sparse pkg/table over a simulated paged HTTP API.
+// coordinating a sparse pkg/table over a real paged HTTP API.
 //
-// The "server" holds 5,000 cities and only ever answers one page at a
-// time, after a deliberate 250ms delay so the seams are visible. Nothing
-// about the table's 5,000 rows is real — it holds one 100-row window and
-// draws "·" everywhere else, which is what you see for a moment when you
-// scroll faster than the source answers.
+// The server is demoapi, and it is a genuine http.Handler reached through a
+// genuine *http.Client — the request is built, encoded, routed, answered and
+// decoded. It holds 5,000 applications and only ever answers one page at a
+// time, with a deliberate 250ms of latency so the seams are visible. Nothing
+// about the table's 5,000 rows is real: it holds one 100-row window and draws
+// "·" everywhere else, which is what you see for a moment when you scroll
+// faster than the source answers.
 //
 // The loop, in this file:
 //
@@ -16,29 +18,42 @@
 //	QueryChangedMsg → src.SetQuery          → RequestMsg
 //
 // The filter and the sort are answered by the source, not by the table:
-// FilterRemote / SortRemote mean the table reports what the user asked
-// for and displays whatever comes back. Type "region:europe" and the
-// term arrives at the fake server already resolved to its column.
+// FilterRemote / SortRemote mean the table reports what the user asked for and
+// displays whatever comes back. Type "region:eu-west" and it leaves here as
+// "?region=eu-west" — Term.Title is the resolved column title, so a scoped
+// term becomes a query parameter with no lookup on this side.
+//
+// Two things a slice and a time.Sleep could not demonstrate, and which this
+// crosses a request boundary to reach:
+//
+//   - A request can fail. Press "e" and the next fetch asks the server for a
+//     503; the screen has to handle a status code, which is what a screen
+//     talking to anything real must do.
+//   - Replies can arrive out of order. src.Deliver's generation check drops a
+//     page answering a query the user has already moved past — and it can only
+//     be a real drop if a real slow reply really does land second.
 //
 // Keys: / filters (enter commits — the request goes out then, not per
-// keystroke), [ ] s sort, r refetches the current window, and the usual
-// j/k/g/G/^u/^d scroll through all 5,000 logical rows.
+// keystroke), [ ] s sort, r refetches the current window, e arms one failure,
+// and the usual j/k/g/G/^u/^d scroll through all 5,000 logical rows.
 package remote
 
 import (
+	"encoding/json"
 	"fmt"
-	"sort"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/demoapi"
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
-	"github.com/jsdrews/tuilib/pkg/query"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -48,13 +63,15 @@ import (
 const (
 	pageSize = 100
 	latency  = 250 * time.Millisecond
-	datasetN = 5000
 )
 
 // New returns the remote-source demo screen.
 func New(t theme.Theme) screen.Screen {
 	s := &Screen{
-		db:  newFakeDB(datasetN),
+		// In-process by default, or a running demoapi when TUILIB_DEMO_API is
+		// set — `task demo` does the latter. Nothing below changes either way:
+		// it is the same client interface over the same wire format.
+		api: demoapi.From(demoapi.Options{Seed: 4}),
 		src: source.New(source.Options{PageSize: pageSize}),
 	}
 	s.SetTheme(t)
@@ -64,17 +81,18 @@ func New(t theme.Theme) screen.Screen {
 type Screen struct {
 	t   theme.Theme
 	tab table.Model
-	db  *fakeDB
+	api demoapi.Target
 	src source.Model
 
-	lastReq string
+	lastReq  string
+	failNext bool
 }
 
 func (s *Screen) Title() string         { return "Remote" }
 func (s *Screen) IsCapturingKeys() bool { return s.tab.Filtering() }
 
 func (s *Screen) Init() tea.Cmd {
-	return tea.Batch(s.src.Init(), s.tab.SetLoading(true))
+	return tea.Batch(s.src.Init(), s.tab.SetLoading(true), s.fetchFacets())
 }
 
 func (s *Screen) OnEnter(result any) tea.Cmd {
@@ -90,19 +108,31 @@ func (s *Screen) Layout() layout.Node {
 
 func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
 
-// HelpSections passes the table's own groups through and adds the refetch
-// verb, which is this screen's rather than the table's.
+// HelpSections passes the table's own groups through and adds this screen's
+// verbs, which are not the table's.
 func (s *Screen) HelpSections() []help.Section {
 	return help.SectionsOf(&s.tab, help.Group("Source",
 		key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refetch")),
+		key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "fail next fetch")),
 	))
 }
 
-// fetchedMsg carries one page back from the fake server.
+// fetchedMsg carries one page back from the server.
 type fetchedMsg struct {
 	page source.Page
 	rows []table.Row
 }
+
+// fetchErrMsg is the other outcome, and the one a fake in-process database
+// never had. Gen is carried so a failure answering an abandoned query can be
+// dropped as quietly as a success would be.
+type fetchErrMsg struct {
+	gen int
+	err error
+}
+
+// facetsMsg carries the values the filter can complete against.
+type facetsMsg struct{ regions []string }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
@@ -112,8 +142,8 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	case table.ViewportChangedMsg:
 		return s, s.src.Viewport(m.FirstVisible, m.LastVisible)
 
-	// The user committed a filter or asked for a sort. Same query object
-	// the source will answer, terms already resolved to column titles.
+	// The user committed a filter or asked for a sort. Same query object the
+	// source will answer, terms already resolved to column titles.
 	case table.QueryChangedMsg:
 		s.tab.SetCursor(0)
 		return s, tea.Batch(s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc), s.tab.SetLoading(true))
@@ -128,13 +158,33 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 			return s, nil // answers a query the user has already moved past
 		}
 		s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total)
-		s.tab.SetTitle(fmt.Sprintf("Cities — %s", s.lastReq))
+		s.tab.SetTitle(fmt.Sprintf("Applications — %s", s.lastReq))
 		return s, s.tab.SetLoading(false)
+
+	case fetchErrMsg:
+		// Deliver is the arbiter for failures too: a 503 answering a query the
+		// user has moved past is as stale as a page would be, and reporting it
+		// would put an error on screen for something nobody is waiting for.
+		if !s.src.Deliver(source.Page{Gen: m.gen}) {
+			return s, nil
+		}
+		return s, tea.Batch(s.tab.SetLoading(false), app.ErrorOf(m.err))
+
+	case facetsMsg:
+		// The source knows every region; the window on screen does not. Feeding
+		// completions from resident rows would offer answers that are wrong
+		// rather than merely incomplete.
+		s.tab.SetDistinct(1, m.regions)
+		return s, nil
 	}
 
 	if km, ok := msg.(tea.KeyMsg); ok && !s.tab.IsCapturingKeys() {
-		if km.String() == "r" {
+		switch km.String() {
+		case "r":
 			return s, tea.Batch(s.src.Refresh(), s.tab.SetLoading(true))
+		case "e":
+			s.failNext = true
+			return s, tea.Batch(app.Info("next fetch will fail"), s.src.Refresh(), s.tab.SetLoading(true))
 		}
 	}
 
@@ -143,17 +193,92 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	return s, cmd
 }
 
-// fetch is an ordinary tea.Cmd. Swap the body for an http.Client call and
-// nothing else in this file changes.
+// fetch is an ordinary tea.Cmd making an ordinary HTTP request.
 func (s *Screen) fetch(q source.Query) tea.Cmd {
-	db := s.db
+	u := url.Values{}
+	u.Set("offset", strconv.Itoa(q.Offset))
+	u.Set("limit", strconv.Itoa(q.Limit))
+	u.Set("latency", latency.String())
+	if q.Sort != "" {
+		u.Set("sort", q.Sort)
+		if q.Desc {
+			u.Set("desc", "true")
+		}
+	}
+	// A scoped term is already resolved to its column, so it becomes a
+	// parameter directly; a bare one has no column to name and rides ?q=.
+	var bare []string
+	for _, t := range q.Terms {
+		if t.Title != "" && t.Regex == nil {
+			u.Set(strings.ToLower(t.Title), t.Value)
+			continue
+		}
+		bare = append(bare, t.Raw)
+	}
+	if len(bare) > 0 {
+		u.Set("q", strings.Join(bare, " "))
+	}
+	if s.failNext {
+		u.Set("fail", "503")
+		s.failNext = false
+	}
+
+	api, gen := s.api, q.Gen
 	return func() tea.Msg {
-		time.Sleep(latency)
-		rows, total := db.page(q)
+		resp, err := api.Client.Get(api.URL("/apps?" + u.Encode()))
+		if err != nil {
+			return fetchErrMsg{gen: gen, err: err}
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			var e struct {
+				Error string `json:"error"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&e)
+			return fetchErrMsg{gen: gen, err: fmt.Errorf("fetch page: %s: %s", resp.Status, e.Error)}
+		}
+
+		var body struct {
+			Total  int `json:"total"`
+			Offset int `json:"offset"`
+			Rows   []struct {
+				Name   string `json:"name"`
+				Region string `json:"region"`
+				Sync   string `json:"sync"`
+				Health string `json:"health"`
+			} `json:"rows"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return fetchErrMsg{gen: gen, err: fmt.Errorf("decode page: %w", err)}
+		}
+
+		rows := make([]table.Row, len(body.Rows))
+		for i, a := range body.Rows {
+			rows[i] = table.Row{a.Name, a.Region, a.Sync, a.Health}
+		}
 		return fetchedMsg{
-			page: source.Page{Gen: q.Gen, Offset: q.Offset, Count: len(rows), Total: total},
+			page: source.Page{Gen: gen, Offset: body.Offset, Count: len(rows), Total: body.Total},
 			rows: rows,
 		}
+	}
+}
+
+func (s *Screen) fetchFacets() tea.Cmd {
+	api := s.api
+	return func() tea.Msg {
+		resp, err := api.Client.Get(api.URL("/apps/facets?field=Region"))
+		if err != nil {
+			return fetchErrMsg{err: err}
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Values []string `json:"values"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return fetchErrMsg{err: err}
+		}
+		return facetsMsg{regions: body.Values}
 	}
 }
 
@@ -169,17 +294,23 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	rows := s.tab.Rows()
 
 	opts := t.Table()
-	opts.Title = "Cities"
+	opts.Title = "Applications"
+	if s.api.Live {
+		// Worth saying on the border: against a running server this screen and
+		// the activity demo are looking at one world, and a curl can change it
+		// underneath them.
+		opts.Title = "Applications · live"
+	}
 	opts.Filterable = true
 	opts.FilterMode = table.FilterRemote
 	opts.SortMode = table.SortRemote
-	// Fixed and Flex widths only: content-auto would reflow the columns
-	// every time a window swapped underneath the user.
+	// Fixed and Flex widths only: content-auto would reflow the columns every
+	// time a window swapped underneath the user.
 	opts.Columns = []table.Column{
-		{Title: "Name", Width: 18, Flex: 2, Sortable: true},
+		{Title: "Name", Width: 22, Flex: 2, Sortable: true},
 		{Title: "Region", Width: 12, Sortable: true},
-		{Title: "Population", Width: 12, Align: lipgloss.Right, Sortable: true},
-		{Title: "Status", Width: 10},
+		{Title: "Sync", Width: 12, Sortable: true},
+		{Title: "Health", Width: 13},
 	}
 	s.tab = table.New(opts)
 
@@ -189,8 +320,6 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	s.tab.SetValue(val)
 	s.tab.SetSort(sortCol, sortDesc)
 	s.tab.SetCursor(cursor)
-	// The source knows every region; the window on screen doesn't.
-	s.tab.SetDistinct(1, regions)
 }
 
 func describe(q source.Query) string {
@@ -206,75 +335,4 @@ func describe(q source.Query) string {
 		parts = append(parts, "sort "+q.Sort+dir)
 	}
 	return strings.Join(parts, " · ")
-}
-
-// ---- the "server" ----
-
-var regions = []string{"Africa", "Americas", "Asia", "Europe", "Oceania"}
-
-var statuses = []string{"Healthy", "Degraded", "Down"}
-
-type city struct {
-	name   string
-	region string
-	pop    int
-	status string
-}
-
-type fakeDB struct{ all []city }
-
-func newFakeDB(n int) *fakeDB {
-	out := make([]city, n)
-	for i := range out {
-		out[i] = city{
-			name:   fmt.Sprintf("City %04d", i),
-			region: regions[i%len(regions)],
-			pop:    (i*7919)%9_000_000 + 50_000,
-			status: statuses[i%len(statuses)],
-		}
-	}
-	return &fakeDB{all: out}
-}
-
-// page answers a Query the way a REST endpoint would: filter, then sort,
-// then slice. Note it filters with pkg/query — the same parse the table
-// used — so "region:europe" needs no translation on this side either.
-func (d *fakeDB) page(q source.Query) ([]table.Row, int) {
-	matched := make([]city, 0, len(d.all))
-	for _, c := range d.all {
-		if query.MatchAll(cells(c), q.Terms) {
-			matched = append(matched, c)
-		}
-	}
-	if q.Sort != "" {
-		sortCities(matched, q.Sort, q.Desc)
-	}
-	total := len(matched)
-	start := min(q.Offset, total)
-	end := min(start+q.Limit, total)
-	rows := make([]table.Row, 0, end-start)
-	for _, c := range matched[start:end] {
-		rows = append(rows, cells(c))
-	}
-	return rows, total
-}
-
-func cells(c city) table.Row {
-	return table.Row{c.name, c.region, fmt.Sprintf("%d", c.pop), c.status}
-}
-
-func sortCities(cs []city, col string, desc bool) {
-	less := func(i, j int) bool { return cs[i].name < cs[j].name }
-	switch col {
-	case "Region":
-		less = func(i, j int) bool { return cs[i].region < cs[j].region }
-	case "Population":
-		less = func(i, j int) bool { return cs[i].pop < cs[j].pop }
-	}
-	sort.SliceStable(cs, func(i, j int) bool {
-		if desc {
-			return less(j, i)
-		}
-		return less(i, j)
-	})
 }

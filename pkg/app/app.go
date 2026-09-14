@@ -21,6 +21,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/action"
+	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/config"
 	"github.com/jsdrews/tuilib/pkg/confirm"
@@ -358,20 +359,62 @@ type Model struct {
 	// layout.Sized over a value field would place a copy that is discarded
 	// when View returns, and the overlay would never hit-test (see
 	// placeChrome for the same problem in the chrome).
-	actionsKey key.Binding
-	actOpts    action.Options
-	menu       *action.Menu
-	menuUp     bool
-	conf       *confirm.Model
-	confUp     bool
-	pendingAct action.Action
-	pendingTgt string
+	actionsKey  key.Binding
+	actOpts     action.Options
+	menu        *action.Menu
+	menuUp      bool
+	conf        *confirm.Model
+	confUp      bool
+	pendingAct  action.Action
+	pendingTgt  string
+	pendingTgts []string
 
-	// running maps a live action run's Tag (an action.RunKey) to nothing in
-	// particular — it is a set. The shell owns it because it launches the
-	// action, so it holds both the RunKey and the run at once; a screen
-	// doing this has to bridge the two halves by hand.
-	running map[string]bool
+	// running maps a live action run's Tag (an action.RunKey) to what it was
+	// launched for. The shell owns it because it launches the action, so it
+	// holds both the RunKey and the run at once; a screen doing this has to
+	// bridge the two halves by hand.
+	//
+	// It carries a value rather than being a bare set because CaptureStarted
+	// arrives a tick after the launch and has to ask what its Tag was for:
+	// the RunID does not exist until runner.GoWith's command actually runs,
+	// so the row indicators cannot be broadcast at the launch site.
+	running map[string]actionRun
+
+	// busyKeys maps a target key to the Tag holding it, for the per-key
+	// Exclusive gate. Separate from running because the gate is per key while
+	// the release is per run.
+	busyKeys map[string]string
+}
+
+// actionRun is what one in-flight action was launched for.
+type actionRun struct {
+	keys    []string
+	busy    string
+	receipt string
+}
+
+// runningFor is the run registry as the set the menu wants, expressed in the
+// keys the menu will actually ask about.
+//
+// Derived rather than kept alongside, so there is one source of truth for what
+// is in flight. The second loop is the per-target gate: an action already
+// running against any of the keys this menu is about is unavailable, even
+// though it was launched for a different selection — and the menu, which asks
+// under RunKey(a, Set.Target), would never find it otherwise.
+func (m Model) runningFor(set action.Set) map[string]bool {
+	out := make(map[string]bool, len(m.running))
+	for tag := range m.running {
+		out[tag] = true
+	}
+	for _, a := range set.Actions {
+		for _, k := range set.Targets {
+			if _, held := m.busyKeys[action.RunKey(a, k)]; held {
+				out[action.RunKey(a, set.Target)] = true
+				break
+			}
+		}
+	}
+	return out
 }
 
 // actionsEnabled reports whether the action menu exists for this app.
@@ -452,7 +495,8 @@ func New(opts Options) Model {
 		m.actOpts = mergeActionOptions(opts.Actions, t)
 		menu := action.New(m.actOpts)
 		m.menu = &menu
-		m.running = map[string]bool{}
+		m.running = map[string]actionRun{}
+		m.busyKeys = map[string]string{}
 	}
 	if opts.OutputKey.Keys() != nil {
 		m.outputKey = opts.OutputKey
@@ -534,7 +578,7 @@ func (m *Model) retheme() {
 		menu := action.New(m.actOpts)
 		m.menu = &menu
 		m.menu.SetActions(set)
-		m.menu.SetRunning(m.running)
+		m.menu.SetRunning(m.runningFor(m.menu.Set()))
 		m.menu.SetCursor(cursor)
 	}
 	if m.outputEnabled() {
@@ -749,11 +793,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case action.ChosenMsg:
 		m.closeOverlay()
 		if a.Action.Confirm != "" {
-			m.armConfirm(a.Action, a.Target)
+			m.armConfirm(a.Action, a.Target, a.Targets)
 			m.apply()
 			return m, nil
 		}
-		cmd := m.runAction(a.Action, a.Target)
+		cmd := m.runAction(a.Action, a.Target, a.Targets)
 		m.apply()
 		return m, cmd
 
@@ -767,9 +811,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// receiving its own results — the shell claims these only while it
 		// is the one showing the dialog.
 		if m.confUp {
-			act, tgt := m.pendingAct, m.pendingTgt
+			act, tgt, tgts := m.pendingAct, m.pendingTgt, m.pendingTgts
 			m.closeOverlay()
-			cmd := m.runAction(act, tgt)
+			cmd := m.runAction(act, tgt, tgts)
 			m.apply()
 			return m, cmd
 		}
@@ -908,6 +952,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runner.CaptureStarted:
+		// Row indicators start here rather than at the launch site, because
+		// the RunID does not exist until runner.GoWith's command actually
+		// runs — the same fact that made Tag necessary. Hanging it here also
+		// puts the spinner and the log head in the same frame.
+		var startCmd tea.Cmd
+		if run, ok := m.running[msg.Tag]; ok && len(run.keys) > 0 {
+			m.stack, startCmd = m.stack.Update(activity.StartMsg{
+				Keys:  run.keys,
+				Label: run.busy,
+				RunID: msg.RunID,
+			})
+		}
 		// The badge counts this now rather than on completion: a five-minute
 		// build that signals nothing until it finishes turns "keep working
 		// while it runs" into "keep working, blind."
@@ -922,7 +978,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				RunID:  msg.RunID,
 			})
 		}
-		return m, m.forwardCapture(msg)
+		return m, tea.Batch(startCmd, m.forwardCapture(msg))
+
+	case runner.CaptureStatus:
+		// A status is a UI state change, not news, so it never enters the log:
+		// a run reporting progress ten times would otherwise post ten records
+		// into an event the badge counts as one.
+		var cmd tea.Cmd
+		if run, ok := m.running[msg.Tag]; ok && len(run.keys) > 0 {
+			m.stack, cmd = m.stack.Update(activity.UpdateMsg{
+				RunID: msg.RunID,
+				Label: msg.Text,
+			})
+		}
+		return m, tea.Batch(cmd, m.forwardCapture(msg))
 
 	case runner.CapturedLine:
 		if m.outputEnabled() {
@@ -941,15 +1010,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// posting the receipt are scoped to those: a bare runner.Capture
 		// keeps behaving exactly as it always has, which matters because it
 		// is a shipped feature with callers of its own.
+		var actCmd tea.Cmd
+		// Captured means the action's function returned. Whether that means the
+		// work is done is the author's to say, through Action.Receipt.
+		receipt := msg.Label + " completed"
 		if msg.Tag != "" {
+			if run, ok := m.running[msg.Tag]; ok {
+				if run.receipt != "" {
+					receipt = run.receipt
+				}
+				if len(run.keys) > 0 {
+					m.stack, actCmd = m.stack.Update(activity.EndMsg{RunID: msg.RunID, Err: msg.Err})
+				}
+			}
 			delete(m.running, msg.Tag)
+			// Every gate this run held, not just the one matching its own
+			// RunKey: an Exclusive verb left held on a row that finished is
+			// permanently unavailable there.
+			for k, tag := range m.busyKeys {
+				if tag == msg.Tag {
+					delete(m.busyKeys, k)
+				}
+			}
 			if m.menuUp {
-				m.menu.SetRunning(m.running)
+				m.menu.SetRunning(m.runningFor(m.menu.Set()))
 			}
 			if msg.Err != nil {
 				m.sb.SetError(msg.Label + " failed: " + msg.Err.Error())
 			} else {
-				m.sb.SetInfo(msg.Label + " completed")
+				m.sb.SetInfo(receipt)
 			}
 		}
 		if m.outputEnabled() {
@@ -957,7 +1046,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A continuation, not a head: one run is one event however many
 			// lines it emitted. Its level is what tints the badge, which is
 			// why stderr lines alone don't.
-			lvl, text := output.LevelInfo, msg.Label+" completed"
+			lvl, text := output.LevelInfo, receipt
 			if msg.Err != nil {
 				lvl, text = output.LevelError, msg.Label+" failed: "+msg.Err.Error()
 			}
@@ -968,7 +1057,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				RunID:  msg.RunID,
 			})
 		}
-		return m, m.forwardCapture(msg)
+		return m, tea.Batch(actCmd, m.forwardCapture(msg))
 
 	case tea.KeyMsg:
 		if m.overlayUp() {
@@ -1402,7 +1491,7 @@ func (m *Model) openMenu(x, y int) bool {
 		return false
 	}
 	m.menu.SetActions(set)
-	m.menu.SetRunning(m.running)
+	m.menu.SetRunning(m.runningFor(set))
 	if x < 0 {
 		m.menu.Center()
 	} else {
@@ -1415,7 +1504,7 @@ func (m *Model) openMenu(x, y int) bool {
 // closeOverlay drops whatever is on top of the body.
 func (m *Model) closeOverlay() {
 	m.menuUp, m.confUp = false, false
-	m.pendingAct, m.pendingTgt = action.Action{}, ""
+	m.pendingAct, m.pendingTgt, m.pendingTgts = action.Action{}, "", nil
 }
 
 // updateOverlay routes one message to the menu or its confirm modal, and
@@ -1452,8 +1541,8 @@ func (m *Model) updateOverlay(msg tea.Msg) tea.Cmd {
 
 // armConfirm puts the yes/no modal between the pick and the run, so a
 // destructive verb states what it is about to do before it does it.
-func (m *Model) armConfirm(a action.Action, target string) {
-	m.pendingAct, m.pendingTgt = a, target
+func (m *Model) armConfirm(a action.Action, target string, targets []string) {
+	m.pendingAct, m.pendingTgt, m.pendingTgts = a, target, targets
 	opts := m.theme().Confirm()
 	opts.Title = "confirm"
 	opts.Message = a.Confirm
@@ -1473,7 +1562,7 @@ func (m *Model) armConfirm(a action.Action, target string) {
 // and everything the action writes lands underneath it. The badge counts
 // events, so logging the invocation separately would make every action report
 // twice (rule 17).
-func (m *Model) runAction(a action.Action, target string) tea.Cmd {
+func (m *Model) runAction(a action.Action, target string, targets []string) tea.Cmd {
 	if a.Do != nil {
 		m.logEntry("", "action: "+a.Label, "", output.LevelInfo)
 		return a.Do()
@@ -1484,7 +1573,17 @@ func (m *Model) runAction(a action.Action, target string) tea.Cmd {
 	}
 
 	tag := action.RunKey(a, target)
-	m.running[tag] = true
+	m.running[tag] = actionRun{
+		keys:    append([]string(nil), targets...),
+		busy:    a.BusyLabel(),
+		receipt: a.ReceiptText(),
+	}
+	// One gate per target, so Sync on {a, b} and Sync on {b, c} collide on b
+	// alone. Only when the screen supplied keys — without them RunKey is held
+	// against the display label and the old semantics stand.
+	for _, k := range targets {
+		m.busyKeys[action.RunKey(a, k)] = tag
+	}
 
 	detail := a.Label
 	if target != "" {

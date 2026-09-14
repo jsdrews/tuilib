@@ -236,6 +236,26 @@ type CapturedLine struct {
 	stream *stream
 }
 
+// CaptureStatus reports a status change from inside a Go run — a one-line
+// summary of what it is doing right now, as opposed to a line of its output.
+//
+// It exists because the two are different kinds of news and want different
+// destinations: output accumulates in a log, while a status *replaces* the
+// last one and belongs on whatever the run is acting on. pkg/runner stays
+// neutral about which is which, exactly as it does for CapturedLine; the app
+// shell is what turns this into a row indicator.
+//
+// Only a Go run produces these, through activity.Progress on the writer it was
+// handed. A subprocess has no way to say anything but bytes.
+type CaptureStatus struct {
+	RunID int64
+	Label string
+	Tag   string
+	Text  string
+
+	stream *stream
+}
+
 // Captured is delivered once, after the last CapturedLine, when the
 // subprocess has exited. Err is the *exec.ExitError for a non-zero exit, or
 // the start error when the process never ran.
@@ -257,6 +277,8 @@ func Next(msg tea.Msg) tea.Cmd {
 	case CaptureStarted:
 		return m.stream.next()
 	case CapturedLine:
+		return m.stream.next()
+	case CaptureStatus:
 		return m.stream.next()
 	}
 	return nil
@@ -333,6 +355,15 @@ func (s *stream) line(text string, stderr bool) {
 	s.ch <- CapturedLine{
 		RunID: s.runID, Label: s.label, Tag: s.tag,
 		Text: text, Stderr: stderr, stream: s,
+	}
+}
+
+// status pushes one status change, through the same channel and the same
+// backpressure as output.
+func (s *stream) status(text string) {
+	s.ch <- CaptureStatus{
+		RunID: s.runID, Label: s.label, Tag: s.tag,
+		Text: text, stream: s,
 	}
 }
 

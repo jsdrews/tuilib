@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -74,6 +75,24 @@ type Options struct {
 	// The cursor row is drawn as one styled run instead, so its highlight
 	// cannot be broken mid-row (rule 19).
 	MarkStyle lipgloss.Style
+
+	// Activity configures the per-row spinner and status label shown while
+	// work runs against a keyed item — see activity.go. Theme.List() pre-fills
+	// it. Nothing to opt into: the badge occupies no space until something is
+	// running.
+	Activity activity.Options
+
+	// ActivityWhen derives in-flight state from an item's own text, for work
+	// that changes without anyone in this session doing anything. Evaluated on
+	// every SetKeyedItems; an item that matches spins, one that stops matching
+	// stops. A locally-started indicator wins over a derived one.
+	ActivityWhen func(item string) (label string, busy bool)
+
+	// ActivityRevision, when set, is a per-item value that changes whenever
+	// the item's underlying work does. A change observed while the item is not
+	// busy flashes a brief mark — the only way to notice work that began and
+	// ended between two polls. Unset, nothing happens.
+	ActivityRevision func(item string) string
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the list
 	// is in its loading state (see SetLoading). Pass via theme.List() for
@@ -244,6 +263,15 @@ type Model struct {
 	markAnchor string
 	markStyle  lipgloss.Style
 
+	// act is per-row in-flight state, keyed like the marks beside it.
+	act     activity.Set
+	actWhen func(string) (string, bool)
+	actRev  func(string) string
+
+	// actCmd carries a tick that observe produced inside a setter with no
+	// return value, flushed on the next Update.
+	actCmd tea.Cmd
+
 	keys Keys
 
 	// token is this list's stable identity for focus requests. Update takes
@@ -276,6 +304,9 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
+		act:                activity.New(opts.Activity),
+		actWhen:            opts.ActivityWhen,
+		actRev:             opts.ActivityRevision,
 		glyphs:             opts.Glyphs.Resolve(),
 		token:              focus.NewToken(),
 		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
@@ -368,16 +399,18 @@ func (m Model) halfPage() int {
 func (m *Model) refresh() {
 	var b strings.Builder
 	for i, it := range m.visible {
+		var row string
 		switch {
 		case i == m.cursor:
 			// One styled run over the whole row: a nested mark style would
 			// close the highlight at its first reset (rule 19).
-			b.WriteString(m.selectedStyle.Render(m.prefixFor(i) + it))
+			row = m.selectedStyle.Render(m.prefixFor(i) + it)
 		case m.markable && m.isMarkedAt(i):
-			b.WriteString(" " + m.markStyle.Render(m.glyphs.Mark) + " " + it)
+			row = " " + m.markStyle.Render(m.glyphs.Mark) + " " + it
 		default:
-			b.WriteString(m.prefixFor(i) + it)
+			row = m.prefixFor(i) + it
 		}
+		b.WriteString(m.withBadge(i, row))
 		b.WriteString("\n")
 	}
 	if m.filterable {
@@ -420,18 +453,19 @@ func (m *Model) noteFocus() {
 // (or nil when nothing has changed) and clears the pending flag. Every
 // Update return path batches this into its returned cmd.
 func (m *Model) flushMsgs() tea.Cmd {
+	act := m.flushActivity()
 	if !m.focusPending {
-		return nil
+		return act
 	}
 	m.focusPending = false
 	m.focusInit = true
 	if m.focusIdx < 0 {
-		return func() tea.Msg { return SelectedChangedMsg{Empty: true} }
+		return tea.Batch(act, func() tea.Msg { return SelectedChangedMsg{Empty: true} })
 	}
 	idx, item := m.focusIdx, m.focusItem
-	return func() tea.Msg {
+	return tea.Batch(act, func() tea.Msg {
 		return SelectedChangedMsg{Index: idx, Item: item}
-	}
+	})
 }
 
 // Init satisfies tea.Model — nothing to kick off.
@@ -596,7 +630,22 @@ func (m *Model) moveCursor(delta int) {
 // focused, every key is forwarded to it. Mouse events inside the list's rect
 // move the cursor and request focus. Non-key messages are forwarded to the
 // body pane so spinner ticks reach the loading-state animation.
+// Update handles keys, mouse and the messages row activity rides on.
+//
+// The activity pass runs first and outside the key/mouse split, because its
+// messages are neither: a spinner tick and the shell's start/end broadcasts
+// have to land whatever else the list is doing, and a focused filter that has
+// swallowed the keyboard must not swallow them too.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if actCmd := m.act.Handle(msg, m.holdsKey); actCmd != nil {
+		m, cmd := m.update(msg)
+		m.refresh()
+		return m, tea.Batch(cmd, actCmd)
+	}
+	return m.update(msg)
+}
+
+func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if mm, ok := msg.(mouse.Msg); ok {
 		return m.handleMouse(mm)
 	}
@@ -823,6 +872,9 @@ func (m *Model) SetKeyedItems(items []KeyedItem) {
 		m.itemKeys[i] = it.Key
 	}
 	m.applyFilter()
+	// Before the cursor work, so refresh draws the observation this swap
+	// carried rather than the previous one.
+	m.observe()
 	if hadKey {
 		for i, src := range m.visibleIdx {
 			if src >= 0 && src < len(m.itemKeys) && m.itemKeys[src] == prevKey {
