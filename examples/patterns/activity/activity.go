@@ -1,48 +1,51 @@
 // Package activity demonstrates per-row in-flight state: the spinner and
-// status label a row shows while something is working on it.
+// status label a row shows while the server says something is working on it.
 //
 // It talks to demoapi over HTTP — a real handler, a real client, real request
 // boundaries — so the timings below are the server's, not a sleep in this
 // file's goroutine.
 //
-// Three reasons a row's state changes, all of which have to look right:
+// # The feature is four lines, and they are all in SetTheme
 //
-//  1. **You did it.** Press "a" and pick Sync. The row starts spinning before
-//     the POST has been answered, because the screen put its Selection() into
-//     action.Set.Targets and the shell broadcast the verb's Busy label against
-//     those keys. This screen writes one extra line to get that — Targets —
-//     and no wiring at all.
+//	o.ActivityColumn = "Sync"
+//	settled := activity.Settled(demoapi.SyncSynced, demoapi.SyncOutOfSync)
+//	o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
 //
-//     Mark several rows first ("x", or "A" for all of them) and one run drives
-//     all of them: one log event, one statusbar receipt, every marked row
-//     spinning. They finish together, because a run has one outcome — retiring
-//     them as each target lands is the refinement docs/activity.md decision 11
-//     deferred until something needed it.
+// demoapi starts a scheduled sync every few seconds. Nobody pressed anything;
+// those rows spin because the poll brought back "Syncing" and the predicate
+// recognised it as work. That is the entire mechanism. A read-only dashboard
+// — a poll, a keyed swap and a predicate — needs nothing else in this file.
 //
-//  2. **Something else did it.** demoapi fires a scheduled sync every few
-//     seconds. Nobody pressed anything, so nothing was broadcast; the row
-//     spins because Options.ActivityWhen recognises "Syncing" in the data the
-//     poll brought back. A read-only dashboard gets this and needs no actions.
+// # So what is everything else doing here
 //
-//  3. **It happened while nobody was looking.** Some of the server's work
-//     finishes between two polls, so the TUI never observes it running. Those
-//     rows flash "•" instead, driven by Options.ActivityRevision over a hidden
-//     column carrying the server's revision — the only way to notice a change
-//     the sampled data carries no other evidence of.
+// The action menu, marking, the console streaming and the generation-stamped
+// fetch are composition *around* the indicator rather than part of it. They
+// are here because this is the screen shape the feature exists for, and
+// because two of them are easy to get wrong in ways that break it:
+//
+//   - The rows are keyed (SetKeyedRows), which activity requires for the same
+//     reason marking does — a refresh reorders the set constantly, and an
+//     indicator held by index would drift onto a neighbour.
+//   - Replies are stamped and stale ones dropped. Over a real network they do
+//     arrive out of order, and a stale page painted over a newer one is the
+//     most common way an indicator appears to flap.
 //
 // # The case worth watching for
 //
-// Refresh is instant server-side: it is done long before the next poll. Press
-// it and the row keeps spinning anyway, until the poll lands. That is not a
-// lie about the work — it is the truth about what the TUI knows. The
-// alternative, clearing the moment the request returns, shows a tick and then
-// a cell reading exactly as it did before the user acted, which is
-// indistinguishable from nothing having happened.
+// Press "a" and pick Sync, and the row does not move. It keeps saying
+// OutOfSync for up to a poll interval, and only then — when the server has
+// been asked and has answered — does it start spinning "Syncing". Refresh is
+// more pointed still: the server finishes it long before the next poll, so it
+// may produce no visible indicator at all.
 //
-// Sync is the opposite: the server takes four seconds, so the poll catches it
-// and the local "syncing" hands over to the data's own "Syncing" mid-flight.
-// The action itself returns earlier than that, having streamed the job's log
-// into the console — so the handoff really is covering a gap.
+// That gap is the honest cost of deriving state from data, and it is a
+// deliberate trade rather than a bug. The TUI does not know the row is busy
+// until it is told, and the alternative — a client-side claim that the row is
+// working because the user pressed something — is the layer docs/activity.md
+// removed, along with the six mechanisms it took to keep that claim from
+// disagreeing with the server. Open question 2 there is whether a dispatching
+// verb should show anything in the meantime; Action.Receipt ("Sync requested"
+// in the statusbar) is what covers it today.
 //
 // # What this screen does not contain
 //
@@ -83,13 +86,14 @@ const (
 	appCount     = 6
 )
 
-// Column order. Rev is hidden: it is the revision ActivityRevision watches,
-// and the status worth watching is not always the status worth showing.
+// Column order. colSync is the one the predicate reads and the one the
+// indicator replaces; they are the same column here, but they need not be —
+// ActivityWhen takes the whole row precisely so the status worth watching can
+// be a field the table never shows.
 const (
 	colName = iota
 	colSync
 	colHealth
-	colRev
 )
 
 // appRow is one row as the server reports it.
@@ -98,7 +102,6 @@ type appRow struct {
 	Name   string `json:"name"`
 	Sync   string `json:"sync"`
 	Health string `json:"health"`
-	Rev    int64  `json:"rev"`
 }
 
 // Screen is a table over demoapi, plus a poll. Everything about the indicators
@@ -149,10 +152,9 @@ type fetchedMsg struct {
 	err  error
 }
 
-// Update forwards everything to both the table and the poll. The activity
-// broadcasts the shell sends arrive here like any other message and reach the
-// table because rule 6 says forward all of them — which is the whole of this
-// screen's involvement in the feature.
+// Update forwards everything to both the table and the poll. Nothing here
+// touches the indicators: the table observes its own rows when SetKeyedRows
+// hands them over, and animates them off the spinner ticks rule 6 delivers.
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmds []tea.Cmd
 	cmds = append(cmds, s.poll.Update(msg))
@@ -221,7 +223,6 @@ func (s *Screen) SetTheme(t theme.Theme) {
 		// would show the glyph and swallow the word.
 		{Title: "Sync", Width: 14},
 		{Title: "Health", Width: 13},
-		{Title: "Rev", Hidden: true},
 	}
 
 	// The Sync cell is what changes: Synced → ⠹ syncing → Synced reads as one
@@ -242,9 +243,6 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	settled := activity.Settled(demoapi.SyncSynced, demoapi.SyncOutOfSync)
 	o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
 
-	// And for work it never even saw running.
-	o.ActivityRevision = func(c table.Row) string { return c[colRev] }
-
 	s.table = table.New(o)
 	s.table.SetKeyedRows(s.rows())
 	if value != "" {
@@ -258,52 +256,17 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	_ = s.table.SetActivityState(act)
 }
 
-// working describes what is in flight and, of that, how much this session did
-// not start — which is the whole point of deriving state from the data and is
-// otherwise indistinguishable on screen, since both layers use the server's
-// vocabulary.
-//
-// An entry started by the shell's broadcast carries the run's id; one built by
-// ActivityWhen from a poll result carries none. That is what separates them.
-// (A screen calling SetActivity directly would also report no run, which is
-// why this reads as "not started by an action" rather than "from the server".)
 // title is the pane's border text: what this is, whether it is talking to a
-// real server, and what is in flight.
+// real server, and how much of it the last poll said was working.
 func (s *Screen) title() string {
 	name := "applications"
 	if s.api.Live {
 		name += " · live"
 	}
-	if w := s.working(); w != "" {
-		name += " · " + w
+	if n := s.table.ActivityCount(); n > 0 {
+		name += fmt.Sprintf(" · %d working", n)
 	}
 	return name
-}
-
-func (s *Screen) working() string {
-	st := s.table.ActivityState()
-	var mine, theirs int
-	for _, a := range s.apps {
-		e, ok := st.State(a.ID)
-		if !ok || e.Done {
-			continue
-		}
-		if e.RunID != 0 {
-			mine++
-		} else {
-			theirs++
-		}
-	}
-	switch {
-	case mine+theirs == 0:
-		return ""
-	case theirs == 0:
-		return fmt.Sprintf("%d working", mine)
-	case mine == 0:
-		return fmt.Sprintf("%d working, from the server", theirs)
-	default:
-		return fmt.Sprintf("%d working, %d from the server", mine+theirs, theirs)
-	}
 }
 
 // rows are keyed by the server's id, which is what lets an indicator stay on
@@ -318,7 +281,6 @@ func (s *Screen) rows() []table.KeyedRow {
 				a.Name,
 				a.Sync,
 				healthCell(a.Health),
-				strconv.FormatInt(a.Rev, 10),
 			},
 		}
 	}
@@ -390,9 +352,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Sync",
 				Desc:     "reconcile to git",
 				Disabled: busy,
-				// The server's own word, so the local indicator and the derived
-				// one that replaces it read identically.
-				Busy: demoapi.SyncSyncing,
 				// This verb dispatches: it returns once the server has accepted
 				// the operation, which is well before the server has finished
 				// it. "Sync completed" would claim otherwise while the row is
@@ -410,7 +369,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Refresh",
 				Desc:     "re-read from git",
 				Disabled: busy,
-				Busy:     demoapi.SyncRefresh,
 				Receipt:  "Refresh requested",
 				Multi:    true,
 				// Returns almost at once, and the server is done before the
@@ -423,7 +381,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Fail a sync",
 				Desc:     "see the failure path",
 				Disabled: busy,
-				Busy:     demoapi.SyncSyncing,
 				Multi:    true,
 				// A failed dispatch started nothing for the data to confirm,
 				// so the rows report ✗ at once rather than waiting.
@@ -435,14 +392,14 @@ func (s *Screen) Actions() action.Set {
 
 // busyTargets reports why the verbs are unavailable, or "" when they are not.
 //
-// It reads derived state rather than the cells, so it means "the last poll said
-// the server was working on this" — the same source the row's indicator uses. A
-// local entry (RunID non-zero) is this session's own run, which Exclusive
-// already guards.
+// It reads the observed set rather than the cells, so it means "the last poll
+// said the server was working on this" — the same source the row's indicator
+// uses, and the same reason it is best-effort: an observation can be a poll
+// interval old, which is why the server still answers 409.
 func (s *Screen) busyTargets(targets []string) string {
 	st := s.table.ActivityState()
 	for _, key := range targets {
-		if e, ok := st.State(key); ok && !e.Done && e.RunID == 0 {
+		if e, ok := st.State(key); ok {
 			return "already " + strings.ToLower(e.Label)
 		}
 	}

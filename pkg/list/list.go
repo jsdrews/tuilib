@@ -88,12 +88,6 @@ type Options struct {
 	// stops. A locally-started indicator wins over a derived one.
 	ActivityWhen func(item string) (label string, busy bool)
 
-	// ActivityRevision, when set, is a per-item value that changes whenever
-	// the item's underlying work does. A change observed while the item is not
-	// busy flashes a brief mark — the only way to notice work that began and
-	// ended between two polls. Unset, nothing happens.
-	ActivityRevision func(item string) string
-
 	// SpinnerStyle is applied to the spinner glyph rendered while the list
 	// is in its loading state (see SetLoading). Pass via theme.List() for
 	// a sensible default.
@@ -266,7 +260,6 @@ type Model struct {
 	// act is per-row in-flight state, keyed like the marks beside it.
 	act     activity.Set
 	actWhen func(string) (string, bool)
-	actRev  func(string) string
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update.
@@ -306,7 +299,6 @@ func New(opts Options) Model {
 	m := Model{
 		act:                activity.New(opts.Activity),
 		actWhen:            opts.ActivityWhen,
-		actRev:             opts.ActivityRevision,
 		glyphs:             opts.Glyphs.Resolve(),
 		token:              focus.NewToken(),
 		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
@@ -637,7 +629,7 @@ func (m *Model) moveCursor(delta int) {
 // have to land whatever else the list is doing, and a focused filter that has
 // swallowed the keyboard must not swallow them too.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if actCmd := m.act.Handle(msg, m.holdsKey); actCmd != nil {
+	if actCmd := m.act.Handle(msg); actCmd != nil {
 		m, cmd := m.update(msg)
 		m.refresh()
 		return m, tea.Batch(cmd, actCmd)

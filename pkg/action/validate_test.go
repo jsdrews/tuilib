@@ -123,12 +123,3 @@ func TestValidateTargetsWithCountIsClean(t *testing.T) {
 		t.Errorf("errs = %v, want none", errs)
 	}
 }
-
-func TestBusyLabelDefaultsToTheLabel(t *testing.T) {
-	if got := (Action{Label: "Restart"}).BusyLabel(); got != "restart" {
-		t.Errorf("BusyLabel = %q, want the lowercased label", got)
-	}
-	if got := (Action{Label: "Sync", Busy: "syncing"}).BusyLabel(); got != "syncing" {
-		t.Errorf("BusyLabel = %q, want the explicit value", got)
-	}
-}

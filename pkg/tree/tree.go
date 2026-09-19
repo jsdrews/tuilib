@@ -144,11 +144,6 @@ type Options struct {
 	// indicator wins over a derived one.
 	ActivityWhen func(n Node) (label string, busy bool)
 
-	// ActivityRevision, when set, is a per-node value that changes whenever
-	// the node's underlying work does. A change observed while the node is not
-	// busy flashes a brief mark. Unset, nothing happens.
-	ActivityRevision func(n Node) string
-
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
 
@@ -292,7 +287,6 @@ type Model struct {
 	// act is per-node in-flight state, keyed by path like the marks beside it.
 	act     activity.Set
 	actWhen func(Node) (string, bool)
-	actRev  func(Node) string
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update.
@@ -354,7 +348,6 @@ func New(opts Options) Model {
 		markStyle:        opts.MarkStyle,
 		act:              activity.New(opts.Activity),
 		actWhen:          opts.ActivityWhen,
-		actRev:           opts.ActivityRevision,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
 		keys:             opts.Keys,
@@ -431,7 +424,7 @@ func (m Model) Init() tea.Cmd { return nil }
 // have to land whatever else the tree is doing, and a focused filter that has
 // swallowed the keyboard must not swallow them too.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if actCmd := m.act.Handle(msg, m.holdsKey); actCmd != nil {
+	if actCmd := m.act.Handle(msg); actCmd != nil {
 		m, cmd := m.update(msg)
 		m.refresh()
 		return m, tea.Batch(cmd, actCmd)

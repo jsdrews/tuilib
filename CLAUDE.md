@@ -815,65 +815,51 @@ example in `examples/`.
     31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
     key table, both shipped but not yet written up here.)
 
-33. **For per-row in-flight state, use `pkg/activity` — and let the data
-    have a vote.** When something is working on one row rather than on the
+33. **For per-row in-flight state, use `pkg/activity`, and derive it from
+    the data.** When something is working on one row rather than on the
     whole component, that row shows a spinner and a status label. This is
     the row-scale counterpart to `SetLoading` (rule 17), which means "no
     data yet" and replaces the entire body; activity says "two of these
     forty rows are busy and the other thirty-eight are still true", which
     the pane has no way to express.
 
+    **One predicate is the whole feature.** The component runs it over its
+    own rows on every keyed swap, and the rows it reports spin:
+
+    ```go
+    o.Columns = []table.Column{
+        {Title: "Name", Width: 22},
+        {Title: "Sync", Width: 14},    // explicit — see the width note below
+        {Title: "Health", Width: 13},
+    }
+    o.ActivityColumn = "Sync"          // table only: which cell to replace
+    settled := activity.Settled("Synced", "OutOfSync")
+    o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
+    ```
+
+    `list` and `tree` need only the predicate — a right-aligned badge costs
+    nothing until something is running, so there is no column to name and
+    nothing to switch on. A `pkg/poll` refresh underneath is the rest of the
+    mechanism, and a read-only dashboard needs nothing else at all.
+
     Entries are held by key — `SetKeyedItems` / `SetKeyedRows` / a tree
     path — for rule 32's reason and more sharply, since the premise of
     showing a spinner is that something is changing the data underneath. On
     anonymous rows and under `SetWindow` it is inert. Carry it across a
     `SetTheme` rebuild with `ActivityState()` / `SetActivityState()` the way
-    you carry the cursor (rule 4); every setter returns a `tea.Cmd` you must
-    batch, exactly as `SetLoading` does.
+    you carry the cursor (rule 4); both it and `Derive` return a `tea.Cmd`
+    you must batch, exactly as `SetLoading` does.
 
-    **Three ways in, and a screen may use any mix of them.**
-
-    *The data*, for work nobody in this session started — a scheduled AWX
-    job, a rollout someone else triggered. One predicate, evaluated on every
-    keyed swap:
-
-    ```go
-    o.ActivityColumn = "Status"          // table only: which cell to replace
-    o.ActivityWhen = func(c table.Row) (string, bool) {
-        return activity.Busy("running", "pending")(c[statusCol])
-    }
-    ```
-
-    A row that matches spins; one that stops matching stops, with **no
-    outcome glyph** — the cell's own value already says `failed`, in the
-    app's own colours, and a `✗` held over the top restates it less
-    precisely. A `pkg/poll` refresh is then the whole mechanism, and a
-    read-only dashboard needs nothing else.
-
-    *An action*, free: put the keys in `action.Set.Targets` (alongside
-    `Target`, which stays the display label) and give the verb a `Busy`
-    string. The shell broadcasts against those keys and rule 6 delivers.
-    `activity.Progress(out, "syncing 3/7")` relabels the rows from inside
-    the run, riding the `io.Writer` the action already holds; it is
-    deliberately **not** logged, being a UI state change rather than news.
-
-    *Directly*, for a fetch a screen kicks off itself:
-    `s.apps.SetActivity(key, "refreshing")`.
-
-    **Say what the action's return actually means.** The shell reports
-    "<Label> completed" when a `Run` returns, which is true of an action that
-    *performs* the work and false of one that dispatches it — a POST returns
-    when the request is accepted, and the row will keep spinning for seconds
-    afterwards. Set `Action.Receipt` ("Sync requested") wherever the verb hands
-    work to something else, or the receipt contradicts the row beside it.
-
-    **One word per state, and let the source of truth choose it.** Where a
-    screen both derives and acts, set `Action.Busy` to the *server's own*
-    status string. Then a row says the same thing from the moment it is asked
-    to the moment a poll says it is done, and the handoff from local to derived
-    is invisible because there is nothing to change. Inventing a client-side
-    label instead means maintaining a mapping, and getting it wrong shows up as
-    `syncing` becoming `Syncing` mid-flight — which reads as a glitch.
+    **The data is the only source, and that is the design.** There is no
+    action broadcast, no `SetActivity` setter, no second endpoint and no
+    local layer. The remote system is the authority on whether a row is
+    busy, so the component holds no second opinion to reconcile — which is
+    what makes the feature a pure function of the rows, recomputed on a
+    keyed swap and on nothing else. The two things it therefore cannot do
+    are worth knowing before you reach for it: an action the user triggers
+    shows nothing on the row until a later poll reports it, and work that
+    begins and ends between two observations is never seen. Both are open
+    questions in `docs/activity.md`, not oversights.
 
     **`activity.Settled(values...)` is usually the better predicate.** It names
     the statuses that mean nothing is happening and treats everything else as
@@ -881,43 +867,28 @@ example in `examples/`.
     when a server learns a new in-progress status — `activity.Busy` would
     quietly treat that one as done and stop spinning. The mirror risk is a new
     *settled* status spinning forever, so pick the list the server is less
-    likely to extend.
+    likely to extend. Both take the whole row rather than one cell, because
+    the status worth watching is not always the status worth showing.
 
-    **`activity.Progress` is for long work with real per-target phases, and
-    nothing else.** A label that changes three times in two seconds is harder
-    to read than one that does not change at all, and detail belongs in the
-    console. Two specific traps, both of which `examples/patterns/activity`
-    shipped with: deriving the phase from the log line just written (the
-    alternative decision 7 of `docs/activity.md` rejected), and reporting a
-    **run-scoped counter** — "2/3" drawn on every marked row, as though it were
-    that row's own progress. A run has one label; if you need per-row progress
-    you need per-key state, which is decision 11's deferred refinement.
+    **The row says the server's own word.** The label is the value the
+    predicate matched, with the server's own casing, so there is nothing to
+    map and no way for `syncing` to become `Syncing` mid-flight. Both
+    helpers strip ANSI and surrounding space before comparing, so a status
+    column the screen has already coloured still matches.
 
-    **Local beats derived, and that ordering is load-bearing.** A poll
-    already in flight when the user acted comes back carrying the pre-click
-    value; if derived state could retire a local entry, every action would
-    flicker off and on once, at a moment set by the poll phase.
+    **No outcome glyph, and no terminal state at all.** A row that stops
+    matching simply stops: the cell goes back to rendering its own value,
+    which already says `failed` in the app's own colours, and a `✗` held
+    over the top restates it less precisely. A key's whole life is absent →
+    busy → absent.
 
-    **A finished local entry waits for the data rather than expiring on a
-    timer.** An action that dispatches and returns in 200ms would otherwise
-    show a tick and then a cell reading exactly as it did before —
-    indistinguishable from nothing having happened. So a *successful* finish
-    keeps the row moving until the next observation: the indicator covers
-    the gap between "we asked" and "we have been told", which is the window
-    in which the TUI has nothing true to say. A *failed* one reports at once,
-    since a failed dispatch started nothing to confirm, and a component with
-    no `ActivityWhen` falls back to the plain hold because nothing would ever
-    confirm it.
-
-    **Conflict with the source of truth is three layers.** `Exclusive` is not
-    one of them — it gates runs this session launched and knows nothing about
-    work that arrived on a poll. The server refuses (409), because it is the
-    only thing that knows; the action returns that error, so the existing
-    failure path puts ✗ on the row and the reason in the statusbar; and
-    `Actions()` sets `Disabled` when a derived entry (one with no `RunID`) says
-    the row is already busy, so the ordinary case never asks. The third layer is
-    best-effort by construction — it reads an observation that can be a poll
-    interval old — which is why the first two are not optional.
+    **Say what an action's return actually means.** The shell reports
+    "<Label> completed" when a `Run` returns, which is true of an action that
+    *performs* the work and false of one that dispatches it — a POST returns
+    when the request is accepted, and the server will keep working for
+    seconds afterwards. Set `Action.Receipt` ("Sync requested") wherever the
+    verb hands work to something else, or the receipt claims something the
+    next poll will contradict.
 
     **A polled screen must drop out-of-order replies itself.** `pkg/source`
     carries a generation so an overtaken page cannot paint stale rows under a
@@ -926,26 +897,31 @@ example in `examples/`.
     ignore anything older than the newest applied — see
     `examples/patterns/activity`.
 
-    **A read trues the row up.** The derived layer is replaced wholesale by
-    every observation, so it is never anything but the last read; a local entry
-    retires on its own outcome, on the first observation after a successful
-    finish, or on `Options.Confirm`'s expiry. Nothing accumulates, and the row
-    converges on the server within a poll interval. The corollary is worth
-    keeping in mind when a row looks stuck: the client is usually right about
-    what it was told, so check what the server is actually reporting before
-    looking here.
+    **When an indicator flaps, it is the read path.** Activity is a pure
+    function of the rows the component holds, recomputed only on a keyed
+    swap, and the indicator is an overlay that never writes back — so
+    nothing here *can* oscillate on its own. A status alternating faster
+    than the poll interval is a doubled poll chain (`pkg/poll` tags each
+    tick and honours only the newest, so it is closed off there — but a
+    screen driving its own `tea.Tick` has the same hazard), several reads in
+    flight landing out of order, `SetRows` on one path and `SetKeyedRows` on
+    another — which nils the keys and makes activity inert on alternate
+    frames — or a component rebuilt per fetch instead of updated. Fix the
+    cause. There is deliberately no damper in the component: shipping one
+    made it the first thing reached for and the last thing that would help.
 
-    **What no polling can see** is work that begins and ends between two
-    observations. Point `ActivityRevision` at a field whose contract is to
-    change when the work does — `finished_at`, `resourceVersion`, an ETag —
-    and such a row flashes `•` rather than passing unnoticed. Unset, nothing
-    happens; there is no row-diffing fallback, because a poll that reformats
-    a timestamp would then flash everything.
+    **A read trues the row up.** The set is replaced wholesale by every
+    observation, so it is never anything but the last read. Nothing
+    accumulates, and the row converges on the server within a poll interval.
+    The corollary is worth keeping in mind when a row looks stuck: the
+    client is usually right about what it was told, so check what the server
+    is actually reporting before looking here.
 
     Give a column that carries an indicator an explicit `Width`. Widths come
     from the rows the table holds, so activity can never reflow anything —
     but a column auto-sized to `Synced` has room for the glyph and not the
-    word. See `examples/patterns/activity` and `docs/activity.md`.
+    word, so the row spins without ever saying what it is doing. See
+    `examples/patterns/activity` and `docs/activity.md`.
 
 ## Anti-patterns
 
@@ -1180,26 +1156,25 @@ example in `examples/`.
   else writes those rows — usually a `pkg/poll` refresh two seconds away — and
   whichever ran last wins. `pkg/activity` is an overlay on render: the rows are
   pushed when the data changes, and the component animates on top of them.
-- **Don't clear a row indicator when the request returns.** For anything that
-  dispatches work to a server — an AWX launch, an argo sync — the action's
-  lifetime is not the work's, and clearing on its return shows a tick followed
-  by a cell that reads exactly as it did before the user acted. Let the
-  successful finish wait for the next observation (rule 33), which is what the
-  handoff does for free once `ActivityWhen` is set.
-- **Don't give a derived indicator an outcome glyph.** When `running` becomes
+- **Don't hold a row indicator open past what the data says.** A row spins
+  because the last observation reported it busy, and stops because the next one
+  didn't. Anything that keeps it moving longer — a grace period so a poll
+  "might catch" work the user just dispatched, a hold so an outcome stays
+  readable, a damper against a status that keeps changing its mind — is the
+  client asserting something the server has not said. Too short does nothing,
+  too long lies, and the right number is a poll interval the component does not
+  know. If the row genuinely needs to say more than the data says, that is a
+  design question for `docs/activity.md`, not a timer.
+- **Don't give a row indicator an outcome glyph.** When `running` becomes
   `failed` the cell goes back to rendering the row's own value, which already
   says `failed` in the app's own colours. A `✗` over the top of it is the
-  library restating the data less precisely than the data states itself. The
-  hold exists for locally-started entries, where the outcome has nowhere else
-  to appear.
-- **Don't let derived state retire a local one.** A poll already in flight when
-  the user acted returns the pre-click value, so a "not busy" observation that
-  could clear a local entry makes every action flicker off and on once, at a
-  moment set by the poll phase. Local wins; see rule 33.
-- **Don't log a progress report.** `activity.Progress` relabels rows; it is a
-  UI state change, not news. Routing it into `pkg/output` too would put ten
-  records into an event whose badge counts one (rule 14), and force authors to
-  write progress text that reads well both in a 12-cell column and in a log.
+  library restating the data less precisely than the data states itself, in a
+  vocabulary the app didn't choose.
+- **Don't build the indicator into the row cells.** Substituting it in place
+  means the next observation runs the predicate against the spinner instead of
+  the status — the one way this feature can feed back into its own input.
+  `withActivity` copies before writing for exactly this reason; anything that
+  decorates rows on the way into `SetKeyedRows` reintroduces it.
 - **Don't add a comment explaining what well-named code does.** Component
   doc comments belong at the package and exported-symbol level; inline
   code should be self-describing.
@@ -1575,15 +1550,20 @@ path.
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
   `examples/components/metrics` and rule 24 (auto-refresh).
-- **Row activity:** `pkg/activity` is the per-row spinner and status label —
-  `State`, `Set`, the `StartMsg`/`UpdateMsg`/`EndMsg` the shell broadcasts,
-  `Derive` for a polled source of truth, `Busy` for the ordinary predicate,
-  `Change`/`Revise` for work that finished unobserved, and `Progress` for
-  relabelling from inside an action. It holds two layers — what this session
-  started and what the data last said — and prefers the first. It imports only
-  `pkg/glyph`, and emits no escapes of its own: `Render` hands back text the
-  component colours, because a table cell needs a foreground-only escape (rule
-  19) and a list row does not. See rule 33, `docs/activity.md`, and
+- **Row activity:** `pkg/activity` is the per-row spinner and status label,
+  and it is deliberately small — `State` (a label and a `Since`), `Set`,
+  `Derive` for one observation of the data, `Busy` / `Settled` for the
+  predicate, `Render` and `Badge` for the two placements, and `Adopt` for the
+  rule-4 carry. There is one layer: `Derive` replaces the whole collection, so
+  the set is never anything but the last read, and there is nothing to
+  reconcile, expire or damp. No messages, no setters, no timers but the
+  spinner's. It is a true leaf — `bubbletea`, `bubbles/spinner`, `x/ansi`, and
+  nothing from tuilib — and it emits no escapes of its own: `Render` hands back
+  text the component colours through `Options.Style`, because a table cell
+  needs a foreground-only escape (rule 19) and a list row does not, and only
+  the component knows which. What it deliberately does not cover — a locally
+  dispatched action, and work that starts and ends between two polls — is
+  written up as open questions. See rule 33, `docs/activity.md`, and
   `examples/patterns/activity`.
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options
@@ -1593,9 +1573,17 @@ path.
   screen matches that and runs the fetch, then calls `MarkRefreshed()`
   once the data lands so `LastRefresh()` reflects only successful
   refreshes. `Pause`/`Resume`/`SetInterval`/`Refresh` all return
-  `tea.Cmd`s and bump an internal generation so any in-flight tick from
-  the prior cadence is dropped on arrival — your screen never sees a
-  stale RefreshMsg. Pair with the keyed-row APIs on `pkg/list` /
+  `tea.Cmd`s, and any in-flight tick from the prior cadence is dropped on
+  arrival — your screen never sees a stale RefreshMsg. Every scheduled
+  tick carries a serial number and the Model honours only the one it most
+  recently issued, so a tick delivered twice advances the schedule once.
+  That guard matters because `Update` re-arms on every tick it accepts:
+  without it, one duplicate delivery would arm two successors and the
+  chain would double every interval until the screen fetched
+  continuously. Duplicate delivery is easy to write — `Update` called
+  twice in a pass, or one screen instance in the message path twice,
+  which rule 6's fan-out makes reachable — so it is guarded here rather
+  than left to every caller. Pair with the keyed-row APIs on `pkg/list` /
   `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor
   + expansion state survive every swap. See `examples/patterns/poll` and
   rule 24.
