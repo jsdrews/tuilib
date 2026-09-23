@@ -245,8 +245,8 @@ type CapturedLine struct {
 // neutral about which is which, exactly as it does for CapturedLine; the app
 // shell is what turns this into a row indicator.
 //
-// Only a Go run produces these, through activity.Progress on the writer it was
-// handed. A subprocess has no way to say anything but bytes.
+// Only a Go run produces these, through the Progress method on the writer it
+// was handed. A subprocess has no way to say anything but bytes.
 type CaptureStatus struct {
 	RunID int64
 	Label string

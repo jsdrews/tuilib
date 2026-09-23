@@ -1,48 +1,71 @@
 // Package activity demonstrates per-row in-flight state: the spinner and
-// status label a row shows while something is working on it.
+// status label a row shows while the server says something is working on it.
 //
 // It talks to demoapi over HTTP — a real handler, a real client, real request
 // boundaries — so the timings below are the server's, not a sleep in this
 // file's goroutine.
 //
-// Three reasons a row's state changes, all of which have to look right:
+// # The read-only half is three lines, and they are all in SetTheme
 //
-//  1. **You did it.** Press "a" and pick Sync. The row starts spinning before
-//     the POST has been answered, because the screen put its Selection() into
-//     action.Set.Targets and the shell broadcast the verb's Busy label against
-//     those keys. This screen writes one extra line to get that — Targets —
-//     and no wiring at all.
+//	o.ActivityColumn = "Sync"
+//	settled := activity.Settled(demoapi.SyncSynced, demoapi.SyncOutOfSync)
+//	o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
 //
-//     Mark several rows first ("x", or "A" for all of them) and one run drives
-//     all of them: one log event, one statusbar receipt, every marked row
-//     spinning. They finish together, because a run has one outcome — retiring
-//     them as each target lands is the refinement docs/activity.md decision 11
-//     deferred until something needed it.
+// demoapi starts a scheduled sync every few seconds. Nobody pressed anything;
+// those rows spin because the poll brought back "Syncing" and the predicate
+// recognised it as work. That is the entire mechanism. A read-only dashboard
+// — a poll, a keyed swap and a predicate — needs nothing else in this file.
 //
-//  2. **Something else did it.** demoapi fires a scheduled sync every few
-//     seconds. Nobody pressed anything, so nothing was broadcast; the row
-//     spins because Options.ActivityWhen recognises "Syncing" in the data the
-//     poll brought back. A read-only dashboard gets this and needs no actions.
+// # So what is everything else doing here
 //
-//  3. **It happened while nobody was looking.** Some of the server's work
-//     finishes between two polls, so the TUI never observes it running. Those
-//     rows flash "•" instead, driven by Options.ActivityRevision over a hidden
-//     column carrying the server's revision — the only way to notice a change
-//     the sampled data carries no other evidence of.
+// The action menu, marking, the console streaming and the generation-stamped
+// fetch are composition *around* the indicator rather than part of it. They
+// are here because this is the screen shape the feature exists for, and
+// because two of them are easy to get wrong in ways that break it:
 //
-// # The case worth watching for
+//   - The rows are keyed (SetKeyedRows), which activity requires for the same
+//     reason marking does — a refresh reorders the set constantly, and an
+//     indicator held by index would drift onto a neighbour.
+//   - Replies are stamped and stale ones dropped. Over a real network they do
+//     arrive out of order, and a stale page painted over a newer one is the
+//     most common way an indicator appears to flap.
 //
-// Refresh is instant server-side: it is done long before the next poll. Press
-// it and the row keeps spinning anyway, until the poll lands. That is not a
-// lie about the work — it is the truth about what the TUI knows. The
-// alternative, clearing the moment the request returns, shows a tick and then
-// a cell reading exactly as it did before the user acted, which is
-// indistinguishable from nothing having happened.
+// # Work the user starts, and the three lines that make it safe
 //
-// Sync is the opposite: the server takes four seconds, so the poll catches it
-// and the local "syncing" hands over to the data's own "Syncing" mid-flight.
-// The action itself returns earlier than that, having streamed the job's log
-// into the console — so the handoff really is covering a gap.
+// Press "a" and pick Sync and the row moves at once, before the server has
+// said anything — that is Expect, in the action.ChosenMsg case of Update. The
+// claim covers the window between the keypress and the observation that
+// reports it, and every observation retires claims, so it cannot outlive what
+// the data can speak to.
+//
+// The rest of that case is the part worth copying. A claim is only safe if no
+// read taken across the write can reach the component:
+//
+//	s.gen++      // reads already in flight predate the keypress
+//	s.writing++  // reads issued from here until the ack predate the write
+//
+// with the matching `writing > 0` check where replies are applied. Delete the
+// second line and a poll fired 50ms after the keypress comes back with the
+// pre-click value — a newer generation carrying an older truth — and the row
+// blinks off and on at a moment set by the poll phase rather than by anything
+// the user did.
+//
+// The two retractions are the other half. A write the server refuses takes its
+// own claim back (politeness — the next poll would too); a *read* that fails
+// takes them all back, which is not politeness, because an outage is exactly
+// the case where no observation is coming to retire anything.
+//
+// Options.Settle stays at its default of zero here, and that is correct for
+// this server: demoapi's handler sets the status inline, so the first read
+// after the ack already says Syncing. A reconciler — Argo, a Kubernetes watch
+// cache — would need one or two, an allowance of observations that say nothing
+// new rather than a duration nobody can know.
+//
+// Refresh is still the pointed case: the server finishes it long before the
+// next poll, so the claim covers the whole of it and the first observation
+// retires it. The row spins for the round trip and then stops, which is the
+// truth — as opposed to work somebody else began and ended between two polls,
+// which nothing here can see.
 //
 // # What this screen does not contain
 //
@@ -73,6 +96,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/poll"
+	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -83,13 +107,14 @@ const (
 	appCount     = 6
 )
 
-// Column order. Rev is hidden: it is the revision ActivityRevision watches,
-// and the status worth watching is not always the status worth showing.
+// Column order. colSync is the one the predicate reads and the one the
+// indicator replaces; they are the same column here, but they need not be —
+// ActivityWhen takes the whole row precisely so the status worth watching can
+// be a field the table never shows.
 const (
 	colName = iota
 	colSync
 	colHealth
-	colRev
 )
 
 // appRow is one row as the server reports it.
@@ -98,7 +123,6 @@ type appRow struct {
 	Name   string `json:"name"`
 	Sync   string `json:"sync"`
 	Health string `json:"health"`
-	Rev    int64  `json:"rev"`
 }
 
 // Screen is a table over demoapi, plus a poll. Everything about the indicators
@@ -110,8 +134,15 @@ type Screen struct {
 	api   demoapi.Target
 	apps  []appRow
 
-	// gen counts requests; seen is the newest reply applied.
-	gen, seen int
+	// gen counts requests and seen is the newest reply applied — the ordinary
+	// out-of-order guard rule 33 asks every polled screen for. writing is how
+	// many of this screen's writes are outstanding, which is the other half:
+	// see the comment on Update's action.ChosenMsg case.
+	gen, seen, writing int
+
+	// claimed maps a run's tag to the rows it claimed, so a write the server
+	// refuses can take its claim back rather than leaving them spinning.
+	claimed map[string][]string
 }
 
 // New returns the activity demo screen.
@@ -123,8 +154,9 @@ func New(t theme.Theme) screen.Screen {
 		// A short schedule, so the thing this screen exists to show — a row
 		// spinning because the *server* said so, with nobody having pressed
 		// anything — happens while you are watching rather than once a minute.
-		api:  demoapi.From(demoapi.Options{Seed: 11, Apps: appCount, Schedule: 3 * time.Second}),
-		poll: poll.New(poll.Options{Interval: pollInterval}),
+		api:     demoapi.From(demoapi.Options{Seed: 11, Apps: appCount, Schedule: 3 * time.Second}),
+		poll:    poll.New(poll.Options{Interval: pollInterval}),
+		claimed: map[string][]string{},
 	}
 	s.SetTheme(t)
 	return s
@@ -149,10 +181,9 @@ type fetchedMsg struct {
 	err  error
 }
 
-// Update forwards everything to both the table and the poll. The activity
-// broadcasts the shell sends arrive here like any other message and reach the
-// table because rule 6 says forward all of them — which is the whole of this
-// screen's involvement in the feature.
+// Update forwards everything to both the table and the poll. Nothing here
+// touches the indicators: the table observes its own rows when SetKeyedRows
+// hands them over, and animates them off the spinner ticks rule 6 delivers.
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmds []tea.Cmd
 	cmds = append(cmds, s.poll.Update(msg))
@@ -161,12 +192,59 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	case poll.RefreshMsg:
 		cmds = append(cmds, s.fetch())
 
+	case action.ChosenMsg:
+		// Two things at once, and they are the same thing: the row is told
+		// what the user just asked for, and every read that cannot know about
+		// it is invalidated.
+		//
+		// Expect is the claim. Without it the row keeps saying OutOfSync for up
+		// to a poll interval after the keypress — the thing the verb was about
+		// says nothing, which reads as the app having ignored you.
+		//
+		// The counters are what make the claim safe. A read already in flight
+		// was taken before the keypress, so gen++ drops it; a read *issued*
+		// from here until the server answers was taken before the write
+		// landed, so writing>0 drops those. Without the second one a poll
+		// fired 50ms after the keypress comes back saying OutOfSync — newer
+		// generation, pre-write value — clears the claim, and the row blinks
+		// off and on again at a moment set by the poll phase.
+		if m.Action.Run == nil {
+			break // nothing to wait for, so nothing to claim
+		}
+		s.gen++
+		s.writing++
+		keys := append([]string(nil), m.Targets...)
+		s.claimed[action.RunKey(m.Action, m.Target)] = keys
+		cmds = append(cmds, s.table.Expect(keys, demoapi.SyncSyncing))
+
+	case runner.Captured:
+		// The write was answered. Reads issued while it was outstanding are
+		// now known to predate it, so the generation moves again.
+		keys, ours := s.claimed[m.Tag]
+		if !ours {
+			break
+		}
+		delete(s.claimed, m.Tag)
+		s.writing--
+		s.gen++
+		if m.Err != nil {
+			// Politeness: the next observation would retire the claim anyway,
+			// but the statusbar has already said it failed and a row still
+			// spinning underneath contradicts it.
+			s.table.Retract(keys...)
+		}
+
 	case fetchedMsg:
-		if m.gen < s.seen {
-			break // a slower request overtaken by a newer one
+		if m.gen < s.seen || s.writing > 0 {
+			break // overtaken by a newer request, or taken across our own write
 		}
 		s.seen = m.gen
 		if m.err != nil {
+			// Not politeness. A claim is a promise that the next observation
+			// will explain it, and a read that failed is the case where no
+			// observation is coming to keep it — so it would spin for the
+			// length of the outage rather than for one poll.
+			s.table.RetractAll()
 			cmds = append(cmds, app.ErrorOf(m.err))
 			break
 		}
@@ -221,7 +299,6 @@ func (s *Screen) SetTheme(t theme.Theme) {
 		// would show the glyph and swallow the word.
 		{Title: "Sync", Width: 14},
 		{Title: "Health", Width: 13},
-		{Title: "Rev", Hidden: true},
 	}
 
 	// The Sync cell is what changes: Synced → ⠹ syncing → Synced reads as one
@@ -242,9 +319,6 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	settled := activity.Settled(demoapi.SyncSynced, demoapi.SyncOutOfSync)
 	o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
 
-	// And for work it never even saw running.
-	o.ActivityRevision = func(c table.Row) string { return c[colRev] }
-
 	s.table = table.New(o)
 	s.table.SetKeyedRows(s.rows())
 	if value != "" {
@@ -258,52 +332,17 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	_ = s.table.SetActivityState(act)
 }
 
-// working describes what is in flight and, of that, how much this session did
-// not start — which is the whole point of deriving state from the data and is
-// otherwise indistinguishable on screen, since both layers use the server's
-// vocabulary.
-//
-// An entry started by the shell's broadcast carries the run's id; one built by
-// ActivityWhen from a poll result carries none. That is what separates them.
-// (A screen calling SetActivity directly would also report no run, which is
-// why this reads as "not started by an action" rather than "from the server".)
 // title is the pane's border text: what this is, whether it is talking to a
-// real server, and what is in flight.
+// real server, and how much of it the last poll said was working.
 func (s *Screen) title() string {
 	name := "applications"
 	if s.api.Live {
 		name += " · live"
 	}
-	if w := s.working(); w != "" {
-		name += " · " + w
+	if n := s.table.ActivityCount(); n > 0 {
+		name += fmt.Sprintf(" · %d working", n)
 	}
 	return name
-}
-
-func (s *Screen) working() string {
-	st := s.table.ActivityState()
-	var mine, theirs int
-	for _, a := range s.apps {
-		e, ok := st.State(a.ID)
-		if !ok || e.Done {
-			continue
-		}
-		if e.RunID != 0 {
-			mine++
-		} else {
-			theirs++
-		}
-	}
-	switch {
-	case mine+theirs == 0:
-		return ""
-	case theirs == 0:
-		return fmt.Sprintf("%d working", mine)
-	case mine == 0:
-		return fmt.Sprintf("%d working, from the server", theirs)
-	default:
-		return fmt.Sprintf("%d working, %d from the server", mine+theirs, theirs)
-	}
 }
 
 // rows are keyed by the server's id, which is what lets an indicator stay on
@@ -318,7 +357,6 @@ func (s *Screen) rows() []table.KeyedRow {
 				a.Name,
 				a.Sync,
 				healthCell(a.Health),
-				strconv.FormatInt(a.Rev, 10),
 			},
 		}
 	}
@@ -390,9 +428,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Sync",
 				Desc:     "reconcile to git",
 				Disabled: busy,
-				// The server's own word, so the local indicator and the derived
-				// one that replaces it read identically.
-				Busy: demoapi.SyncSyncing,
 				// This verb dispatches: it returns once the server has accepted
 				// the operation, which is well before the server has finished
 				// it. "Sync completed" would claim otherwise while the row is
@@ -410,7 +445,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Refresh",
 				Desc:     "re-read from git",
 				Disabled: busy,
-				Busy:     demoapi.SyncRefresh,
 				Receipt:  "Refresh requested",
 				Multi:    true,
 				// Returns almost at once, and the server is done before the
@@ -423,7 +457,6 @@ func (s *Screen) Actions() action.Set {
 				Label:    "Fail a sync",
 				Desc:     "see the failure path",
 				Disabled: busy,
-				Busy:     demoapi.SyncSyncing,
 				Multi:    true,
 				// A failed dispatch started nothing for the data to confirm,
 				// so the rows report ✗ at once rather than waiting.
@@ -435,14 +468,14 @@ func (s *Screen) Actions() action.Set {
 
 // busyTargets reports why the verbs are unavailable, or "" when they are not.
 //
-// It reads derived state rather than the cells, so it means "the last poll said
-// the server was working on this" — the same source the row's indicator uses. A
-// local entry (RunID non-zero) is this session's own run, which Exclusive
-// already guards.
+// It reads the observed set rather than the cells, so it means "the last poll
+// said the server was working on this" — the same source the row's indicator
+// uses, and the same reason it is best-effort: an observation can be a poll
+// interval old, which is why the server still answers 409.
 func (s *Screen) busyTargets(targets []string) string {
 	st := s.table.ActivityState()
 	for _, key := range targets {
-		if e, ok := st.State(key); ok && !e.Done && e.RunID == 0 {
+		if e, ok := st.State(key); ok {
 			return "already " + strings.ToLower(e.Label)
 		}
 	}
@@ -457,10 +490,10 @@ func (s *Screen) busyTargets(targets []string) string {
 func (s *Screen) run(ids []string, kind string) action.Func {
 	api := s.api
 	return func(ctx context.Context, out io.Writer) error {
-		// No activity.Progress anywhere, deliberately. The row shows the verb's
-		// Busy label — the server's own "Syncing" — and holds it until the poll
-		// finds a status the server calls settled. One word, the same at every
-		// arity, and the same word the server would have used.
+		// No per-phase relabelling, deliberately. The row shows one word — the
+		// claim's "Syncing", then the server's own "Syncing" once the poll
+		// confirms it — and holds it until a status the server calls settled.
+		// The same word at every arity, and the same word the server uses.
 		//
 		// This screen used to relabel as it went, and it was worse twice over.
 		// A single-row run read "submitting" then "applying" while a
@@ -469,7 +502,7 @@ func (s *Screen) run(ids []string, kind string) action.Func {
 		// had marked. And the counter was run-scoped but drawn per row, so
 		// every marked row showed "2/3" as though that were its own progress.
 		//
-		// activity.Progress is for an action with genuinely long, genuinely
+		// Relabelling as you go is for an action with genuinely long, genuinely
 		// per-target phases. A 1.6-second sync has neither, and a label that
 		// changes three times in that window is harder to read than one that
 		// does not change at all. The console is where the detail belongs.

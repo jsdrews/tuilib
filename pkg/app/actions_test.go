@@ -29,6 +29,9 @@ type actScreen struct {
 	ran     recorder
 	pushed  bool
 	blocked bool
+
+	// chosen is every action.ChosenMsg the shell forwarded down.
+	chosen []action.ChosenMsg
 }
 
 // recorder is what an action writes into. It is mutex-guarded because an
@@ -67,6 +70,9 @@ func (s *actScreen) SetTheme(t theme.Theme) {
 	s.l = list.New(o)
 }
 func (s *actScreen) Update(m tea.Msg) (screen.Screen, tea.Cmd) {
+	if c, ok := m.(action.ChosenMsg); ok {
+		s.chosen = append(s.chosen, c)
+	}
 	var c tea.Cmd
 	s.l, c = s.l.Update(m)
 	return s, c
@@ -121,24 +127,30 @@ func draw(m Model) Model {
 func step(m Model, msg tea.Msg) Model {
 	var mm tea.Model = m
 	mm, cmd := mm.Update(msg)
-	for i := 0; cmd != nil && i < 32; i++ {
-		out := cmd()
+
+	// A queue rather than a single cmd, because a batch's commands produce
+	// messages that produce more commands — a capture chains CaptureStarted →
+	// CapturedLine → Captured that way. An earlier version ran a batch's
+	// members once and stopped, which worked only as long as nothing returned
+	// a batch containing a chain.
+	queue := []tea.Cmd{cmd}
+	for i := 0; len(queue) > 0 && i < 64; i++ {
+		c := queue[0]
+		queue = queue[1:]
+		if c == nil {
+			continue
+		}
+		out := c()
 		if out == nil {
-			break
+			continue
 		}
 		if batch, ok := out.(tea.BatchMsg); ok {
-			cmd = nil
-			for _, c := range batch {
-				if c == nil {
-					continue
-				}
-				if sub := c(); sub != nil {
-					mm, _ = mm.Update(sub)
-				}
-			}
-			break
+			queue = append(queue, batch...)
+			continue
 		}
-		mm, cmd = mm.Update(out)
+		var next tea.Cmd
+		mm, next = mm.Update(out)
+		queue = append(queue, next)
 	}
 	return mm.(Model)
 }
@@ -154,6 +166,8 @@ func actKey(m Model, s string) Model {
 		return step(m, tea.KeyMsg{Type: tea.KeyEsc})
 	case "down":
 		return step(m, tea.KeyMsg{Type: tea.KeyDown})
+	case "left":
+		return step(m, tea.KeyMsg{Type: tea.KeyLeft})
 	}
 	panic("unmapped key " + s)
 }
@@ -490,3 +504,60 @@ func TestNormalClicksStillReachTheScreen(t *testing.T) {
 }
 
 var _ = mouse.Msg{}
+
+// The screen raised the verbs, so it is told which one is being run.
+//
+// pkg/activity's Expect is the caller this exists for: under the shell the
+// dispatch happens somewhere the screen cannot see, so without this a screen
+// has no moment at which to claim the rows it just asked the server about —
+// and the claim silently never appears. That is exactly how it shipped once.
+func TestARunningActionIsForwardedToTheScreen(t *testing.T) {
+	s := &actScreen{}
+	m := newActApp(t, s)
+	s.set = action.Set{
+		Target:  "alpha",
+		Targets: []string{"k-alpha"},
+		Count:   1,
+		Actions: []action.Action{{Label: "Deploy", Run: runAct("Deploy", &s.ran)}},
+	}
+
+	m = actKey(m, "a")
+	m = actKey(m, "enter")
+
+	if len(s.chosen) != 1 {
+		t.Fatalf("screen saw %d ChosenMsg, want 1", len(s.chosen))
+	}
+	if got := s.chosen[0].Action.Label; got != "Deploy" {
+		t.Errorf("forwarded action = %q, want %q", got, "Deploy")
+	}
+	if got := s.chosen[0].Targets; len(got) != 1 || got[0] != "k-alpha" {
+		t.Errorf("forwarded targets = %v, want [k-alpha] — the keys are what a claim needs", got)
+	}
+}
+
+// Not at the pick, though: a verb with Confirm is armed there and runs only if
+// the modal says yes. A screen told at the pick would claim rows for work the
+// user then cancelled.
+func TestAConfirmedActionIsForwardedOnlyWhenItRuns(t *testing.T) {
+	s := &actScreen{}
+	m := newActApp(t, s)
+	s.set = action.Set{
+		Target: "alpha", Count: 1,
+		Actions: []action.Action{{
+			Label:   "Delete",
+			Confirm: "Delete alpha?",
+			Run:     runAct("Delete", &s.ran),
+		}},
+	}
+
+	m = actKey(m, "a")
+	m = actKey(m, "enter") // picks Delete, which arms the confirm
+	if len(s.chosen) != 0 {
+		t.Fatalf("screen was told at the pick, before the user confirmed: %d", len(s.chosen))
+	}
+
+	m = actKey(m, "y") // pkg/confirm's yes shortcut
+	if len(s.chosen) != 1 {
+		t.Fatalf("screen saw %d ChosenMsg after confirming, want 1", len(s.chosen))
+	}
+}

@@ -12,9 +12,19 @@
 //
 // Pause/Resume are first-class: Pause stops emitting RefreshMsg until
 // Resume returns the cmd that re-arms the next tick. SetInterval changes
-// the cadence and reschedules. Both bump an internal generation so any
-// already-scheduled tick from the prior cadence is dropped on arrival
-// instead of firing under the new state.
+// the cadence and reschedules. An already-scheduled tick from the prior
+// cadence is dropped on arrival instead of firing under the new state.
+//
+// Every scheduled tick carries a serial number and a Model honours only
+// the one it most recently issued, so a tick delivered more than once
+// advances the schedule once. That matters because Update re-arms on
+// every tick it accepts: without the check, a duplicate delivery would
+// return two RefreshMsg and arm two successors, and the chain would
+// double every interval until the screen was fetching continuously.
+// Two ways to deliver one tick twice are easy to write — calling Update
+// twice in a single pass, and one screen instance sitting in the message
+// path twice, which the screen stack's fan-out (CLAUDE.md rule 6) makes
+// reachable — and neither looks wrong at the call site.
 //
 // Polling is opt-in to the parent: this package never touches its data,
 // only signals "now is a good time to refetch." Pair with the keyed-row
@@ -43,8 +53,13 @@ type Options struct {
 type Model struct {
 	interval time.Duration
 	paused   bool
-	gen      int
 	last     time.Time
+
+	// tag is the serial number of the tick this Model is waiting for. It
+	// is bumped by every reschedule, which is what makes a superseded
+	// tick — a duplicate delivery, or one from before a Resume or
+	// SetInterval — identifiable as stale on arrival.
+	tag int
 }
 
 // RefreshMsg is emitted from Update when the interval elapses. Match it
@@ -52,10 +67,10 @@ type Model struct {
 // view, then call MarkRefreshed when the fetch resolves.
 type RefreshMsg struct{}
 
-// tickMsg is internal — carries the generation it was scheduled under so
-// stale ticks (from before a Pause/Resume/SetInterval) can be dropped.
+// tickMsg is internal — carries the tag it was scheduled under so a stale
+// tick can be dropped rather than advancing the schedule.
 type tickMsg struct {
-	gen int
+	tag int
 }
 
 // New constructs a Model. Panics if Interval is not positive — polling
@@ -72,22 +87,30 @@ func New(opts Options) Model {
 
 // Init returns the cmd that schedules the first tick. Returns nil when
 // the model was constructed paused.
+//
+// It arms the tick this Model is already waiting for rather than issuing
+// a new tag, which is what keeps the value receiver honest: a screen
+// whose own Init has bubbletea's value receiver calls this on a copy,
+// and a tag bumped there would be discarded while the tick carried it —
+// leaving every tick rejected and the screen silently never polling.
+// Calling Init twice therefore arms two ticks with the same tag, of
+// which Update accepts the first and drops the second.
 func (m Model) Init() tea.Cmd {
 	if m.paused {
 		return nil
 	}
-	return m.scheduleTick()
+	return m.armTick()
 }
 
 // Update consumes tickMsg and emits RefreshMsg + the next tick cmd when
-// the elapsed tick matches the current generation. Other messages pass
-// through untouched.
+// the elapsed tick is the one this Model is waiting for. Other messages
+// pass through untouched.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	t, ok := msg.(tickMsg)
 	if !ok {
 		return nil
 	}
-	if t.gen != m.gen || m.paused {
+	if t.tag != m.tag || m.paused {
 		return nil
 	}
 	return tea.Batch(
@@ -122,13 +145,10 @@ func (m Model) Paused() bool { return m.paused }
 func (m Model) Interval() time.Duration { return m.interval }
 
 // Pause stops emitting RefreshMsg. The currently-scheduled tick (if any)
-// will arrive but be ignored because Pause bumps the generation.
+// arrives and is ignored, and nothing re-arms it; a later Resume issues a
+// new tag, so that tick stays stale even if it is still in flight then.
 func (m *Model) Pause() {
-	if m.paused {
-		return
-	}
 	m.paused = true
-	m.gen++
 }
 
 // Resume re-arms the ticker and returns the cmd that schedules the next
@@ -141,20 +161,22 @@ func (m *Model) Resume() tea.Cmd {
 		return nil
 	}
 	m.paused = false
-	m.gen++
 	return m.scheduleTick()
 }
 
 // SetInterval changes the cadence and reschedules the next tick. The
-// previously-scheduled tick is dropped on arrival via the generation
-// bump. When the model is paused, the new interval is recorded but no
-// tick is scheduled until Resume.
+// previously-scheduled tick is dropped on arrival, because rescheduling
+// issues a new tag.
+//
+// When the model is paused the new interval is recorded and nothing is
+// scheduled, and nothing needs retiring either: a tick arriving while
+// paused is ignored, and the Resume that ends the pause issues a new tag
+// of its own — so a tick from the old cadence cannot outlive it.
 func (m *Model) SetInterval(d time.Duration) tea.Cmd {
 	if d <= 0 {
 		return nil
 	}
 	m.interval = d
-	m.gen++
 	if m.paused {
 		return nil
 	}
@@ -168,9 +190,17 @@ func (m Model) Refresh() tea.Cmd {
 	return func() tea.Msg { return RefreshMsg{} }
 }
 
-func (m Model) scheduleTick() tea.Cmd {
-	gen := m.gen
+// scheduleTick issues a new tag and arms the tick carrying it, which
+// retires every tick already in flight.
+func (m *Model) scheduleTick() tea.Cmd {
+	m.tag++
+	return m.armTick()
+}
+
+// armTick arms a tick stamped with the tag this Model is waiting for now.
+func (m Model) armTick() tea.Cmd {
+	tag := m.tag
 	return tea.Tick(m.interval, func(time.Time) tea.Msg {
-		return tickMsg{gen: gen}
+		return tickMsg{tag: tag}
 	})
 }

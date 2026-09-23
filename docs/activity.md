@@ -1,47 +1,57 @@
 # Row activity — design
 
-Status: **implemented.** All twelve steps are in: `pkg/glyph`'s outcome marks,
-`pkg/activity` with both layers, `theme.Activity()`, the three components,
-`runner.CaptureStatus`, `action.Set.Targets` / `Action.Busy`, the shell's three
-broadcasts and its per-target `Exclusive` gate, and the shared contract in
+Status: **implemented.** `pkg/activity` (a leaf, ~165 lines of code),
+`theme.Activity()`, the three components, and the shared contract in
 `internal/componenttest`.
 
-Three ways in, all working: `SetActivity` directly, `ActivityWhen` from a
-polled source of truth, and — free, with no screen wiring at all — an
-`action.Set` that supplies `Targets`.
+**One way in: the data.** A component observes the rows it holds on every keyed
+swap, a predicate says which of them are working, and those rows spin. There is
+no action broadcast, no shell involvement, no setter a screen calls, and no
+second endpoint. A `pkg/poll` refresh and a predicate are the whole mechanism.
 
-Six places the build corrected the design are marked **Corrected during
-implementation** (decisions 8, 9, 10, 17, 19 and 20). Decisions 18-20 were
-added after the first six steps, from a case the original had no answer for.
+An earlier version of this design carried a second layer — state the TUI knew
+about because it had started the work itself — and the machinery to reconcile
+the two. That is recorded under [What was removed](#what-was-removed-and-why),
+along with the three things it was reaching for. The removed implementation is
+parked at `pkg/activity/activity.go.old`.
+
+Decisions 1-17 are built and green. **13-17 shipped in their amended form** —
+[Work the user starts](#work-the-user-starts).
+They put the user's own actions back on the row in five pieces rather than the
+previous version's six reconciliation mechanisms, by moving the hard part out
+of this package and into the fetch generation the screen already keeps. Whether
+that trade holds is now a question with evidence behind it rather than an
+argument: `demoapi` was widened to reproduce the orderings a row indicator
+meets in the field, and running the plan against them found eight problems and
+four gaps — [What the fixture found](#what-the-fixture-found). The problems are
+decisions that are wrong; the gaps are capabilities nothing in 1-17 has. Three
+problems were answered in the decisions before any of it was built; the four
+gaps were not, and two of the whole set (F2, G1) apply to the read-only
+feature as well.
 
 ## Problem
 
 A TUI over a remote system spends most of its time displaying state that
-somebody is in the middle of changing. Press Sync on an argocd app and three
-things should happen: the **row** says it is syncing, the **console** says what
-the sync is doing, and the **statusbar** says when it finished. Today the
-middle one is free, the last one is free, and the first one is the author's
-problem.
+somebody is in the middle of changing. The server already says so — the cell
+reads `Syncing`, or `running`, or `Progressing` — and the table renders that
+word as flat text, identical in weight and behaviour to the `Synced` above it.
 
-`pkg/action` and `pkg/output` got the *event* right. `runner.Go` opens the
-event, every line the action writes lands in the console under its label, `x`
-kills it, the badge carries `⟳` while it runs, and the outcome paints the
-statusbar — decisions 6 through 8 of `docs/actions.md`. What none of that
-reaches is **the row the verb was about**. The user selects `cache-redis`,
-picks Sync, the menu closes, and the table looks exactly as it did: the same
-`Synced` in the Status column, which is now a lie, for as long as the sync
-takes. The only evidence that anything is happening is a badge in the corner
-and whatever the console shows if you go and look at it.
+So the row is telling the truth and still failing to communicate the one thing
+that matters about it: **this will change without you doing anything.** A user
+looking at a static `Syncing` has no way to distinguish "the server is working
+on it right now" from "the server gave up mid-sync an hour ago and this string
+is stale". Motion is what separates them, and motion is exactly what static
+text cannot express.
 
 The library does have a spinner and it is the wrong granularity.
 `pane.SetLoading` (rule 17) means "this whole component has no data yet" — a
-centered glyph, the body replaced, all-or-nothing. There is no way to say
-"two of these forty rows are busy and the other thirty-eight are still true."
+centered glyph, the body replaced, all-or-nothing. There is no way to say "two
+of these forty rows are busy and the other thirty-eight are still true".
 
 So authors do it by hand, and the hand-rolled version is worse than it first
 looks:
 
-- The status text has to be baked into the row cells, so showing it means
+- The indicator has to be baked into the row cells, so showing it means
   rebuilding and re-setting the whole row set.
 - The spinner needs a frame, so it needs a ticker, so the screen grows a
   `spinner.Model` and a `spinner.TickMsg` case and re-sets every row on **every
@@ -52,74 +62,125 @@ looks:
 - None of it is reusable. The same forty lines get rewritten for the list on
   the next screen, and again for the tree on the one after.
 
-The state is already in the program. `pkg/app` holds a set of live action runs
-keyed by `action.RunKey(a, target)` (`pkg/app/app.go:370`), filled in
-`runAction` and released on `runner.Captured`. Components hold their rows by
-stable key — `SetKeyedRows`, `SetKeyedItems`, and the tree's node paths.
-
-**They are two key spaces that never meet.** `RunKey` is the action's `Ident()`
-paired with `Set.Target`, and `Target` is a *display string* — "cache-redis",
-"3 items" — not the keys `Selection()` returned. The shell knows a Sync is
-running. The table knows which row is `cache-redis`. Nothing joins them.
+Every one of those problems comes from the same mistake: treating the indicator
+as *data*. It is not data. It is a rendering of data the component already
+holds, and it belongs where every other rendering decision in this library
+lives — inside the component, over the top of rows nobody rewrites.
 
 ## Shape
 
-A keyed, per-row in-flight state that components render themselves and the
-shell fills in for free.
-
-The screen already computes the keys; it just throws them away today:
+Two options on the component, and a `pkg/poll` you were going to have anyway:
 
 ```go
-func (s *Screen) Actions() action.Set {
-    return action.Set{
-        Target:  s.apps.SelectionLabel(), // "cache-redis" — for the menu title
-        Targets: s.apps.Selection(),      // new: the keys, for the rows
-        Count:   len(s.apps.Selection()),
-        Actions: []action.Action{{
-            Label: "Sync",
-            Busy:  "syncing",             // new: what the rows say meanwhile
-            Run: func(ctx context.Context, out io.Writer) error {
-                fmt.Fprintln(out, "sync started")      // → console, as today
-                activity.Progress(out, "syncing 3/7")  // → the rows
-                return s.api.Sync(ctx, targets)
-            },
-        }},
-    }
+o := t.Table()
+o.Columns = []table.Column{
+    {Title: "Name", Width: 22},
+    {Title: "Sync", Width: 14},   // explicit — see decision 6
+    {Title: "Health", Width: 13},
 }
+o.ActivityColumn = "Sync"         // which cell the indicator replaces
+settled := activity.Settled("Synced", "OutOfSync")
+o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
 ```
 
-and one field says where it lands:
-
-```go
-opts := t.Table()
-opts.ActivityColumn = "Status"   // this cell, while the row is busy
-```
-
-That is the entire author-facing surface for the common case. Everything
-between — start, tick, label, progress, finish, clear — is the shell
-broadcasting two messages that rule 6 already delivers to every component on
-screen.
+That is the entire author-facing surface. There is no third line, no message to
+handle, no command to batch beyond the one every setter in this library already
+returns, and nothing to remember to turn off.
 
 ```
 NAME            SYNC          HEALTH
 api-server      Synced        Healthy
-cache-redis     ⠹ syncing     Healthy
+cache-redis     ⣾ Syncing     Healthy
 web-frontend    OutOfSync     Degraded
-worker-pool     ⠹ syncing     Progressing
+worker-pool     ⣾ Syncing     Progressing
 ```
 
-Screens that do not use `pkg/action` — a fetch kicked off by enter, a refresh
-bound to a key — call the same thing directly:
+The flow, end to end:
 
-```go
-return s, s.apps.SetActivity(key, "refreshing")
 ```
+poll fires  →  screen fetches  →  SetKeyedRows(rows)
+                                       │
+                                       ├─ observe(): run the predicate over
+                                       │  every keyed row, build key → label
+                                       │
+                                       └─ Set.Derive(busy): replace the map
+                                          wholesale, arm the spinner if any
+                                          key is busy
+
+render      →  for each visible row, Set.Render(key, width)
+                 busy → "⣾ Syncing", styled by the component
+                 not  → false, and the row's own cell is drawn
+```
+
+**Nothing writes back.** The indicator is computed from the rows and drawn over
+the rows; it never enters them. That is what makes the feature immune to the
+two-writer problem above, and it is why a filter, a sort, a resize, a theme
+swap and a cursor move all change nothing about which rows are spinning.
 
 ---
 
 ## Decisions
 
-### 1. Activity is held by key, and keys are mandatory.
+### 1. The data is the only source of truth.
+
+The remote system knows whether it is working on something. The TUI does not,
+and every mechanism by which the TUI *appears* to know is really a cached claim
+with an expiry problem.
+
+An earlier design had three ways in — an `action.Set` broadcast against its
+`Targets`, a direct `SetActivity(key, label)` call, and this predicate — with a
+precedence rule to settle the disagreements between them. (Decisions 13 and 14
+add a second *entrance* and a *claim*, which is not the same thing: one map
+still has one writer, and a claim is retired by the data rather than reconciled
+against it.) It worked, and the
+machinery it took to make it work is the argument against it:
+
+| Mechanism | Existed to answer |
+|---|---|
+| local layer beats derived | a poll in flight when the user acted returns the pre-click value |
+| handoff on next observation | a dispatching action returns long before the work ends |
+| `Options.Confirm` expiry | …unless it never ends, and something has to cap the wait |
+| `Options.Dwell` hysteresis | two replicas disagreeing between reads |
+| outcome hold + `✓`/`✗` glyphs | a local entry's outcome has nowhere else to appear |
+| `ActivityRevision` | work that starts and ends between two observations |
+
+Six mechanisms, and every one of them is a rule for reconciling a local opinion
+with the server's. Delete the local opinion and all six become unreachable.
+What is left is a pure function:
+
+```
+the rows the component holds  →  which of them are busy
+```
+
+recomputed on a keyed swap and on nothing else. It cannot drift, cannot be
+stale by more than one poll interval, cannot disagree with the cell beside it,
+and cannot oscillate on its own — which is worth saying explicitly, because "the
+spinner flaps" was the bug that prompted this reduction and the answer turned
+out to be that nothing in this layer *can* flap. A flapping indicator is a
+flapping read path: a doubled poll chain, replies landing out of order, or
+`SetRows` on one path and `SetKeyedRows` on another. Fix it there.
+
+One cause on that list is not the client's to fix, and the list should not be
+read as exhaustive: a read path served by a replica or a watch cache can report
+busy, settled and busy again from three replies that each told the truth when
+they were made, and no client-side generation check repairs it because neither
+reply overtook the other. `demoapi`'s `?stale=` reproduces it. See F2 under
+[What the fixture found](#what-the-fixture-found).
+
+**The cost, stated plainly, because it is a design choice and not an
+oversight:**
+
+- An action dispatched from the TUI shows nothing on the row until a later poll
+  reports it. Press Sync and the row keeps saying `OutOfSync` for up to one
+  poll interval.
+- Work that begins and ends between two observations is never seen at all.
+
+Both are real, and both were covered by the removed layer at the cost of the
+table above. Decisions 13-17 put the first one back — and most of the second —
+for one line in the screen rather than six mechanisms here, by fixing it a
+layer down. Nothing in decisions 1-12 changes.
+
+### 2. Activity is held by key, and keys are mandatory.
 
 Rule 32's argument for marking applies here without a word changed, and for a
 sharper reason. Marks held by index drift onto the wrong row when a polled
@@ -127,16 +188,20 @@ refresh reorders the set; an activity indicator held by index does the same,
 except that the set it drifts within is *guaranteed* to be churning — the whole
 point of showing a spinner is that something is changing the data underneath.
 
-So activity works on `SetKeyedItems` / `SetKeyedRows` / tree paths, and on
-anonymous `SetItems` / `SetRows` every activity call is a **deliberate no-op**.
-An inert indicator is recoverable; a spinner sitting on the wrong row is a user
-watching the wrong thing, which is worse than watching nothing.
+So activity works on `SetKeyedItems` / `SetKeyedRows` / tree paths, and is
+inert on anonymous `SetItems` / `SetRows`. An inert indicator is recoverable; a
+spinner sitting on the wrong row is a user watching the wrong thing, which is
+worse than watching nothing.
 
 A windowed table (`SetWindow`) is inert for the same reason marking is: it
 carries rows without keys, and a sparse paged set is exactly where an
 index-held indicator would land somewhere else.
 
-### 2. The state lives in the component, not in the screen.
+`pkg/tree` needs no keyed setter, because a node's path already *is* its
+identity — the same path used for expansion state, cursor restore and marks.
+One node therefore has one key across all four features.
+
+### 3. The state lives in the component, not in the screen.
 
 This is rule 9 — a component owns its pane and its geometry — extended to the
 obvious next thing: a component owns the *decoration of its own rows*. Nothing
@@ -150,307 +215,238 @@ overlay on render, not a mutation of the cells), and the ticker lives next to
 the thing it animates instead of in a screen that has to remember to re-push
 rows on every frame.
 
-**Rejected: a `Decorator func(key string) string` hook on Options.** Superficially
-more general — the screen returns whatever it likes per row. In practice it is
-called once per visible row per frame, it invites I/O and allocation in a hot
-path the way `Help()` does not, and it hands back a *string* that the component
-must then place, style and truncate without knowing what it means. A typed
-state the component understands can be right-aligned, can shrink to just its
-glyph when the column is narrow (decision 9), and can be tested.
+**Rejected: a `Decorator func(key string) string` hook on Options.**
+Superficially more general — the screen returns whatever it likes per row. In
+practice it is called once per visible row per frame, it invites I/O and
+allocation in a hot path the way `Help()` does not, and it hands back a
+*string* the component must then place, style and truncate without knowing what
+it means. A typed state the component understands can be right-aligned, can
+shrink to its glyph when the column is narrow (decision 5), and can be tested.
 
-### 3. `pkg/activity` is a leaf package.
+### 4. `pkg/activity` is a leaf package.
 
-Three components need identical behaviour — a keyed map, a spinner, a hold
-timer, terminal outcomes — and none of them should import another to get it.
-That is the same argument that produced `pkg/geom`, `pkg/query` and
-`pkg/glyph`, and it lands the same way: `pkg/activity` imports `bubbletea`,
-`bubbles/spinner`, `lipgloss` and `pkg/glyph`, and nothing else from tuilib.
+Three components need identical behaviour — a keyed map, a spinner, a tick
+chain that heals itself, a width-aware renderer — and none of them should
+import another to get it. That is the same argument that produced `pkg/geom`
+and `pkg/query`, and it lands the same way: `pkg/activity` imports `bubbletea`,
+`bubbles/spinner` and `x/ansi`, and **nothing at all from tuilib**.
 
-It matters more than usual here because the *shell* needs the message types
-too. If activity lived inside `pkg/list`, then `pkg/app` broadcasting a start
-would import `pkg/list` to name the message, and `pkg/table` would import
-`pkg/list` to receive it.
+It imported `pkg/glyph` in the previous version, for the `✓`/`✗` outcome marks.
+Decision 7 removed the marks, and the import went with them.
 
-### 4. The shell broadcasts; rule 6 delivers; the screen writes nothing.
-
-`pkg/app` already forwards every message to the active screen, and rule 6
-already obliges a screen to forward every message to its components. So the
-shell posts `activity.StartMsg` when the run it launched reports itself
-*started*, `activity.UpdateMsg` as that run reports progress, and
-`activity.EndMsg` on the matching `runner.Captured` — and every component that
-has activity enabled and holds one of those keys starts, relabels and stops on
-its own.
-
-Started, not launched. The distinction is not pedantry and it is not free; see
-decision 17.
-
-**No screen wiring at all.** This is the same payoff `OutputKey` had, where
-every existing `app.Info` call became recoverable without a single call site
-changing (rule 14): the plumbing is in the shell, and the author's contribution
-is a label.
-
-A component that holds none of the keys ignores the message, which is the
-ordinary decline-what-isn't-yours behaviour it already performs for mouse
-events outside its rect (rule 28).
-
-**The known cost:** two components on one screen displaying the same key both
-spin. See open question 1 — the fix is to scope the broadcast by
-`focus.Token`, and the reason it is not decided here is that "the same object
-shown in two panes" is a case where spinning both is arguably correct.
-
-### 5. `action.Set` grows `Targets`; `Target` keeps its job.
-
-```go
-type Set struct {
-    Target  string   // unchanged: the display label, titles the menu
-    Targets []string // new: the keys the verbs will act on
-    Count   int
-    Actions []Action
-}
-```
-
-Two fields rather than one because they answer different questions and only
-one of them is renderable. `Target` is prose for a human — "3 items" is the
-right menu title and a useless key. `Targets` is identity for a machine.
-Deriving either from the other is impossible in both directions.
-
-`Targets` is optional. A screen that does not set it gets exactly today's
-behaviour: the menu titles itself from `Target`, the action runs, and no row
-spins. `Count` stays authoritative for the arity gate (decision 21 of
-`docs/actions.md`) rather than becoming `len(Targets)`, because a screen with
-an expensive selection may legitimately report a count without materialising
-the keys.
-
-**`Validate` should report `len(Targets) > 0 && Count == 0`.** It already
-collects dev-time mistakes into a `[]error` (`pkg/action/action.go:227`), and
-that combination is a screen that filled in the new field and forgot the old
-one — which silently disables every non-`Multi` action.
-
-Filling the field on `Set` is only half of it: the keys then have to survive
-the trip from the menu to the launch, through a confirm modal that may sit in
-the middle. That is `ChosenMsg` and `pendingTgts`, in decision 17.
-
-### 6. `Action.Busy` names the state, and defaults to the label.
-
-```go
-// Busy is what the target rows display while this action runs — "syncing",
-// "refreshing", "deleting". Defaults to Label lowercased.
-Busy string
-```
-
-A field rather than a derivation because the verb and the state are different
-words in English and the gap is exactly where the user's attention is. "Sync"
-is what you chose; "syncing" is what is happening. Defaulting to the label
-keeps it free for the verbs where the distinction does not pay ("Refresh" →
-"refresh" reads acceptably) and gets an author to a working spinner without
-learning the field exists.
-
-`Do` actions get no activity. A `Do` returns an opaque `tea.Cmd` — it may push
-a screen or hand the terminal to `$EDITOR` — and the shell has no completion to
-wait for, so a spinner it started could never be stopped. This is the same
-boundary decision 7 of `docs/actions.md` drew for logging, for the same reason:
-the library cannot narrate what it does not own.
-
-### 7. Dynamic progress rides the writer the action already has.
-
-The interesting half of the request is the label that *changes* — "syncing"
-becoming "syncing 3/7" becoming "pruning". The action already holds a channel
-back to the UI: the `io.Writer` from decision 5 of `docs/actions.md`. Reuse it,
-via an optional interface, the way `http.Flusher` extends `http.ResponseWriter`:
-
-```go
-// in pkg/activity
-type Progresser interface{ Progress(text string) }
-
-// Progress updates the label on the rows this action is running against.
-// A no-op when out does not support it, so an action written against a
-// plain io.Writer keeps working.
-func Progress(out io.Writer, text string) {
-    if p, ok := out.(Progresser); ok {
-        p.Progress(text)
-    }
-}
-```
-
-`runner.lineWriter` grows the method. It emits a neutral
-`runner.CaptureStatus{RunID, Label, Tag, Text}` down the existing channel, and
-`pkg/app` translates it into `activity.UpdateMsg` — the identical split
-decision 6 of `docs/actions.md` established for log records, and the reason
-`pkg/runner` still imports nothing from tuilib.
-
-**Rejected: a second channel** — a `chan string`, a callback, a status field on
-a result struct. The writer is already threaded everywhere the action's own
-code runs, including into an `exec.Cmd`'s `Stdout`, and doubling the protocol
-to carry one string is the trade decision 5 already refused.
-
-**Rejected: inferring the label from the last line written.** Tempting — no new
-API at all — and wrong twice: it makes every incidental log line a UI change,
-and it forces authors to write log lines that read acceptably in a 12-cell
-column.
-
-**Corrected during implementation: `Progress` is narrower than this reads.**
-The decision presents relabelling as the normal way to report a running action,
-and building the example that way produced two bad outcomes. A single-target run
-read "submitting" then "applying" while a multi-target run counted "1/3",
-"2/3" — two vocabularies for one verb, so the row said something different
-depending on how many rows were marked. And the counter was run-scoped but drawn
-per row, so every marked row showed "2/3" as if that were its own progress,
-which is not merely inconsistent but wrong.
-
-The example now calls `Progress` nowhere. A row shows one word — the verb's
-`Busy` text, set to the *server's own* status string — and holds it until an
-observation says the work is settled. That is simpler to read, identical at
-every arity, and makes the handoff invisible because both layers say the same
-thing.
-
-`Progress` stays, for an action with genuinely long and genuinely per-target
-phases. It is not decoration for a two-second request, and a run-scoped value
-must not be drawn as a per-row one.
-
-`CaptureStatus` deliberately does **not** enter the log. It is a UI state
-change, not news; a run that reports progress ten times would otherwise post
-ten records the badge counts as one event but the reader has to scroll past.
-An action that wants the progress in both places writes the line *and* calls
-`Progress`, which is two lines and honest about being two things.
-
-### 8. A finished row holds its outcome, then clears.
-
-`EndMsg` does not erase the row's activity. It replaces the spinner with a
-terminal glyph — `✓` or `✗` — holds it for `Hold` (default 2s), then clears.
-
-A spinner that simply vanishes leaves no evidence of what happened. The
-statusbar receipt (decision 8 of `docs/actions.md`) is the designed answer and
-it is not enough here: it is one line for the whole run, it is wiped by the
-next `tea.KeyMsg` (rule 20), and the user's eyes are on the row, not the
-footer. When six rows sync and one fails, the per-row outcome is the only
-surface that says *which*.
-
-**Corrected during implementation.** `Hold: 0` means `DefaultHold`, not "clear
-immediately". A zero value is what a caller who never heard of the field
-supplies, and it should give them the considered default rather than silently
-disable the feature. A negative `Hold` keeps the outcome until something else
-clears it, which is what a screen wants when the underlying data will not
-refresh on its own; clearing at once is `Hold: time.Nanosecond`, which nobody
-has yet wanted.
-
-The hold is a `tea.Tick` per finished key, not a global sweep — a sweep needs a
-ticker running whenever anything might be holding, which is a timer the program
-pays for while nothing is happening.
-
-### 9. Where it renders, per component.
+### 5. Where it renders, per component.
 
 **`table` — a named column.** `Options.ActivityColumn string` is a column
-*Title*, matched the way the filter's `key:value` scope matches (case-insensitive
-prefix, via `query.ColumnByPrefix`). While a row is busy, that cell's content is
-replaced. Titles rather than indices because a screen that reorders its columns
-should not silently start decorating the wrong one.
+*Title*, matched the way the filter's `key:value` scope matches
+(case-insensitive prefix, via `query.ColumnByPrefix`). While a row is busy that
+cell's content is replaced. Titles rather than indices because a screen that
+reorders its columns should not silently start decorating the wrong one.
 
-This is the shape the request actually described, and it is the right one:
-`Synced` → `⠹ syncing` → `✓ synced` → `Synced` reads as one cell changing its
-mind, not as decoration appearing beside it.
+This is the shape the feature exists for: `Synced` → `⣾ Syncing` → `Synced`
+reads as one cell changing its mind, not as decoration appearing beside it.
 
-Unset → a two-cell gutter, the same width and position as the mark gutter, with
-the glyph alone.
+A name that resolves to no column — a typo, an ambiguous prefix, a hidden
+column — falls back to a two-cell gutter after the mark gutter, as does
+`ActivityWhen` set with no `ActivityColumn` at all. Degrading to something
+visible beats a spinner nobody can see that animates anyway. (That last case
+was a real bug: `actEnabled` keyed off `ActivityColumn` alone, so a predicate
+with no column name built the whole derived set, ran a tick chain forever, and
+rendered nothing.)
 
 **`list` and `tree` — a right-aligned trailing badge.**
 
 ```
-worker-pool                              ⠹ syncing
+worker-pool                              ⣾ running
 ```
 
 Not a prefix: the leading cells are spoken for (list's gutter is two cells,
-three with marking; the tree's is indent plus disclosure arrow), and pushing
-rows sideways when a spinner appears is exactly the reflow that keeps `pkg/form`
-drawing its validation errors on the border rather than under the field. When the row text and the badge cannot both fit, the
-**row text truncates and the badge survives** — the badge is the news.
+three with marking; the tree's is indent plus disclosure glyph), and pushing
+rows sideways when a spinner appears is exactly the reflow that keeps
+`pkg/form` drawing its validation errors on the border rather than under the
+field. When the row text and the badge cannot both fit, the **row text
+truncates and the badge survives** — the badge is the news. The badge is itself
+capped at half the width, so a pathological label cannot swallow the row
+entirely.
+
+**Only `table` opts in.** There is nothing for `list` and `tree` to switch on —
+a table has to be told *which column*, while a badge occupies no space at all
+until something is running, so gating it would be a field whose "off" position
+costs exactly as much as its "on" one.
 
 **When the space is too narrow for the label, the glyph wins.** A cell of width
-8 renders `⠹ syncin`, which is worse than `⠹`. Below `len(label)+2` visible
-cells the label is dropped rather than cut.
+8 rendering `⣾ syncin` is worse than one rendering `⣾`. Below
+`len(glyph)+1+len(label)` visible cells the label is dropped rather than cut.
+Width is measured and cuts are made ANSI-aware throughout, since both the row
+text and the styled indicator carry escapes.
 
-**Corrected during implementation: only `table` opts in.** The design implied a
-symmetric switch on all three. There is nothing for `list` and `tree` to switch
-on — a table has to be told *which column*, while a badge occupies no space at
-all until something is running, so gating it would be a field whose "off"
-position costs exactly as much as its "on" one. `ActivityColumn` therefore
-gates the table and the other two are simply always ready.
+### 6. Column width is the author's problem, and the doc has to say so.
 
-### 10. Column width is the author's problem, and the doc has to say so.
-
-**Corrected during implementation — the hazard is the opposite one.** The
-design claimed a content-auto column would widen when `Synced` became
-`⠹ syncing`, reflowing the table under the user. It cannot: `recomputeWidths`
+The intuition is that a content-auto column will *widen* when `Synced` becomes
+`⣾ Syncing`, reflowing the table under the user. It cannot: `recomputeWidths`
 sizes columns from the rows the table *holds*, and the indicator is substituted
 at render time and never enters them. Activity cannot move a column, and
-`TestTableActivityDoesNotReflowColumns` now holds that.
+`TestTableActivityDoesNotReflowColumns` holds that.
 
 What actually goes wrong is the reverse. A column auto-sized to fit `Synced` is
 six cells wide, the indicator is capped to the width it is given, and the label
-is dropped in favour of the glyph (decision 9) — so the row spins but never
+is dropped in favour of the glyph (decision 5) — so the row spins but never
 says *what* it is doing, and no amount of staring at it explains why.
 
-So `ActivityColumn` still wants an explicit `Width`, for the opposite reason:
-not to prevent a reflow, but to leave room for the longest label it will carry.
-That belongs in the rule and in the field's doc comment, where it now is.
+So an activity column wants an explicit `Width`, for the opposite reason to the
+one you would guess: not to prevent a reflow, but to leave room for the longest
+label it will carry.
 
-### 11. Multi-target: one event, many rows.
+### 7. There is no outcome, because the data already has one.
 
-One action over three marked rows is one run, one log event and one statusbar
-receipt (decision 7 of `docs/actions.md` settled that) — and three spinning
-rows, because `StartMsg` carries all three keys.
+When `running` becomes `failed`, the cell goes back to rendering the row's own
+value — which already says `failed`, in whatever colour the app gives it. A
+`✓`/`✗` held over the top for two seconds is the library restating the row
+*less precisely than the row states itself*, and in a vocabulary the app did
+not choose.
 
-They all clear together on `Captured`, which is right for a fan-out that
-succeeds or fails as a unit and imprecise for one that does not. The refinement
-is one function:
+So `State` has no `Done` and no `Err`, there is no hold timer, and `Render`
+reports `false` the moment a key stops being busy. A key's whole lifecycle is:
 
-```go
-func Done(out io.Writer, key string, err error)  // retire one key early
+```
+absent  →  present (Label, Since)  →  absent
 ```
 
-**Deferred, not refused.** The messages already carry keys, so it is additive
-whenever someone has the case in front of them. Building it now means guessing
-at how per-key failure should interact with the run's single `error` return,
-and that guess is better made against a real action.
+This is the decision that removes the most machinery for the least loss, and it
+is only available *because* of decision 1. A locally-started entry genuinely
+needs an outcome glyph — its outcome has nowhere else to appear, since the cell
+underneath was never going to change. A derived entry's outcome *is* the cell
+underneath.
 
-**Demonstrated as of `examples/patterns/activity` growing `Markable`.** Mark
-several rows, pick Sync, and one run spins all of them, logs one event, and
-retires them together. The last part is the deferral made visible rather than
-hidden, and `TestOneRunSpinsEveryMarkedRow` asserts it — so if per-target
-completion is ever built, that test is the one that should change.
+### 8. `Settled` is usually the better predicate, and it takes the whole row.
 
-### 12. `Exclusive` gets sharper for free.
+Two helpers, and the second is usually the right one:
 
-`RunKey(a, target)` pairs the action's identity with the *display* target, so a
-verb launched against "3 items" is held against the string `"Sync\x003 items"`.
-Two overlapping selections that share a row can both run. Nobody has hit it
-because marking-plus-Exclusive is rare, but it is a real hole.
+```go
+activity.Busy("running", "pending", "waiting")        // these mean work
+activity.Settled("successful", "failed", "canceled")  // everything else does
+```
 
-With `Targets`, the shell can register one gate per key —
-`Ident() + "\x00" + key` — so Sync on `{a, b}` and Sync on `{b, c}` correctly
-refuses the second for `b` alone. The menu's `Disabled` reason gets more useful
-too: "already running on cache-redis" rather than "already running".
+Prefer `Settled`. It is how these APIs document themselves — a finite set of
+terminal states, an open set of intermediate ones — and it keeps working when
+the server learns a new in-progress status, where `Busy` would quietly treat
+that one as done and stop spinning. The mirror risk is a new *settled* status
+spinning forever, so pick the list the server is less likely to extend.
 
-This is a behaviour change to a shipped feature, so it is gated on `Targets`
-being set: a screen that does not supply keys keeps the current semantics
-exactly.
+Both compare with surrounding space and ANSI styling stripped, so a cell the
+screen has already coloured still matches — otherwise the first thing an author
+does after styling the status column is break their own indicator. Both label
+the row with the value **as it appeared**, not as it was configured: the row
+says the server's own word, with the server's own casing, so there is no
+mapping to keep in step and no way for `syncing` to become `Syncing`
+mid-flight.
 
-It needs a second index — `key → tag` — because the gate is now per key while
-the release is still per run. That, and the run registry it hangs off, are in
-decision 17.
+`Settled` treats an empty value as settled. A blank cell is not work in
+progress, and the alternative spins every row in a table that has not loaded.
 
-### 13. Activity is not loading, not focus, and not marking.
+**The predicate takes the whole row rather than one cell**, because the status
+worth watching is not always the status worth showing — a hidden column, a
+second field, or a pair that only means "busy" together are all normal things
+to want. Each component's signature speaks its own data shape:
+
+```go
+table: func(cells Row) (label string, busy bool)
+list:  func(item string) (label string, busy bool)
+tree:  func(n Node) (label string, busy bool)
+```
+
+### 9. One spinner per component, and the tick chain heals itself.
+
+The component owns a `spinner.Model` distinct from the pane's loading spinner.
+Safe because `spinner.TickMsg` carries the originating model's `ID` and bubbles
+rejects ticks belonging to another spinner — so the two animate independently
+without the component having to disambiguate.
+
+`Derive` and `SetActivityState` return `tea.Cmd` and the caller must batch it,
+exactly as `pane.SetLoading` does (rule 17). The chain runs while any key is
+busy and stops when the last one settles, so an idle screen schedules nothing.
+
+**The chain has to heal itself.** It lives in `tea.Cmd`s and survives only while
+the ticks it asks for come back. Anything that stops delivering messages to a
+component — a screen stack routing to the top screen only, a tab hiding a body
+— ends the chain, while `ticking` stays true because nothing told the `Set`
+otherwise, and `armTick` then refuses to start another. The spinner is frozen
+for the rest of the session, on a row that is still working.
+
+`pkg/pane`'s loading spinner had the identical defect for the identical reason,
+and so did `pkg/poll` — whose chain dying is worse, because then no observation
+arrives at all and every row sits on a stale status indefinitely. Three
+components, one cause.
+
+**The root fix is in `screen.Stack`**, and it makes the library consistent with
+itself: `pkg/tab` already fans non-input messages out to every body (rule 21),
+and the stack now routes the same way — `tea.KeyMsg` and `mouse.Msg` to the top
+screen, everything else to every screen (rule 6). The cost is that a covered
+screen keeps working, which is also the point: return from the console and the
+data is current.
+
+**Per-component revival stays as defence**, for anyone driving components
+without the stack. `Handle` checks on every non-tick message whether a tick has
+actually arrived recently — generously, at four frame intervals, so ordinary
+jitter does not look like a dead chain — and re-arms if not. Over-arming is
+provably harmless: bubbles tags each tick and a spinner rejects one from a
+superseded chain, so two chains collapse into one on the next frame.
+
+**No new key bindings, so `Help()` and `HelpSections()` are untouched** (rule
+10). Activity has no verbs: it is not clickable, not cancellable from the row,
+and not navigable.
+
+### 10. State survives a theme rebuild, like every other state.
+
+Rule 4 requires it, so the accessor pair exists:
+`ActivityState() activity.Set` / `SetActivityState(activity.Set) tea.Cmd`. The
+returned command is the tick — a rebuilt component starts a fresh spinner and
+must be re-armed, or the theme swap leaves a frozen glyph on the row.
+
+`Adopt` **copies** the entries rather than aliasing the map, so the discarded
+`Set` cannot write into the live one. (The old doc comment claimed copies share
+their entries; they never did, since `Derive` replaces the map rather than
+editing it. `TestAdoptDoesNotAliasTheOtherSet` now pins the real contract.)
+
+The spinner *frame* resets to zero across the swap. Accepted: the alternative
+is serialising an animation phase through a state-restoration API, and nobody
+can see it.
+
+The keyed setters do **not** clear activity, for the same reason they do not
+clear marks — they re-derive it, which is strictly better.
+
+### 11. The package emits no escapes, and that is why `Style` is a function.
+
+`Options.Style` is `func(State, string) string`, not a `lipgloss.Style`.
+
+A table cell must be coloured with a foreground-only escape (`\x1b[39m`) or the
+selected row's background is clobbered mid-cell (rule 19); a list row has no
+such constraint and can use lipgloss freely. **Only the component knows which
+it is**, so the package hands back plain text and lets the caller colour it.
+`theme.Activity()` supplies the lipgloss form for `list` and `tree`;
+`theme.activityCell()` supplies the `ansi.CellColor` form for `table`.
+
+A `lipgloss.Style` field would have forced one answer for both, and the answer
+that is safe in a table is the one that looks wrong in a list. This is the one
+place the feature can produce a visible rendering bug, and it is the one the
+library has already written down.
+
+The `State` is passed to `Style` even though nothing uses it today: it is what
+a caller would need in order to colour by elapsed time or by label, and it
+costs nothing to thread now rather than break the signature later.
+
+### 12. Activity is not loading, not focus, and not marking.
 
 Three neighbours, each of which someone will propose folding this into.
 
 **Not `SetLoading`.** That is the pane's whole-body state and it *replaces* the
 body — correct for "no data yet", nonsense for "thirty-eight of forty rows are
 still true". They compose without interacting: a component can be loading with
-activity keys pending, and when the body comes back the spinners are still on
-the right rows because they are held by key.
+activity keys held, and when the body comes back the spinners are still on the
+right rows because they are held by key.
 
 **Not focus.** Activity never moves the cursor, never takes focus, and is not
-in the tab order. It is a property of the data, not of the user's attention.
-A row that finishes while the cursor is elsewhere must not pull the cursor to
+in the tab order. It is a property of the data, not of the user's attention. A
+row that finishes while the cursor is elsewhere must not pull the cursor to
 itself — that is the auto-scroll bug every log viewer eventually grows.
 
 **Not marking.** Marks are the user's selection and activity is the system's
@@ -458,677 +454,1109 @@ state, and they are drawn in different places for that reason. They do overlap
 usefully: mark three rows, sync them, watch three rows spin — which works
 because both are keyed by the same key.
 
-### 14. One spinner per component, and no help entries.
+---
 
-The component owns a `spinner.Model` distinct from the pane's loading spinner.
-Safe because `spinner.TickMsg` carries the originating model's `ID` and bubbles
-rejects ticks belonging to another spinner
-(`bubbles@v1.0.0/spinner/spinner.go:141`) — so the two animate independently
-without the component having to disambiguate.
+## What was removed, and why
 
-Setters return `tea.Cmd` and the caller must batch it, exactly as
-`pane.SetLoading` does (rule 17). The tick chain runs while any key is active
-and stops when the last one clears, so an idle screen schedules nothing.
+The previous design had a second layer for work the TUI started itself, fed by
+three sources, and reconciled with the derived layer by the six mechanisms in
+decision 1's table. All of it is deleted from `pkg/activity` and parked at
+`pkg/activity/activity.go.old` (with its tests at `activity_test.go.old`).
 
-**Corrected during implementation: the tick chain has to heal itself.** The
-chain lives in `tea.Cmd`s and survives only while the ticks it asks for come
-back. `screen.Stack.Update` forwards to the **top screen only**, so pushing
-anything over a screen with a spinner — the output console, a child view — has
-its ticks delivered somewhere that drops them. The chain ends; `ticking` stays
-true because nothing told the Set otherwise; `armTick` then refuses to start a
-new one. The spinner is frozen for the rest of the session, on a row that is
-still working.
+Removed from `pkg/activity`: the `local` map; `StartMsg` / `UpdateMsg` /
+`EndMsg`; `Start` / `StartRun` / `Finish` / `FinishRun` / `Clear` / `ClearAll`
+/ `Relabel` / `RelabelRun`; the `awaiting` handoff and `Options.Confirm`;
+`Options.Hold` and the outcome glyphs; `Revise` / `Change` and the revision
+flash; `Progress` / `Progresser`; `Options.Dwell`; and the `pkg/glyph` import.
+`Handle` lost its `holds func(string) bool` parameter, which existed only to
+filter broadcasts.
 
-`pkg/pane`'s loading spinner had the identical defect for the identical reason,
-and so did `pkg/poll` — whose chain dying is worse, because then no observation
-ever arrives to end a handoff (decision 19) and the row sits on a stale phase
-until the user presses something. Three components, one cause.
+Removed from the components: `SetActivity` / `EndActivity` / `ClearActivity` /
+`Relabel` and `Options.ActivityRevision` on all three. Removed from `pkg/app`:
+the three broadcasts in `CaptureStarted` / `CaptureStatus` / `Captured`.
+`theme.Activity()` went from three styles plus a glyph set to one style.
 
-**The first fix was per-component and insufficient.** Each Set learned to notice
-a stalled chain and re-arm on the next message it saw. That is a real
-improvement and it is not enough: after the action finishes, *nothing sends the
-screen a message*, so "the next message" is the user's next keystroke. The
-reported symptom was exactly that — the spinner resumed on a keypress and not
-before, and the row stayed on "applying" indefinitely.
+**Three things that layer was reaching for remain genuinely unsolved**, and are
+the subject of the next section rather than of this one:
 
-**The root fix is in `screen.Stack`, and it makes the library consistent with
-itself.** `pkg/tab` already fans non-input messages out to every body, and rule
-21 says why: a `tea.Tick` re-arm in an inactive tab has to keep working. The
-screen stack delivered everything to the top screen alone. It now routes as tab
-does — `tea.KeyMsg` and `mouse.Msg` to the top screen, everything else to every
-screen — so the chains never die and there is nothing to revive. The cost is
-that a covered screen keeps working, which is also the point: return from the
-console and the data is current.
+1. **A separate handle.** Many systems answer "is this row busy" at a different
+   endpoint from the one the list came from — an operations API, a job status
+   resource, a `GET /operations/{id}` returned by the POST that started the
+   work. Today a screen with one of those has nowhere to put the answer.
+2. **A revision.** `finished_at`, `resourceVersion`, an ETag: a field whose
+   contract is to change when the work does, which is the only way to notice
+   work that began and ended between two polls.
+3. **A separate collection to query.** The busy map as its own list — `GET
+   /operations?status=running` — joined to the rows by key, rather than derived
+   from a field on each row.
 
-The per-component revival stays as defence for anyone driving components without
-the stack, and because over-arming is provably harmless — bubbles tags each tick
-and a spinner rejects one from a superseded chain, so two chains collapse into
-one on the next frame.
+Items 1 and 3 look like the same question — *what does a screen do when the
+busy-ness of a row is not a field on that row?* — and decision 13 was written
+to answer both with one setter. The fixture shows they are not the same
+question and it answers only item 3: see G2. Item 2 mostly dissolves: decision 14 covers the half of
+it that matters in practice, and what is left is weak enough to stay dropped.
 
-**No new key bindings, so `Help()` and `HelpSections()` are untouched** (rule
-10). Activity has no verbs: it is not clickable, not cancellable from the row,
-and not navigable. Cancelling stays where it already is — `x` in the output
-console, which kills the run and therefore ends the activity. Adding a second
-kill affordance on the row would mean a second place to get the confirm, the
-`Exclusive` release and the log record right.
+---
 
-### 15. State survives a theme rebuild, like every other state.
+## Work the user starts
 
-Rule 4 requires it, so the accessor pair exists:
-`ActivityState() activity.Set` / `SetActivityState(activity.Set) tea.Cmd`. The
-returned command is the tick — a rebuilt component starts a fresh spinner and
-must be re-armed, or the theme swap leaves a frozen glyph on the row.
+Status: **implemented.** Decisions 13-17 extend the feature above and are in
+`pkg/activity`, forwarded through the three components, demonstrated in
+`examples/patterns/activity`, and asserted in
+`internal/componenttest/{expect,setbusy}_test.go` and
+`internal/integration/activity_claim_test.go`.
 
-The spinner *frame* resets to zero across the swap. Accepted: the alternative
-is serialising an animation phase through a state-restoration API, and nobody
-can see it.
+They were designed before anything could be run against them, then run against
+the widened fixture on paper, which found eight problems and four gaps — see
+[What the fixture found](#what-the-fixture-found) and
+[What the plan has no answer for](#what-the-plan-has-no-answer-for). The
+decisions below are the amended versions that answer all eight; three more
+things the build itself corrected are marked **Corrected during
+implementation**. The four gaps are untouched — capabilities this design does
+not have rather than mistakes in it, with G1 and G2 each large enough to be
+their own pass. They are left standing rather than patched in place,
+because the findings are what a build has to answer.
 
-The keyed setters do **not** clear activity, for the same reason they do not
-clear marks. A `pkg/poll` refresh that swaps every row leaves the spinners
-exactly where they were, which is the entire point.
+Everything the base does today is one pipeline with a single entrance:
 
-### 16. Theming follows rule 3, with the glyphs in `pkg/glyph`.
+```
+poll → rows → ActivityWhen → observe() → Derive(map) → busy map → render
+```
 
-`t.Activity()` returns `activity.Options`, nested into each component's options
-the way `Filter: t.Filter()` already is. The outcome marks join the shared
-vocabulary as `glyph.Set.ActivityOK` / `ActivityFail` (`✓` / `✗`), so a theme
-that sets its glyph set once gets these too.
+Each decision below is a change to that one picture, and it is worth reading
+them that way: the previous design's mistake was not any single mechanism but
+the decision to run a *second* pipeline alongside this one and arbitrate
+between them.
 
-Colors: the running spinner and label take `t.Accent`, matching every other
-spinner in the library; `✓` takes `t.InfoBG` and `✗` takes `t.ErrorBG` as
-*foregrounds*, which is the same reach rule 23 already makes for an
-error-tinted alert.
+### 13. `SetBusy` is a second entrance, not a second map.
 
-Cell rendering inside a table goes through `pkg/ansi.CellColor`, never
-`lipgloss.Render`, or the selected row's background is clobbered mid-cell
-(rule 19). This is the one place the feature can produce a visible rendering
-bug, and it is the one the library has already written down.
+**Problem.** The busy-ness of a row is not always a field on that row. An
+operations API, a job-status resource, a `GET /operations?status=running`, a
+handle returned by the POST that started the work — in all of them the screen
+can find out who is busy, and has nowhere to put the answer, because the only
+way in is a predicate over cells the component already holds.
 
-### 17. What the shell has to grow — and why the start is not where it looks.
+The screen's workaround today is to fold the answer back into the rows — a
+hidden column carrying a status the table never shows — so that `ActivityWhen`
+can read it out again. That works, and it is silly: a value is written into a
+cell purely so a predicate can recover it one call later.
 
-Three pieces of plumbing that reading `runAction` does not suggest. All three
-were found by tracing a two-row Sync end to end rather than by reading the
-design, which is worth doing before writing any of it.
-
-**The start broadcast cannot fire in `runAction`.** That is the obvious place —
-the shell is right there holding the action and its targets — and the RunID
-does not exist yet. `runner.GoWith` returns a `tea.Cmd`; the RunID is minted
-*inside* that closure, when bubbletea executes it a cycle later. This is the
-same fact decision 8 of `docs/actions.md` records about `Tag` — "the run ID is
-minted inside the command, after the caller has returned" — and it is the
-entire reason `Tag` exists.
-
-So the start hangs off `runner.CaptureStarted`, which carries the RunID and the
-Tag together. That is not a workaround; it is better than the launch site would
-have been on two counts:
-
-- It is the same branch that already registers the kill handle, increments the
-  badge and appends the head record. The row spinner and the log line therefore
-  appear in the **same frame** rather than one apart.
-- It fails the way the rest of the run fails. If the goroutine never starts,
-  nothing was broadcast, so no row is left spinning for a run that does not
-  exist.
-
-The cost is one tea cycle between the pick and the spinner — the latency the
-badge already has, which nobody has noticed.
-
-**`runAction` never sees the keys.** It takes `(a Action, target string)`, and
-two paths reach it: `action.ChosenMsg` directly, and `confirm.ConfirmedMsg` by
-way of `m.pendingAct` / `m.pendingTgt`. A destructive verb goes the long way
-round, so both have to carry the keys or `Delete` is the one action that never
-spins a row.
+**Decision.** Expose `Derive` one level up:
 
 ```go
-// pkg/action
-type ChosenMsg struct {
-    Action  Action
-    Target  string
-    Targets []string   // new
+s.table.SetBusy(map[string]string{"app-7": "Syncing"})
+```
+
+This is not a new mechanism. It is the same call `observe()` already makes,
+with the screen supplying the map instead of the predicate computing it. One
+map, one writer, replaced wholesale, exactly as before.
+
+`ActivityWhen` is then correctly understood as **sugar for the common case**
+where the status is on the row — not as the feature's definition. The two are
+**mutually exclusive**: a component uses the predicate or it is told, never
+both, because two writers for one map is the property decision 1 exists to
+protect.
+
+**Calling `SetBusy` on a component built with `ActivityWhen` panics** —
+`table.SetBusy: built with Options.ActivityWhen; use one entrance or the
+other`. Not a `Validate` error: there is no `Validate` in any of these
+packages, and "`SetBusy` was called" is not an options-time fact in any case,
+so options-time validation could not see it. A panic matches what the library
+already does for a construction mistake that is always wrong regardless of data
+(`app.New`, `tab.New`, `poll.New`), and the alternative — a silent no-op —
+produces a component whose indicators simply never appear, which is the worst
+of the three outcomes to debug.
+
+**The entrance also drops an invariant that `ActivityWhen` held for free.** A
+predicate runs over the rows the component holds, so every entry named a row on
+screen. A map from `GET /jobs?status=running` need not: it can name a row on
+another page of a paged table, or one deleted between the two reads. Left
+alone, `Active()` goes true with nothing visible — so the tick chain animates
+forever at a steady frame rate, drawing nothing — and `ActivityCount()`, which
+all three components export, stops meaning "how many of my rows are working".
+
+The fix is *scoping*, not filtering on the way in:
+
+> **A `Set` keeps every key it is given, and answers `Active`, `Count` and
+> `Render` over the intersection with the keys the component currently holds.**
+
+Discarding unscoped keys at `SetBusy` time would be simpler and wrong: rows and
+busy-ness arrive on separate cadences (below), so a key the component does not
+hold *yet* is the normal case on a paged table, and a screen that scrolls a
+known-busy row into view would find it inert until the next jobs poll happened
+to come round. The component supplies its key set on every keyed swap; under
+`ActivityWhen` that intersection is the identity, so nothing changes on the
+predicate path. A screen that genuinely needs both merges them itself, with
+`activity.Settled` available as the helper for its half:
+
+```go
+busy := map[string]string{}
+for _, a := range s.apps {
+    if label, ok := settled(a.Sync); ok { busy[a.ID] = label }
 }
-
-// pkg/app
-pendingTgts []string   // beside pendingTgt
-func (m *Model) runAction(a action.Action, target string, targets []string) tea.Cmd
-```
-
-The menu holds the whole `Set` from `SetActions`, so filling `Targets` in
-`chosen()` costs it nothing.
-
-**`m.running` needs a value.** It is a `map[string]bool` used as a set
-(`pkg/app/app.go:370`) — enough to grey out an `Exclusive` row, and not enough
-once `CaptureStarted` has to ask what a tag was launched *for*:
-
-```go
-type actionRun struct {
-    keys []string   // Set.Targets as of the launch
-    busy string     // a.Busy, resolved
+for id, op := range s.operations {       // the second source
+    busy[id] = op.Phase
 }
-
-running  map[string]actionRun   // tag → run; released on Captured
-busyKeys map[string]string      // key → tag; decision 12's per-key gate
+s.table.SetBusy(busy)
 ```
 
-`action.Menu.SetRunning` takes a `map[string]bool` today and can keep doing so
-— the shell derives one from the richer map. Handing it the whole thing instead
-would let a disabled row read "already running on cache-redis", which is
-decision 12's better reason. That is a menu-rendering choice and blocks
-nothing.
+That merge is three lines and the precedence in it is the screen's to choose,
+which is right: only the screen knows whether its operations endpoint or its
+row status is the more current of the two.
 
-**Corrected during implementation: deriving that map needs the current `Set`.**
-The menu asks whether `RunKey(a, Set.Target)` is running — one key, built from
-the *selection's display label*. A per-target gate is held under
-`RunKey(a, key)`, which that lookup can never match, so simply unioning
-`busyKeys` into the set leaves the gate invisible on the very surface that
-exists to explain it. The shell's helper is therefore `runningFor(set)`, not a
-bare `runningKeys()`: for each action it tests the current `Set.Targets`
-against `busyKeys` and, on a hit, reports it under the key the menu will
-actually ask about. The two remaining call sites pass `m.menu.Set()`.
+**Two sources are two streams, and decision 15's counter has to split with
+them.** A screen on this entrance polls `/apps` for rows and `/jobs` for
+busy-ness, and the two replies arrive independently. One generation counter
+cannot serialise both: an apps reply stamped 5 advances `seen` to 5, and the
+jobs reply stamped 4 — the newest jobs data there is — is then dropped as
+stale, permanently, because the next jobs request will race the next apps
+request in exactly the same way.
 
-**Also corrected: `runner.Next` needs a `CaptureStatus` case.** Every message
-that is not terminal has to chain the next read, and a status is not terminal.
-Without the case the stream stalls after the first progress report — the run
-keeps working, and nothing more is ever delivered from it, including its
-`Captured`. A run that reports progress once would hang its own completion.
-
-### 18. A polled source of truth can drive activity by itself.
-
-Everything above assumes the TUI started the work. That covers a sync button
-and misses an entire class of app.
-
-An AWX job, an Argo rollout, a CI pipeline, a k8s deployment: the row's state
-changes because a schedule fired, or a colleague clicked something, or the
-previous step finished. `status: running` is a fact about the world that
-arrives on a poll, and a screen showing it has exactly as much reason to spin
-as one whose user pressed a key — more, since nobody in the room knows it is
-happening. Under decisions 1-17 that screen gets nothing: no `StartMsg` was
-broadcast, so no row moves.
-
-The read-only half of the problem is also the easier half, because the answer
-is a pure function of the data:
+> **Stamp per stream, not per screen. A write bumps every stream.**
 
 ```go
-o.ActivityColumn = "Status"
-o.ActivityWhen = func(c table.Row) (label string, busy bool) {
-    return activity.Busy("running", "pending", "waiting")(c[statusCol])
-}
+type stream struct{ gen, seen int }
+s.apps, s.jobs    // one each; s.writing stays shared
 ```
 
-Every keyed swap walks the rows, builds `key → label` for the ones that match,
-and hands the whole map to `Set.Derive`, which replaces the derived layer
-wholesale. A row that matches spins; a row that stops matching stops. No
-action, no shell, no `pkg/action` — a dashboard with a `pkg/poll` and a
-predicate gets the whole feature.
+Rule 33's existing instruction — stamp each fetch, ignore anything older than
+the newest applied — reads as if a screen has one fetch. It has one *per
+endpoint*, and the guard is per endpoint too. A dispatch bumps both, because a
+write invalidates a read of either kind.
 
-**Derived entries have no hold and no outcome glyph.** When `running` becomes
-`failed`, the cell simply goes back to rendering the row's own value, which
-already says `failed`, in whatever colour the app gives it. A `✗` held over the
-top of it for two seconds would be the library restating the data less
-precisely than the data states itself. The hold exists for local entries
-because *there* the outcome has nowhere else to appear.
+Which of the two then retires an expected entry is worth being explicit about:
+**the jobs poll does**, because an expected entry is a claim about whether a
+row is working and the jobs endpoint is what observes that. It is also the
+endpoint most likely to lag a dispatch, since a separate operations collection
+is usually a reconciler's output — which is not a reason to move the
+responsibility, only the reason `Options.Settle` exists and the reason its
+middle case is unavailable on this entrance (decision 16).
 
-**Two layers, and local wins.** A key can have both a local entry and a derived
-one; `Render` prefers local. That ordering is what makes the mixed case a
-handoff instead of a fight:
+**This was written to answer removed-items 1 and 3 together**, on the argument
+that "a separate handle" and "a separate collection" differ only in the shape
+of the request, both ending at a `map[key]label` the screen holds and cannot
+hand over. That is true of the collection and false of the handle, which is
+keyed by dispatch rather than by row — G2.
 
-| | row shows | from |
-|---|---|---|
-| click Launch | `⠹ launching` | local |
-| POST returns, first poll says `running` | `⠹ running` | derived |
-| poll says `successful` | `successful` | the cell's own value |
+### 14. An expected entry, deleted by the next observation.
 
-and it is what stops a stale page wiping a live spinner. A poll that was
-already in flight when the user clicked returns the *old* `successful`; derived
-says "not busy"; the local entry is untouched, because derived does not retire
-local. Without that rule every action would flicker off and on once, at a
-moment determined by the poll phase.
+**Problem.** Press Sync and nothing moves. The POST returns in 200ms, the next
+poll is up to two seconds away, and for that whole window the row reads exactly
+as it did before the keypress. The statusbar receipt covers it partially, but
+the row — the thing the user is looking at, the thing the verb was *about* —
+says nothing.
 
-Two helpers, and the second is usually the right one.
-`activity.Busy(values...)` matches the statuses that mean work, labelled with
-the matched value. `activity.Settled(values...)` inverts it: it names the
-terminal states and treats everything else as work. Prefer `Settled` — it is
-how these APIs document themselves, and it keeps spinning when a server learns
-a new in-progress status, where `Busy` would treat that one as done. The mirror
-risk is a new *settled* status spinning forever, so pick the list the server is
-less likely to extend.
-
-Either way the predicate takes the whole row rather than one cell, because the
-status worth watching is not always the status worth showing, and a hidden
-column or a second field is a normal thing to want.
-
-### 19. A local entry hands off to the data, rather than expiring on a timer.
-
-**This is the case that made decisions 18-20 necessary, and it is worth
-following all the way through.**
-
-An AWX launch is a POST that returns in 200ms and starts ten minutes of work on
-a server. Under decision 8 alone:
-
-```
-t=0.0   click Launch          → local entry, "launching"
-t=0.2   Run returns nil       → ✓, held
-t=2.2   hold expires          → cleared
-t=0.8   (server) job finishes
-t=5.0   poll returns "successful"
-```
-
-The user saw a spinner for 200ms, a tick for two seconds, and then a cell that
-already said `successful` before they clicked and says `successful` now.
-**Nothing on screen distinguishes "it ran and succeeded" from "nothing
-happened".** If the job had *failed* in that window, the cell changes to
-`failed` five seconds later with no motion drawing the eye to it, and reads as
-though it had been failed all along.
-
-The instinct is to keep the spinner up for a few seconds and hope the poll
-catches the job. That is a guess dressed as a feature: too short and it does
-nothing, too long and the row lies about work that finished, and the right
-number is the poll interval, which the component does not know.
-
-The honest framing is that **the spinner should cover the observation gap, not
-the work.** The TUI's problem in that window is not that the job is running —
-it is that the TUI has nothing true to say, because the newest thing it knows
-predates the user's click. That gap has a precise end: the next time the data
-is observed.
-
-So: **a local entry finished *successfully* is not cleared until the next
-`Derive` after it finished.** The rendered outcome is deferred with it; the row
-keeps its spinner and its label. Rewriting the trace:
-
-```
-t=0.0   click Launch          → local entry, "launching"
-t=0.2   Run returns nil       → finished, awaiting confirmation; still spinning
-t=5.0   poll observes         → Derive runs; "successful" is not busy
-                              → local entry clears; the cell shows successful
-```
-
-The user sees continuous motion from the click until the answer arrives, then
-the answer. The timing is fictional — the job was done at t=0.8 — but every
-frame of it was the truth about *what the TUI knew*, which is the only thing a
-UI can honestly report. And if the poll had returned `failed`, the same five
-seconds of motion end on a cell that changed while they were watching it.
-
-Four constraints keep this from becoming the timer it replaces:
-
-- **Only on success.** A failed action already knows the outcome and reports it
-  with `✗` and the normal hold: a dispatch that failed started nothing, so
-  there is nothing for the data to confirm. (A POST that succeeded and whose
-  response failed to parse is the edge this gets wrong, and it is the right way
-  round — reporting the error the action returned.)
-- **Only when the component has an `ActivityWhen`.** With no predicate there is
-  no source of truth, nothing will ever call `Derive`, and decision 8's hold is
-  the whole story. The rule switches itself off exactly where it cannot work.
-- **Capped by `Options.Confirm` (default 30s).** Polling can be paused, the
-  screen can be a tab nobody is looking at, the endpoint can be down. On expiry
-  the entry clears through the normal hold, showing the outcome the action
-  reported. A cap is not a guess about the work; it is a bound on how long the
-  library will wait to be told something.
-- **Derived may take over instead of clearing.** If the confirming `Derive`
-  says the key *is* busy, the local entry retires and the derived one is
-  already there — the handoff of decision 18, with no frame in between.
-
-**Corrected during implementation.** A fifth constraint was missing, and it
-only shows up once decision 20 is built alongside this one: the observation
-that *ends* a handoff must also suppress the flash for that key. Otherwise the
-ordinary happy path reports itself twice — the user watches the spinner from
-click to completion, and then the revision change fires a `•` on top of it. The
-`Set` therefore carries a `settled` set: keys the previous observation reported
-busy, plus keys whose handoff this one just retired. See decision 20.
-
-**What this does not fix, and cannot.** If the user never acted and the job
-both starts and finishes between two polls, nothing in the library can know it
-happened — see decision 20.
-
-### 21. Conflict with the source of truth is three layers, and the server is the only authority.
-
-What happens when the user acts on a row the server just started working on?
-Nothing in decisions 1-20 answers that. `Exclusive` looks like the answer and is
-not: it gates runs *this session* launched, held in the shell's own registry,
-and it knows nothing about work that arrived on a poll.
-
-The honest structure has three layers, and none of them is optional.
-
-**The server refuses.** It is the only thing that knows, because the client's
-newest information is an observation that may be a poll interval old. A real API
-answers 409; `demoapi` now does too, and used to accept both commands and let
-two jobs race on one row with the later completion overwriting the earlier
-one's result. A fixture cannot teach a client to handle a conflict it never
-produces.
-
-**The action surfaces the refusal.** A non-2xx is an error, the action returns
-it, and the existing path carries it: `EndMsg{Err}` puts ✗ on the row, the
-statusbar says why, and the console keeps the body. No new machinery — this is
-decision 19's failure branch doing its job.
-
-**The screen pre-empts, best-effort.** `Action.Disabled` already exists for
-"this verb does not apply right now", and the screen already holds what it needs:
-a derived entry with no `RunID` means the last poll said the server was working
-on that row. So `Actions()` dims the verbs and names the reason — "already
-syncing" — and the ordinary case never reaches the server at all.
-
-Best-effort is the accurate description, and calling it anything stronger would
-be the mistake. The check reads the last observation; a schedule can fire in the
-window between that observation and the POST. Which is precisely why the server
-still has to reject and the action still has to report.
-
-**The read side needs the same discipline, and a plainly polled screen gets no
-help with it.** `source.Deliver` carries a generation so an overtaken reply
-cannot paint stale rows under a newer one. A screen that just polls and calls
-`SetKeyedRows` has nothing equivalent, and over a real network replies do arrive
-out of order. `examples/patterns/activity` therefore stamps each fetch and drops
-anything older than the newest applied — five lines, and the same idea the
-coordinator encodes for windowed tables. A library helper here is an open
-question rather than a gap with an obvious shape.
-
-### 20. What no amount of polling can see, and the one escape hatch.
-
-A busy phase entirely contained between two observations is invisible. The
-value was `successful` at the last poll and is `successful` now; a run happened
-in between; the data as sampled carries no evidence of it. This is not a
-rendering problem or a state-machine problem — the information is genuinely
-absent from what the screen was given.
-
-Decision 19 covers the case where *the user acted*, because then the TUI has a
-second source: it knows it asked. For work nobody in this session started,
-there is nothing to reason from.
-
-Unless the payload happens to carry a revision — and for this class of API it
-usually does. `finished_at`, `last_job_run`, `resourceVersion`, an ETag, a
-monotonic `id` of the latest run. When one exists:
+**Decision.** A second, temporary map of keys the screen has asked the server
+to work on, rendered alongside the busy map:
 
 ```go
-o.ActivityRevision = func(c table.Row) string { return c[finishedAtCol] }
+s.table.Expect(targets, "Syncing")
 ```
 
-On each swap, a key whose revision changed while it was **not** busy gets a
-brief outcome flash — the same two-second hold a local entry uses, saying "this
-row changed under you" rather than restating the value. Unset, nothing happens
-and the row is as quiet as it is today.
+and one rule for its whole lifetime:
 
-Deliberately opt-in and deliberately separate from `ActivityWhen`. The two
-answer different questions — "is this row working" versus "did this row's work
-change" — and a payload very often supports the first and not the second.
-Folding them into one predicate would make the honest answer ("I can tell you
-it is running, I cannot tell you it ran") unexpressible.
+> **Every `Derive` deletes the expected map.**
 
-**Rejected: diffing whole rows to detect change.** Every poll that reformats a
-timestamp, reorders a list, or recomputes an age column would flash every row.
-A revision is a field whose *contract* is that it changes when the work does;
-a row diff is a heuristic that mistakes rendering for meaning.
+No precedence rule, no handoff protocol, no expiry cap, no timer. An
+observation that reaches `Derive` was taken after the request went out
+(decision 15 is what guarantees that), so it is entitled to supersede the
+claim — whether it confirms it or contradicts it. If it confirms, the key is in
+the busy map and the row keeps spinning with no visible seam. If it
+contradicts, the work is already over and the row should settle.
 
-**Corrected during implementation: a flash must never follow a spinner.** The
-design described the flash purely as "revision changed while not busy", which
-is true of every normal completion the moment the work stops being busy — so a
-watched run ended in a spinner *and* a `•`, saying the same thing twice. A
-flash is for work that was never visible at all, so it is now suppressed for
-any key the previous observation reported busy, or whose handoff the current
-one retired (decision 19). Without both halves the suppression has a hole: a
-handoff that resolves straight to a resting status never appears in the
-previous observation's busy set.
+The two maps **union** rather than compete. A key in both renders from the busy
+map, since that label is the observed word rather than the guess — though after
+any `Derive` there is no overlap to resolve, and `Expect` on a key the last
+observation already reported busy is a case `Actions()`' `Disabled` gate should
+have prevented anyway.
 
-**Also corrected: construction counts as an observation.** `pkg/tree` takes its
-data through `Options.Root`, so a tree that never calls `SetRoot` had never
-derived, and decision 19 read that as "no source of truth" and reported its
-first action's outcome immediately. `New` now observes when it is handed a
-root. `list` and `table` need no equivalent: their `Options.Items` / `Rows` are
-anonymous, and derived state is keyed.
+**No timer is needed, which is worth stating because the previous design had
+two.** An expected entry does not need to be aged out, because an observation
+is always coming: the next poll clears it.
 
-**Rejected: an event stream instead.** Correct, and out of scope — the moment
-an API offers one, the screen pushes `StartMsg`/`EndMsg` itself through the
-direct API and needs none of this. These three decisions are for the far more
-common case where all you have is a list endpoint and an interval.
+**When no observation is coming, the claim is unfounded and the screen says
+so** — decision 17. The original text here said that a screen receiving no
+observations has a dead poll chain and worse problems than a stuck indicator.
+`/chaos/down?for=5s` is the counterexample: a healthy screen, polling, taking
+503s, recovering cleanly, and holding a spinner for the whole window because a
+fetch that never lands produces no `Derive`. That is a retraction, not a timer.
+
+**The rule is only as good as decision 15's**, and it is worth being precise
+about the dependency rather than leaving it implied. "Entitled to supersede"
+means *issued after the write it would be superseding*. Nothing in the
+component can check that — it sees rows arriving, never when they were asked
+for — so the guarantee is entirely the screen's, and decision 15 is what makes
+it. Two dispatches inside one poll interval is where a weaker version of that
+rule shows: an observation that confirms the first and has never heard of the
+second would retire both.
+
+**This also covers most of removed-item 2.** `ActivityRevision` existed to
+notice work that began and ended between two polls. The common instance of that
+is work *the user just started* on a fast endpoint — a Refresh that the server
+completes in 30ms — and an expected entry handles it exactly right: the row
+spins for one poll interval, then the observation arrives saying settled and it
+stops. What is left over is work *somebody else* started and finished inside
+one interval, which is real, unobservable without a revision field, and worth a
+`•` flash to approximately nobody. It stays dropped.
+
+### 15. A screen does not apply a read taken across its own write.
+
+**Problem, and it is the one that sank the previous design.** A poll already in
+flight when the user pressed Sync returns the *pre-click* value. Under decision
+14 that observation would clear the expected entry half a second after it
+appeared, and the row would then sit dead until the next poll picked up the
+real `Syncing`. Spinner, nothing, spinner — which reads as a glitch, and which
+happens at a moment set by the poll phase rather than by anything the user did.
+
+A poll *issued* after the keypress does it too, as long as it goes out before
+the write lands — the same glitch, out of a read that looks perfectly current.
+
+The previous design answered this by making the local entry *win* over the
+derived one, and everything else followed from that: if derived cannot retire
+local, then local needs its own retirement story, which needs a handoff, which
+needs a cap, which needs something to show when the cap expires.
+
+**Decision.** Recognise it as what it is — a stale read, not an activity
+problem — and fix it where staleness is already handled:
+
+> **A read is stale if it was issued before a write the screen has since had
+> acknowledged, or while a write was outstanding. A screen drops both.**
+
+```go
+case action.ChosenMsg:
+    s.gen++                                   // reads in flight predate the keypress
+    s.writing++                               // and reads issued from here until the ack
+    cmds = append(cmds, s.table.Expect(m.Targets, demoapi.SyncSyncing))
+
+case dispatchedMsg:                           // the 202 came back
+    s.writing--
+    s.gen++                                   // reads issued during the POST predate the write
+
+case fetchedMsg:
+    if m.gen < s.seen || s.writing > 0 {
+        return s, nil                         // stale, or taken mid-write
+    }
+```
+
+Every polled screen already keeps the generation counter, because rule 33
+requires it: replies arrive out of order over a real network, and one that
+overtakes a newer one must be dropped. A write is simply another reason a read
+is stale — it was taken before the thing the user just did. This is
+read-your-own-writes, spelled in the counter the screen already has.
+
+**Both bumps are needed, and the second is the one that matters.** An earlier
+version of this decision bumped only at `action.ChosenMsg`, which drops reads
+*in flight at the keypress* and nothing else. It leaves the POST's own latency
+wide open: a read issued at t+50ms, landing at t+80ms, carries the newer
+generation and a pre-write value, and clears the expected entry before the
+write has even been accepted. That window is never zero, and
+`POST /apps/{id}/sync?latency=3s` makes it three seconds. The `writing` count
+closes it, and the ack-time bump catches the leftover case the count cannot —
+a read issued long before the dispatch that happens to land after the ack, when
+the count is already back to zero.
+
+Both are two lines of bookkeeping in a screen that already keeps one of them.
+The reply is then discarded before the component ever sees it, so `Derive` is
+never called with a pre-write observation, and decision 14's one-line rule is
+sound. **Six mechanisms collapse into three lines in the screen** — lines whose
+absence is immediately visible (the row flickers once) rather than silently
+wrong.
+
+**The precondition, stated rather than assumed: the read path must be
+monotonic.** All of this tracks when a read was *issued*; it assumes a server
+whose replies get no older as time goes forward. A replica or a watch cache
+breaks that assumption without breaking any rule — `?stale=` makes a server
+report busy, settled and busy again from three replies that were each true when
+they were made, and no client-side counter can repair it, because neither reply
+overtook the other. Decision 16 is the only mitigation and it is a partial one.
+A screen reading through a lagging replica gets a feature that flickers, and
+that is a property of the deployment rather than a defect in the design.
+
+**Rejected: having the library enforce it.** `pkg/activity` cannot; it has no
+idea a fetch exists. The component cannot; `SetKeyedRows` tells it when rows
+*arrived*, never when they were *requested*, and the gap between those is
+precisely the window in question. A `SetKeyedRowsAsOf(rows, gen)` variant would
+thread the number down to where it could be enforced, at the cost of a second
+keyed setter on three components and a concept in the component that belongs to
+the screen. The rule is cheaper and it is already half-written.
+
+### 16. `Options.Settle`, counted in observations rather than seconds.
+
+**Problem.** Decision 14's rule assumes the next observation knows about the
+request. That is true of an API whose POST handler sets the status — and false
+of a reconciler. Argo's controller, a Kubernetes watch cache, anything with a
+control loop: the POST is accepted, the next poll honestly reports `OutOfSync`
+because nothing has reconciled yet, the expected entry is deleted, and the row
+flickers exactly as decision 15 was meant to prevent.
+
+Worth knowing alongside it: firing `poll.Refresh()` on dispatch to shorten the
+window makes this *worse*, not better. The sooner you read after a write, the
+likelier you read before it lands.
+
+**The first answer was a duration, and the fixture broke it.** A floor in
+seconds has to be set from the server's reconcile lag, which the client cannot
+know and the server does not publish. Worse, `?reconcile=9s&takes=1s` makes
+every value wrong at once: the work is accepted at t=0, finished at t=1s, and
+first reported at t=9s, so it is never observable running at any poll rate.
+Any floor short enough not to outlive the work flickers, and any floor long
+enough not to flicker holds a spinner eight seconds after the work is done.
+Too short does nothing, too long lies — which is precisely the grace period
+the Rejected section rejects, wearing a different name.
+
+**Decision.** Count observations, not seconds, and let the data end the wait
+whenever it can:
+
+```go
+Options.Settle int   // unchanged observations an unconfirmed claim survives; default 0
+```
+
+An expected entry meets one of three kinds of observation:
+
+- **It reports the key busy.** The claim is confirmed; the key is in the busy
+  map and the entry is redundant. This is the ordinary ending, and it has no
+  visible seam.
+- **It reports a *different* settled value than the key had when the claim was
+  made.** The server has demonstrably acted — `OutOfSync` became `Synced` —
+  so the entry is retired at once, whatever the allowance says.
+- **It reports exactly what was there before the dispatch.** The server has
+  said nothing new, so this observation is evidence of nothing. It consumes
+  one of `Settle`'s allowance, and the entry is retired when the allowance
+  runs out.
+
+Only the third kind counts against the budget, which is what makes a small
+number sufficient: an ordinary reconciler needs one or two unchanged reads of
+patience, not a duration tuned to its control loop. And the number is in units
+the screen actually owns — its own poll cadence — rather than in units of
+server behaviour it is guessing at.
+
+**Zero is the default and is decision 14's original rule exactly**: the next
+observation retires the claim regardless. That is correct for any API whose
+handler sets the status inline, which is most of them.
+
+**A ceiling, not a floor, and that is the important inversion.** Every
+observation still reduces the entry's remaining life, so an unconfirmed claim
+always ends — after `Settle` unchanged reads at the very latest. `?blackhole=1`
+is what that bound is for: a request accepted, given a job id, and never acted
+on is indistinguishable from one still reconciling, and under a floor it would
+spin until the floor expired while under an unbounded change-detection rule it
+would spin forever.
+
+**What it still cannot do**, named rather than mitigated: when the reconcile
+lag exceeds the work's duration, no observation differs from the pre-dispatch
+value until the work is already over, so the row spins for `Settle`
+observations and learns nothing from any of them. The information is not in the
+read path at all — recovering it needs the dispatch's own handle (G2) or a
+revision field (removed-item 2), and a number here cannot substitute for
+either.
+
+**Under `SetBusy` the middle case is unavailable.** The screen hands over busy
+keys only, so the component cannot see a settled value change and the allowance
+does all the work. A screen on that entrance either sets `Settle` a little
+higher or includes settled labels in what it reports.
+
+It is still not `Dwell` renamed. `Dwell` held *derived* entries against a
+source of truth that disagreed with itself between reads. `Settle` bounds an
+*expected* entry against a source of truth that has not yet read its own write.
+Different layer, different cause, and only one of them is being reinstated.
+
+### 17. `Retract`, for a claim that has stopped being true.
+
+**Problem.** The expected entry is optimistic by construction — it goes in when
+the verb is dispatched, before the server has answered. Two things can then
+make it false, and they are not equally forgiving.
+
+The POST returns 409 or 500: the row spins for up to a poll interval after the
+statusbar has already said it failed. Annoying, and self-correcting.
+
+Or the observations stop. `/chaos/down?for=5s` refuses every read for a window
+while the screen stays perfectly healthy — polling, taking 503s, recovering
+afterwards. Decision 14 retires an expected entry on the next `Derive`, and
+there is no next `Derive`, so the row spins for the length of the outage. The
+same is true of a fetch that errors, a poll the user paused, and a screen whose
+containing tab is hidden. Nothing self-corrects, because the thing that does
+the correcting is what stopped.
+
+**Decision.** Let the screen take it back:
+
+```go
+s.table.Retract(targets...)
+```
+
+and call it in both cases — on a write that failed, and on a read that failed:
+
+```go
+case dispatchedMsg:
+    if m.err != nil {
+        s.table.Retract(m.targets...)      // the request never landed
+    }
+
+case fetchedMsg:
+    if m.err != nil {
+        s.table.RetractAll()               // nothing is coming to retire them
+    }
+```
+
+**On a failed write this is politeness; on a failed read it is required.** The
+argument for optional — a screen that forgets is self-correcting within one
+poll — holds only while observations are arriving. Where they have stopped, the
+correction has stopped with them, and the failure mode is a stale spinner for
+as long as the outage rather than for two seconds.
+
+That asymmetry is the whole reason this decision is not "call `Retract` when
+your POST fails". An expected entry is a claim that the next observation will
+explain; when there is no next observation, the claim has nothing behind it and
+the honest thing is to drop it. Which is also the narrow, in-scope half of
+G1 — the row stops asserting something it cannot support, without this package
+growing a notion of staleness it has no business holding.
+
+### 18. Corrected during implementation: `Observe`, because a claim needs the value.
+
+Decision 16's middle case — an observation reporting a *different* settled
+value retires the claim outright — needs the key's value twice: when the claim
+was made, and when the observation arrives. `Derive(busy)` carries neither. A
+settled key is simply *absent* from that map, which is the whole point of its
+shape, so there is nothing in it to compare.
+
+So `Set` grew one method rather than a second map:
+
+```go
+func (s *Set) Observe(busy, values map[string]string) tea.Cmd
+func (s *Set) Derive(busy map[string]string) tea.Cmd { return s.Observe(busy, nil) }
+```
+
+and `Expect` takes the same values at claim time. `Derive` keeps working
+unchanged, and nil values read as "every observation is uninformative" — which
+is the honest reading for a caller that cannot supply them rather than a
+degraded one.
+
+The cost is bounded by `Expecting()`: a component asks the Set which keys
+carry a claim and collects values for those alone, so an ordinary poll on a
+screen where nobody has dispatched anything gathers nothing at all.
+
+### 19. Corrected during implementation: a tree has no value to compare.
+
+The middle case cannot exist in `pkg/tree`, and the reason is worth keeping
+because it is about identity rather than about convenience. The only string a
+tree can read generically is `Node.Label()` — and a node's label *is* its
+identity. The path that expansion state, cursor restore, marking and activity
+all key on is built from it. A label that changed is not the same node
+reporting something new; it is a different node, at a different path, which
+this feature has never claimed to track.
+
+So a tree passes nil values, and a claim there ends by being confirmed or by
+spending its allowance. A tree backed by a reconciler wants a slightly larger
+`Settle` than the same data in a table would.
+
+That is the same shape as the `SetBusy` limitation in decision 16, arrived at
+from the other direction: the middle case needs a value that is *about* the
+key without *being* the key, and a tree node has none.
+
+### 20. Corrected during implementation: under the shell, the acknowledgement is `runner.Captured`.
+
+Decision 15 says the generation moves again when the write is acknowledged. In
+a screen doing its own POST that is wherever the reply lands, and the example
+in that decision reads correctly. Under the app shell it does not: the verb
+runs through `action.Action.Run`, which the shell executes, so the screen never
+sees the POST return at all. What it sees is `runner.Captured`, carrying the
+run's `Tag` and its error.
+
+The screen therefore records its claim against `action.RunKey(a, target)` when
+it handles `ChosenMsg`, and matches the tag on the way back:
+
+```go
+case action.ChosenMsg:
+    s.gen++
+    s.writing++
+    s.claimed[action.RunKey(m.Action, m.Target)] = keys
+    cmds = append(cmds, s.table.Expect(keys, demoapi.SyncSyncing))
+
+case runner.Captured:
+    keys, ours := s.claimed[m.Tag]
+    ...
+    s.writing--
+    s.gen++
+    if m.Err != nil {
+        s.table.Retract(keys...)
+    }
+```
+
+One map on the screen, and it earns its place twice: it is also what makes
+decision 17's `Retract` reachable, since the targets of the write that failed
+are in it and nothing else on that message says which rows the run was about.
+
+An action with no `Run` — a `Do` that pushes a screen — is skipped, or
+`writing` would never come back down.
+
+### 21. Corrected during implementation: the shell has to forward the dispatch.
+
+Decision 20 above is written as if a screen under the app shell can see its own
+verb being dispatched. It could not. `pkg/app` handled `action.ChosenMsg`,
+called `runAction` and returned — the message never reached the stack, so the
+`case action.ChosenMsg` in that decision was unreachable code.
+
+This shipped, briefly, and is worth recording with the symptom rather than the
+diagnosis: everything was right except the delivery, so `pkg/activity` was
+correct, the component contract passed, the ordering rules were asserted
+against a real server, and pressing Sync in the example still did nothing until
+the next poll. Every test built its own screen for the occasion; none drove the
+real one through the real shell.
+
+**The shell now forwards it, from `runAction`** — the one place both the
+direct path and the confirm path pass through:
+
+```go
+var fwd tea.Cmd
+m.stack, fwd = m.stack.Update(action.ChosenMsg{Action: a, Target: target, Targets: targets})
+```
+
+From `runAction` rather than from where the menu's `ChosenMsg` arrives, because
+those are different moments: a verb with `Confirm` is *armed* at the pick and
+runs only if the modal says yes, and a screen told at the pick would claim rows
+for work the user then cancelled. Forwarding from the shared path makes the
+message mean "this is being dispatched now", which is what a screen can act on.
+Both are asserted in `pkg/app/actions_test.go`.
+
+It is also the smallest change that could work. The alternative — a new
+message type for "an action started" — would have been a second thing meaning
+what `ChosenMsg` already means, and rule 6 says a screen gets every message
+anyway; this one was simply being swallowed.
+
+`internal/integration/activity_example_test.go` now drives the example through
+the shell and asserts the row claims on the keypress, which is the test whose
+absence let this through.
+
+### What this does not reinstate
+
+The six mechanisms from decision 1's table, and what replaces each:
+
+| Removed mechanism | Replaced by |
+|---|---|
+| local layer beats derived | nothing — the stale read never arrives (13, 15) |
+| handoff on next observation | `Derive` deletes the expected map (14) |
+| `Options.Confirm` expiry | nothing — every `Derive` clears, so the wait is bounded by the poll, or by a retraction when the polls stop (17) |
+| `Options.Dwell` hysteresis | nothing — still a read-path problem (decision 1) |
+| outcome hold + `✓`/`✗` glyphs | nothing — decision 7 stands unchanged |
+| `ActivityRevision` | decision 14 for the common half; the rest stays dropped |
+
+Also staying out: `Progress` and per-row progress counters, `StartMsg` /
+`UpdateMsg` / `EndMsg`, and any `pkg/app` involvement. `pkg/activity` remains a
+leaf with no tuilib imports.
+
+### Open: who calls `Expect`?
+
+Two answers, and the choice is not obvious.
+
+**The screen**, explicitly, on the same line it bumps the generation
+(recommended). The two halves of read-your-own-writes are then visibly
+together, and `pkg/activity` stays a leaf. Costs the author two lines.
+
+**The shell**, from `action.Set.Targets`, the way the removed design
+broadcast — free for the author, and it puts the keys to use that `Set.Targets`
+already carries for the `Exclusive` gate. But it re-couples `pkg/app` to
+`pkg/activity` and brings back a message type, and it cannot do the job alone:
+the shell has no access to the screen's fetch generation, so decision 15 still
+has to be written by hand in the screen. Zero lines saved on the half that
+matters, and a dependency restored on the half that does not.
+
+The recommendation is the screen. Worth revisiting only if several real screens
+end up writing the identical two lines.
+
+### What lands in CLAUDE.md when this is built
+
+Rule 33 currently says the data is the only source, and one of its
+anti-patterns — "don't hold a row indicator open past what the data says" —
+rejects grace periods, outcome holds and dampers in one sentence. Two of those
+three stay rejected, and so is the fourth on a closer reading: `Options.Settle`
+counts observations rather than seconds and is spent only by reads that say
+nothing new, so it holds nothing open past what the data says — it declines to
+treat a read that repeats the pre-dispatch value as having said anything. The
+rule should say that, or the next reader deletes it as a violation.
+
+The rule also grows decision 15, which is the only part of this design with
+nothing but a compiler-free convention behind it — and it is now three lines in
+the screen rather than one, so the anti-pattern it guards against needs naming
+directly: *don't apply a read taken across your own write.* Rule 33 already
+tells a polled screen to stamp each fetch and ignore anything older than the
+newest applied; this extends that same sentence to writes, which is the
+cheapest place for it to live. Decision 17's read-failure retraction goes in
+alongside it, since a screen that retracts on a failed POST and not on a failed
+fetch is the shape the fixture caught.
+
+### Tests these needed
+
+- An expected entry renders, and a subsequent `Derive` deletes it — including a
+  `Derive` that reports the same key busy, which must produce no idle frame in
+  between.
+- `Expect` on a key already in the busy map renders the observed label, not the
+  expected one.
+- A screen that does **not** bump the generation flickers, asserted as an
+  integration test against the example — this is the rule with no compiler
+  behind it, so it needs the test that shows what its absence looks like.
+- The same against a *slow* write: `?latency=` on the POST, a poll issued
+  inside that window, and no idle frame on the row. A screen bumping only at
+  the keypress fails this one and passes the previous one, which is why both
+  are needed (F1).
+- Two dispatches inside one poll interval, with an observation between them
+  that knows about the first only: neither row goes idle (F3).
+- A failed fetch retracts, asserted through `/chaos/down` — the row stops
+  spinning inside the outage rather than at the end of it (F5).
+- `Settle` spends its allowance only on observations that repeat the
+  pre-dispatch value; one that reports the key busy confirms instead, and one
+  that reports a different settled value retires the entry whatever the
+  allowance says. Zero retires on the next observation.
+- An unconfirmed claim always ends: `?blackhole=1`, accepted and never acted
+  on, stops after `Settle` observations rather than spinning indefinitely.
+- `Active`, `Count` and `Render` answer over the keys the component holds, and
+  a `SetBusy` key for a row on another page survives the swap that brings the
+  row into view (F6).
+- Two streams with independent generations: a jobs reply is not dropped because
+  an apps reply stamped later landed first (F7).
+- `SetBusy` on a component built with `ActivityWhen` panics (F8).
+- `Retract` clears one key and leaves its siblings.
+- An expected entry survives a `SetTheme` rebuild, which means `Adopt` carries
+  it, and so does the scope.
+- A fetch that fails does not leave an expected entry spinning for the length
+  of the outage (F5).
+- An idle component with an expected entry still schedules exactly one tick
+  chain, and stops when the entry goes.
+
+All of them are written. The state machine is in
+`pkg/activity/claim_test.go`; the contract that has to hold for all three
+components is in `internal/componenttest/expect_test.go` (claims) and
+`setbusy_test.go` (the second entrance), per the rule about not testing shared
+behaviour in one component's package; and the two orderings that need a real
+server are in `internal/integration/activity_claim_test.go`.
+
+That last file is the one worth reading, because decision 15 is the rule with
+no compiler behind it. It drives the same screen three ways — no guard, the
+keypress bump alone, and the full rule — against a write held open with
+`?latency=400ms`, and asserts that only the third keeps the row spinning. The
+middle case is the point: a screen bumping at the keypress alone passes the
+easy version of this test (a read already in flight when the user acts) and
+fails this one, which is exactly why the first draft of the decision looked
+sufficient.
+
+### What the fixture found
+
+Decisions 13-17 were written before anything could be run against them, so
+`demoapi` was widened first: `?reconcile=`, `?stale=`, `?blackhole=`, `?say=`,
+`?phases=`, `?takes=`, `GET /jobs?status=running`, and `/chaos/{down,delete,
+spawn}` — each reproducing, on demand and on a pinned clock, one ordering a
+per-row indicator meets in the field. `demoapi/scenarios_test.go` pins what
+each knob promises, so a later screen test asserting "the row flickers here" is
+asserting something about the screen rather than about a fixture that quietly
+changed shape.
+
+Running the plan against them, on paper, found two kinds of thing. **Eight
+problems** (F1-F8): decisions that are wrong. **Four gaps** (G1-G4):
+capabilities no decision covers, in
+[What the plan has no answer for](#what-the-plan-has-no-answer-for). Two
+smaller items are recorded rather than argued.
+
+The distinction matters for what happens next. A problem is answered by
+amending a decision before building it. A gap is answered by deciding whether
+the feature wants the capability at all — and two of them (G1, G2) are large
+enough to be their own design pass.
+
+**All eight have been answered in the decisions**, and are kept here with their
+original statements because the reasoning that produced them is the reason
+those decisions now read as they do. Two of the answers are not fixes: F2 is a
+precondition, stated as one in decision 15, and half of F7 was withdrawn as
+wrong. What remains outstanding is the four gaps below, which are not defects
+in 13-17 but capabilities it does not have.
+
+**F1. The generation bump is in the wrong place (decision 15).** *Fixed in
+place — decision 15 now bumps at the acknowledgement as well as the keypress,
+and drops reads taken while a write is outstanding.* `gen++` on
+`action.ChosenMsg` invalidates reads *in flight at the keypress*. It does
+nothing about reads **issued after the keypress and before the write lands** —
+those carry a newer generation and a pre-write value, so the screen accepts
+them and `Derive` clears the expected entry. That window is the POST's own
+latency and it is never zero; `POST /apps/{id}/sync?latency=3s` makes it
+arbitrary. The bump belongs at the write's *acknowledgement*, not at the
+keypress — or at both, since the dispatch-time bump is still what drops the
+read already in flight. Decision 15's one line is two, and the second one is
+the one that matters.
+
+**F2. Read-your-own-writes assumes a monotonic read path.** Even a correctly
+placed bump cannot help a reply that is newer in issue order and older in
+content: `TestAlternatingStaleReadsGoBackwards` produces busy, settled, busy
+from a server that genuinely said all three, and no client-side counter repairs
+it. So decision 15's "`Derive` is never called with a pre-click observation" is
+true of a server that reads its own writes and false of a replica, a watch
+cache or anything fronted by one — and the six-into-one collapse rests on that
+assumption rather than on the counter. Worth stating as a precondition.
+
+This one reaches back into the **shipped** feature. Decision 1 says that when
+an indicator flaps it is the read path, and lists four client-side causes — a
+doubled tick chain, out-of-order replies, mixed setters, a component rebuilt
+per fetch — under the instruction to fix the cause. A lagging replica is a
+fifth, it is not the client's to fix, and a reader who takes the list as
+exhaustive goes hunting for a defect in a poll chain that is working. The rule
+needs the caveat whether or not 13-17 get built.
+
+**F3. Wholesale clearing punishes the newest dispatch (decision 14).** *Fixed
+by F1's correction rather than by a rule of its own: with the ack bump and the
+outstanding-write check, an observation the screen accepts was issued after
+every acknowledged write, so the wholesale clear is sound and decision 14 keeps
+its one-line rule, and `Settle`'s allowance is per entry, which is what stops
+one fresh dispatch preserving a stale claim elsewhere.*
+
+Two syncs a second apart with one observation in between: the read confirms the
+first and knows nothing of the second, and the second's expected entry — half a
+second old — is deleted with it. As originally written this looked like a
+reason to make the clear per-entry, and to promote `Settle` from a reconciler
+knob to a requirement on any screen where a user can dispatch twice inside a
+poll interval — which is every screen with a multi-select verb.
+
+It is worth recording that this was the wrong conclusion, because the wrong
+conclusion was the more elaborate one. The window it describes exists only
+while a read issued *between* the second dispatch and its acknowledgement can
+be applied, and that is the window F1 closes. With the ack bump and the
+outstanding-write check there is nothing left for a per-entry clearing rule to
+protect, and decision 14 keeps its single sentence.
+
+**F4. `Settle` lies when the reconcile lag outlasts the work (decision 16).**
+*Fixed in place — `Settle` is now an allowance of unchanged observations rather
+than a duration, spent only by reads that say nothing new and bounded so an
+unconfirmed claim always ends. The residual case is named and handed to G2.*
+`TestReconcileLongerThanTheWorkIsNeverSeenRunning` — accepted at t=0, reported
+at t=9s, finished at t=1s — is never observable running at any poll rate. A
+`Settle` large enough to cover that reconcile held a spinner for eight seconds
+after the work was done, which is the grace period the Rejected section
+rejects, under a different name. The distinction the decision drew — a floor on
+an expected entry, not a guess at how long work takes — was real and did not
+survive a server whose reconcile lag exceeds its work duration.
+
+The fix changed the units rather than the number. Nothing the client can
+measure in seconds is the right length of that wait, but the client does know
+whether a read told it anything: an observation repeating the pre-dispatch
+value is evidence of nothing, one reporting the key busy confirms the claim,
+and one reporting a different settled value proves the server acted. Counting
+only the first kind makes a small allowance sufficient for an ordinary
+reconciler and keeps every wait bounded. The case above remains unobservable —
+that is a property of the server, not of the number — and is handed to G2.
+
+**F5. An outage is not a dead poll chain (decision 14).** *Fixed in place —
+decision 17 now covers a failed read as well as a failed write, and is required
+rather than optional in that case.* The rule's escape
+clause — if no observation is coming, the poll chain is dead and a stuck
+indicator is the least of that screen's problems — describes a broken screen.
+`/chaos/down?for=5s` describes a healthy one: polling, receiving 503s, and
+recovering cleanly afterwards. There is simply no `Derive`, so an expected
+entry set just before the window spins for the whole of it.
+
+The screen is the only thing that knows a fetch failed, and `Retract` is
+already the take-back primitive — so decision 17 generalises from "the POST
+failed" to "nothing is coming", and stops being optional politeness. Its
+absence is a lying spinner for the length of the outage rather than for one
+poll interval.
+
+**F6. `SetBusy` breaks the every-key-is-a-row invariant (decision 13).**
+*Fixed in place — a `Set` keeps every key it is given and answers `Active`,
+`Count` and `Render` over the intersection with the keys the component holds.
+Scoped, not filtered on the way in, so paged rows still work.*
+`ActivityWhen` runs over the rows the component holds, so every entry names a
+row that exists. A map built from `GET /jobs?status=running` need not: it can
+name a row on another page, or one `/chaos/delete/{id}` removed between the two
+reads. Two exported surfaces change meaning — `Active()` goes true with nothing
+on screen, so the tick chain animates nothing forever, and `ActivityCount()`
+(on all three components) stops being "how many of my rows are working".
+Intersecting the incoming map with the keys the component holds is a few lines
+and restores the invariant; the alternative is to say `Count` counts claims.
+
+**F7. Two endpoints are two cadences, and the clearing rule is attached to the
+wrong one (13 + 14).** *Half fixed, half withdrawn — the real defect was one
+generation counter serialising two independent streams, and decision 13 now
+stamps per stream. The clearing rule was right where it was: an expected entry
+is a claim about busy-ness, so the endpoint that observes busy-ness is what
+retires it.* With rows from `/apps` and busy from `/jobs`, `SetBusy`
+is the only `Derive`, so the expected map is cleared by the *jobs* poll — the
+endpoint most likely to lag a dispatch, because a separate operations
+collection is usually a reconciler's output. "One map, one writer, replaced
+wholesale" assumed one observation; a separate collection makes an observation
+two replies that interleave, each with its own staleness.
+
+**F8. `Validate` cannot catch what decision 13 asks it to.** *Fixed in place —
+`SetBusy` on a component built with `ActivityWhen` panics, matching what the
+library already does for a construction mistake that is always wrong.* There is no
+`Validate` in `pkg/activity`, `pkg/table`, `pkg/list` or `pkg/tree` today, and
+"`SetBusy` was called" is not an options-time fact in any case. The exclusion
+has to be a documented precedence or a panic at the call site — and note that
+`Options.ActivityColumn` alone already enables the table's feature
+(`actEnabled` is `ActivityColumn != "" || ActivityWhen != nil`), which is
+exactly the configuration `SetBusy` wants.
+
+Two smaller ones, recorded rather than argued: `Adopt` copies only the busy map,
+so a theme rebuild would silently drop every expected entry unless it is on the
+change list with `Render` / `Active` / `Count` / `State` (rule 4, decision 10).
+And `State.Since` survives a key that is deleted and re-spawned between two
+polls (`TestSpawnReusesADeletedID`), carrying one row's elapsed time onto a
+different thing with the same name — latent today because nothing renders
+`Since`, and sharper under `Expect`, where the same window lands a claim on a
+row nobody dispatched against.
+
+### What the plan has no answer for
+
+The eight findings above are decisions that are wrong. These four are
+capabilities the feature set does not have at all — no decision covers them and
+none of 13-17 is a near miss. They came out of the knobs rather than out of
+re-reading the plan, which is the argument for having built the knobs first.
+
+**G1. There is no "I cannot see" state.** The whole feature has two states,
+busy and not busy, plus `Expect`'s claim. `/chaos/down?for=5s` is a *healthy*
+screen — polling, receiving 503s, recovering cleanly — and every row on it
+renders as current, authoritative data for the whole window, because a fetch
+that never lands produces no `Derive` and the last observation stands
+unqualified. The same gap covers a fetch that errors, a paused poll, and a
+screen whose tab is hidden. Staleness is not a row property and may well not
+belong in this package at all — the pane title or the statusbar is the more
+likely home — but nothing in the design says so, and the row currently lies
+with a straight face. F5 is the expected-entry half of this; G1 is the whole of
+it, and it applies to decisions 1-12 exactly as they ship today.
+
+**G2. Nothing keeps the handle a dispatch returned.** `POST /apps/{id}/sync`
+answers `202 {"job": "j-…"}`, and `GET /jobs?app=` resolves it. The plan drops
+it: `Expect` is keyed by row and retired by observation, `SetBusy` takes a map
+keyed by row, and neither can ask *is the thing I started still running?*
+`?blackhole=1` — accepted, given an id, starts nothing — is the case that needs
+exactly that, and its scenario test says so plainly: indistinguishable from
+instant success unless the client asks about the id it was handed.
+
+This falsifies a claim made above. Removed-items 1 (a separate handle) and 3 (a
+separate collection) were declared the same question wearing different clothes,
+answered together by decision 13's one setter. They are not the same question.
+A collection is keyed by **row** and answers *who is busy*; a handle is keyed by
+**dispatch** and answers *what became of the thing I started*. `SetBusy` does
+the first. The second has no home in 13-17 — and it is the one of the two that
+can tell a request that vanished from work that completed between two reads.
+
+**G3. A status the predicate does not know has no escape hatch.**
+`?say=Superseded` under `activity.Settled("Synced", "OutOfSync")` spins
+forever: a terminal state the list does not name is in-flight by construction,
+through every poll, until some other job moves the row. Decision 8 names this
+as the trade a `Settled` list makes, and 13-17 add nothing to it — the only out
+is abandoning the predicate for `SetBusy` and computing the whole map by hand,
+which is a large price for one unrecognised value. `?say=` and `Options.Vocab`
+turn that from a thought experiment into a one-line demo.
+
+**G4. A key has no lifecycle.** `/chaos/delete/{id}` followed by
+`/chaos/spawn?id=` hands back the same name attached to a different thing.
+`State.Since` carries across it, and under decision 14 so does an expected
+entry — a claim made about a row that no longer exists, landing on its
+successor. Nothing distinguishes *the same key* from *the same row*, and no
+observation can say a key **went away** as opposed to a key that is **not
+busy**: both are absence from the map. Whether that matters depends entirely on
+whether anything ever renders `Since`, which today nothing does.
+
+### What the fixture confirms
+
+Not everything it reproduced broke something. `?blackhole=1` — accepted, given
+a job id, nothing started — retires on the next observation with no special handling,
+which is the evidence that `Retract` is not needed on the success path.
+`TestTheWorldAdvancesBehindAnOutage` shows the shipped feature trueing up on
+recovery with nothing to reconcile, which is decision 1 working as designed. A
+row spawned already busy needs nothing at all. And `?say=` / `?phases=` break
+no rule: the observed label supersedes the expected one at the seam, as
+decision 14 says it should — though it makes decision 6's explicit column width
+load-bearing for `Expect` too, since the guess and the server's word have to
+fit the same cell, and `Render` drops the label entirely below the width it
+needs.
 
 ---
 
 ## API surface
 
-### `pkg/activity` (new)
+### `pkg/activity`
 
 ```go
 // State is one key's in-flight state.
 type State struct {
-    Label string    // "syncing", "syncing 3/7"
-    RunID int64     // the run that owns it; 0 when set directly
-    Since time.Time
-    Done  bool      // terminal: holding its outcome before clearing
-    Err   error     // non-nil on a failed outcome
+    Label string     // the value the predicate matched — the server's own word
+    Since time.Time  // first observed busy, not last: elapsed measures the work
 }
 
-// Set is the keyed collection plus the spinner that animates it. Components
-// embed one; it is also the unit ActivityState/SetActivityState carry.
-type Set struct{ /* map[string]State, spinner.Model, opts */ }
+type Options struct {
+    Spinner *spinner.Spinner            // nil → spinner.Dot, matching pane
+    Style   func(State, string) string  // nil → plain; see decision 11
+}
+
+// Set is the keyed collection of busy rows plus the spinner that animates
+// them. Components embed one; it is also the unit ActivityState carries.
+type Set struct{ /* map[string]State, spinner.Model, tick bookkeeping */ }
 
 func New(opts Options) Set
 
-func (s *Set) Start(key, label string) tea.Cmd
-func (s *Set) Update(key, label string)
-func (s *Set) Finish(key string, err error) tea.Cmd  // holds, then clears
-func (s *Set) Clear(key string)
-func (s *Set) Active() bool
-func (s *Set) State(key string) (State, bool)
-func (s *Set) Count() int
-func (s Set) Render(key string, width int) (string, bool)  // "" + false when idle
-
-// Handle applies the shell's broadcasts. Components call it from Update and
-// return the command; it is a no-op for keys the component does not hold.
-func (s *Set) Handle(msg tea.Msg, holds func(key string) bool) tea.Cmd
-
-// Derive replaces the derived layer wholesale from an observation of the data
-// (decision 18). Keys present are busy with that label; keys absent are not.
-// Local entries are untouched, and win when both exist.
-//
-// A Derive is also the observation decision 19 waits for: it retires any local
-// entry that finished successfully since the last one.
+// Derive replaces the whole collection from one observation. Keys present are
+// busy with that label; keys absent are not. Since survives for a key that
+// stays busy. The command is the animation's first tick.
 func (s *Set) Derive(busy map[string]string) tea.Cmd
 
-// Busy builds the ordinary predicate: a case-insensitive match against values
-// that mean "in progress", labelled with the matched value.
+// Handle advances the animation, and on any other message takes the chance to
+// notice the chain has stalled (decision 9).
+func (s *Set) Handle(msg tea.Msg) tea.Cmd
+
+// Adopt takes another Set's entries, keeping this Set's options — rule 4.
+func (s *Set) Adopt(other Set) tea.Cmd
+
+func (s Set) State(key string) (State, bool)
+func (s Set) Active() bool
+func (s Set) Count() int
+
+// Render is the indicator fitted to width; false when the key is not busy.
+func (s Set) Render(key string, width int) (string, bool)
+
+// Badge right-aligns the indicator at the end of a row width cells wide,
+// truncating the row rather than the badge. Returns row untouched when idle.
+func (s Set) Badge(key, row string, width int) string
+
+// Predicates. Both strip ANSI and surrounding space, and label with the value
+// as it appeared.
 func Busy(values ...string) func(value string) (label string, busy bool)
-
-type Options struct {
-    Spinner    *spinner.Spinner // default spinner.Dot, matching pane
-    Style      lipgloss.Style   // running: spinner + label
-    OKStyle    lipgloss.Style
-    ErrorStyle lipgloss.Style
-    Glyphs     glyph.Set
-    Hold       time.Duration    // default 2s; 0 means the default, <0 never
-    Confirm    time.Duration    // default 30s; cap on decision 19's handoff
-}
-
-// Messages. The shell posts these; components match them via Handle.
-type StartMsg  struct { Keys []string; Label string; RunID int64 }
-type UpdateMsg struct { Keys []string; Label string; RunID int64 }
-type EndMsg    struct { RunID int64; Err error }
-
-// Progress reports a label change from inside an action's Run. A no-op when
-// out does not implement Progresser.
-type Progresser interface{ Progress(text string) }
-func Progress(out io.Writer, text string)
+func Settled(values ...string) func(value string) (label string, busy bool)
 ```
 
-### `pkg/list`, `pkg/table`, `pkg/tree` (additions)
+No messages. No `Progress`. No timers beyond the spinner's own.
+
+### `pkg/list`, `pkg/table`, `pkg/tree`
 
 ```go
 // Options
-Activity activity.Options  // from t.Activity(), via the theme builders
+Activity activity.Options  // from the theme builders
 
 // table only: the column whose cell is replaced while a row is busy.
-// Matched on Title, case-insensitive prefix. Unset turns the feature off
-// on a table; list and tree need no switch. Give it a Width wide enough
-// for the longest label — see decision 10.
+// Matched on Title, case-insensitive prefix. Give it an explicit Width —
+// decision 6.
 ActivityColumn string
 
-// ActivityWhen derives in-flight state from the row's own data, for work
-// nobody in this session started (decision 18). Evaluated on every keyed
-// swap. Per-component signature, since each speaks its own data shape:
-//   table: func(cells Row) (label string, busy bool)
-//   list:  func(item string) (label string, busy bool)
-//   tree:  func(n Node) (label string, busy bool)
-ActivityWhen func(...) (string, bool)
-
-// ActivityRevision, when set, is a per-row value that changes whenever the
-// row's underlying work does — finished_at, resourceVersion, an ETag. A
-// change observed while the row is not busy flashes an outcome (decision
-// 20). Same per-component signature shape as ActivityWhen.
-ActivityRevision func(...) string
+// ActivityWhen derives in-flight state from the row's own data. Evaluated on
+// every keyed swap. Per-component signature — decision 8.
+ActivityWhen func(...) (label string, busy bool)
 
 // Model
-func (m *Model) SetActivity(key, label string) tea.Cmd
-func (m *Model) EndActivity(key string, err error) tea.Cmd
-func (m *Model) ClearActivity(key string)
 func (m Model) ActivityState() activity.Set
 func (m *Model) SetActivityState(s activity.Set) tea.Cmd  // rule 4 rebuilds
+func (m Model) ActivityCount() int
+
+// The second entrance and the claim — decisions 13, 14, 17. The values a
+// claim is judged against are gathered here rather than asked of the caller.
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd  // panics under ActivityWhen
+func (m *Model) Expect(keys []string, label string) tea.Cmd
+func (m *Model) Retract(keys ...string)
+func (m *Model) RetractAll()
 ```
 
-### `pkg/action` (additions)
+The table's feature is on when **either** `ActivityColumn` or `ActivityWhen` is
+set, or when `SetBusy` or `Expect` is called; `list` and `tree` need only the
+predicate, or neither on the `SetBusy` entrance.
+
+### `pkg/theme`
 
 ```go
-// Set
-Targets []string  // the keys Selection() returned; optional
-
-// Action
-Busy string       // row label while this runs; defaults to Label lowercased
-
-// ChosenMsg
-Targets []string  // carried from the Set, so the confirm detour keeps them
+func (t Theme) Activity() activity.Options      // lipgloss, for list and tree
+func (t Theme) activityCell() activity.Options  // ansi.CellColor, for table
 ```
 
-### `pkg/runner` (additions — still no tuilib imports)
+nested into `List()`, `Table()` and `Tree()` alongside the `SpinnerStyle` each
+already sets. Both are one `Accent` style: with no outcome states there is
+nothing else to colour.
+
+### `pkg/app`, `pkg/action`, `pkg/runner`, `pkg/glyph`
+
+One line in `pkg/app`, added by decision 21: `runAction` forwards
+`action.ChosenMsg` to the stack, so a screen learns that its own verb is being
+dispatched. No new type, no new dependency — `pkg/app` already imports
+`pkg/action`, and `pkg/activity` is still a leaf that has never heard of either.
+
+`pkg/action`, `pkg/runner` and `pkg/glyph` are untouched. A screen reads the
+acknowledgement off `runner.Captured`, which the shell already forwarded.
+
+`Action.Busy` / `BusyLabel()` and `pkg/app`'s `actionRun.busy` went with the
+removed layer — they existed only to carry a row label into the shell's
+broadcast, and nothing read them afterwards. `Set.Targets` stays: it feeds the
+per-target `Exclusive` gate, and under decision 17's recommendation it is also
+what a screen passes to `Expect`.
+
+### Additions for decisions 13-17
 
 ```go
-type CaptureStatus struct {
-    RunID int64
-    Label string
-    Tag   string
-    Text  string
-}
+// pkg/activity
+func (s *Set) Observe(busy, values map[string]string) tea.Cmd // 13/16 — Derive, plus what a claim is judged against
+func (s *Set) Derive(busy map[string]string) tea.Cmd          // unchanged: Observe(busy, nil)
+func (s *Set) Expect(keys []string, label string, at map[string]string) tea.Cmd // 14
+func (s *Set) Expecting() []string                            // which values are worth collecting
+func (s *Set) Scope(keys []string)                            // 13 — keys the component holds
+func (s *Set) Retract(keys ...string)                         // 17 — a write was refused
+func (s *Set) RetractAll()                                    // 17 — reads have stopped
 
-func (w *lineWriter) Progress(text string)  // satisfies activity.Progresser
+Options.Settle int   // 16 — unchanged observations a claim survives; 0 = retire on the next
+
+// pkg/list, pkg/table, pkg/tree — forwarded, with the values gathered for you
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd
+func (m *Model) Expect(keys []string, label string) tea.Cmd
+func (m *Model) Retract(keys ...string)
+func (m *Model) RetractAll()
 ```
 
-### `pkg/app` (additions)
+`Set` grows three fields — `expected map[string]claim`, the scope, and the
+allowance — and `Observe` grows a `retire` pass. `Render`, `Active`, `Count`,
+`State` and `Adopt` all read the union, and `Adopt` carries the claims and the
+scope as well as the observation, or a theme swap blanks the row the user just
+acted on. The mutual exclusion is a panic at the `SetBusy` call site, not a
+`Validate` error; everything else composes.
 
-No new options — the feature rides `ActionsKey`, which is already the gate for
-everything it extends.
-
-| Trigger | Broadcast |
-|---|---|
-| `runner.CaptureStarted` whose `Tag` names a run launched with keys | `activity.StartMsg{Keys, Label: busy, RunID}` |
-| `runner.CaptureStatus` with a `Tag` | `activity.UpdateMsg{RunID, Label: msg.Text}` |
-| `runner.Captured` with a `Tag` | `activity.EndMsg{RunID, Err}` |
-
-Not at the launch site — see decision 17. The run registry changes shape to
-support the first row:
-
-```go
-running  map[string]actionRun   // was map[string]bool
-busyKeys map[string]string
-```
-
-### `pkg/theme` (addition)
-
-```go
-func (t Theme) Activity() activity.Options
-```
-
-nested into `List()`, `Table()` and `Tree()`, alongside the `SpinnerStyle` each
-already sets.
-
-### `pkg/glyph` (addition)
-
-```go
-ActivityOK   string // "✓"
-ActivityFail string // "✗"
-```
+No new messages, no new timers, no new package dependencies.
 
 ---
-
-## Implementation order
-
-1. **`pkg/glyph`** — the two glyphs. One commit, no dependents yet.
-2. **`pkg/activity`** — `State`, `Set`, `Options`, the three messages,
-   `Progress`. Unit tests for the hold timer, terminal outcomes, and `Render`'s
-   narrow-width fallback. No component involvement.
-3. **`pkg/theme`** — `t.Activity()`, nested into the three builders.
-4. **`pkg/table`** — `Options.ActivityColumn`, column resolution, cell
-   substitution through `ansi.CellColor`, the gutter fallback, the setters and
-   the rule-4 pair. Table first because it is the shape the request asked for
-   and the one with real placement problems (flex widths, windowed inertness).
-5. **`pkg/list`** and **`pkg/tree`** — the trailing badge. Same setters.
-6. **`internal/componenttest/activity_test.go`** — the shared contract, across
-   all three. See Tests.
-7. ~~**`pkg/runner`**~~ — `CaptureStatus`, `lineWriter.Progress`, and the
-   `Next` case without which a status stalls its own run.
-8. ~~**`pkg/action`**~~ — `Set.Targets`, `Action.Busy` / `BusyLabel()`,
-   `ChosenMsg.Targets`, and `Validate`'s new check.
-9. ~~**`pkg/app`**~~ — the keys threaded through `ChosenMsg` → `runAction` →
-   the confirm detour, `m.running` growing a value plus `busyKeys`, the three
-   broadcasts hung off the capture message family, and `runningFor(set)`.
-   Decision 17: this step is bigger than it reads.
-10. **`examples/patterns/actions`** grows a Status column and a `Busy` label, or
-    — decision pending, see open question 3 — a new
-    `examples/patterns/activity` whose subject this is.
-11. ~~**`examples/patterns/activity`**~~ + launcher entry.
-12. ~~**CLAUDE.md**~~ — rule 33, five anti-patterns, and an entry under "Where
-    to learn more".
-
-**All twelve steps are done.** 1-6 give any screen a per-row spinner through
-the direct API, 7-9 make it free under `pkg/action`, and 10-12 let a polled
-source of truth drive it with no actions at all.
-
-10. ~~**`pkg/activity`**~~ — `Derive`, the local/derived precedence in
-    `stateOf`, `Busy`, `Change`/`Revise`, `Options.Confirm`, and the handoff.
-11. ~~**The three components**~~ — `ActivityWhen` and `ActivityRevision`,
-    evaluated in an `observe()` called from the keyed setters (and from
-    `tree.New`, which is where the data arrives for a tree). The commands they
-    produce queue on `actCmd` and flush through the existing `flushMsgs`, since
-    a setter has no return value.
-12. ~~**`internal/componenttest`**~~ — the derived contract across all three:
-    data-driven start and stop, the stale-observation guard, and the full
-    handoff.
 
 ## Rejected, worth remembering
 
 - **A `Decorator func(key string) string` hook.** More general, called in a hot
-  path, and returns an untyped string the component must place blindly. See
-  decision 2.
+  path, returns an untyped string the component must place blindly. Decision 3.
 - **Reusing `pane.SetLoading` with a row filter.** Conflates "no data" with
   "some rows busy"; the pane has no notion of rows and should not acquire one.
-- **A second channel for progress** (`chan string`, a callback, a status field
-  on a result). The `io.Writer` is already threaded everywhere; doubling the
-  protocol for one string is what decision 5 of `docs/actions.md` refused.
-- **Inferring the row label from the last log line.** Makes every incidental
-  log line a UI change and forces log prose to read well in a 12-cell column.
-- **Logging `CaptureStatus` into the console.** Ten progress updates would post
-  ten records in an event the badge counts as one. It is a UI state change, not
-  news.
-- **Activity state in the shell, keyed by `RunKey`.** The shell would then need
-  to know which component holds which key and where that component draws its
-  rows — rule 9 inverted.
-- **Deriving `Targets` from `Target`.** "3 items" is not a key, and no amount
-  of parsing makes it one.
+- **An outcome glyph on a derived entry.** The data already says `failed`, in
+  the app's own colours. Decision 7.
+- **An incremental API** (`SetBusy` / `ClearBusy` per key) instead of wholesale
+  `Derive`. It makes "this row stopped being busy" something the caller has to
+  notice and report, which is the bookkeeping this feature exists to remove —
+  and the failure mode is a spinner that never stops.
+- **A `lipgloss.Style` for the indicator.** Forces one answer for table and
+  list, and the answer that is safe in a table looks wrong in a list.
+  Decision 11.
+- **Animating a row by re-pushing the rows.** The screen and the poll become
+  two writers for one row set; whichever ran last wins.
+- **Inferring the row label from the last log line.** The activity example did
+  exactly this, taking the first word of each line, and put "found", "waiting"
+  and finally "sync" on the row — the last from "sync operation complete".
+  Makes every incidental log line a UI change, and forces log prose to read
+  well in a 12-cell column.
+- **Reporting a run-scoped counter per row.** "2/3" drawn on every marked row,
+  as though it were that row's own progress. A run has one label.
+- **Diffing whole rows to detect change.** Any poll that reformats a timestamp
+  or recomputes an age column would flash every row. A revision field's
+  contract is that it changes when the work does; a row diff mistakes rendering
+  for meaning. (The revision field itself is deferred, not rejected.)
+- **Holding a spinner for a fixed grace period** so a poll might catch work
+  the user dispatched. Too short does nothing, too long lies, and the right
+  number is the poll interval the component does not know. Decision 14 waits
+  for the next observation instead, which has a defined end. (`Options.Settle`
+  in decision 16 is not this: it is an allowance of *observations*, spent only
+  by reads that report nothing new, against a server that has not yet read its
+  own write. It has no duration in it to be too short or too long.)
 - **A cancel affordance on the row.** A second place to get the confirm, the
   `Exclusive` release and the log record right. `x` in the console already
-  kills the run, which ends the activity.
+  kills a run.
 - **Auto-scrolling to a row that finishes.** The cursor belongs to the user.
-- **Deriving the row label from the log line just written.** The activity
-  example did exactly this, taking the first word of each line, and put
-  "found", "waiting" and finally "sync" on the row — the last from "sync
-  operation complete". Decision 7 had already rejected it in the abstract; a
-  demo doing it anyway is how it came back. Phases are written deliberately, at
-  the two or three points the client actually knows about.
-- **Holding a local spinner for a fixed grace period** so a poll might catch
-  the work (decision 19). Too short does nothing, too long lies, and the right
-  number is the poll interval the component does not know. Waiting for the next
-  observation is the same idea with a defined end.
-- **Giving derived entries a hold and an outcome glyph.** The data already says
-  `failed`, in the app's own colours. A `✗` over the top of it is the library
-  restating the row less precisely than the row states itself.
-- **Letting derived state retire a local entry.** A poll already in flight when
-  the user clicks returns the pre-click value, so every action would flicker
-  off and on once, at a moment set by the poll phase.
-- **Diffing whole rows to detect change** (decision 20). Any poll that
-  reformats a timestamp or recomputes an age column would flash every row. A
-  revision field's contract is that it changes when the work does; a row diff
-  mistakes rendering for meaning.
+- **`Options.Dwell` as a general defence against flapping.** Hysteresis for a
+  source of truth that disagrees with itself between reads is a real need, and
+  it is *not* what a flapping indicator usually indicates. Every cause we
+  actually found was in the read path (decision 1). Shipping the damper made it
+  the first thing reached for and the last thing that would help. Parked with
+  the rest of `activity.go.old`; bring it back when a screen demonstrates two
+  replicas genuinely disagreeing.
+
+---
 
 ## Tests
 
@@ -1137,109 +1565,133 @@ component gets built first. The anti-pattern is on the record: the
 click-to-blur behaviour was written for `pkg/list`, rolled out to five other
 components by a script that omitted it, and covered by a test living in
 `pkg/list` — so five components shipped broken and the suite stayed green.
-`marking_test.go` is the precedent to copy.
+`marking_test.go` is the precedent.
 
-`internal/componenttest/activity_test.go`, across `list`, `table` and `tree`:
+### `pkg/activity/claim_test.go` — the claim's state machine
 
-- Activity on a keyed row renders; on an anonymous row it is inert.
-- A keyed swap that reorders rows keeps the indicator on the same key.
-- A filter that hides a busy row does not clear it; unfiltering shows it still
-  running.
-- `SetActivityState` across a rebuilt component restores the keys and returns a
-  non-nil tick.
-- `StartMsg` for a key the component does not hold changes nothing and returns
-  no command.
-- `EndMsg` shows the outcome glyph, and the key clears after `Hold`.
-- No activity anywhere → `Update` returns no command, so an idle screen
-  schedules no ticks.
+The three endings side by side, because the difference between them *is*
+`Settle`: confirmed, the value changed, or nothing new was said — and only the
+last costs an observation. Zero retires on the next one whatever it says. A
+claim nothing ever confirms still ends, which is the ceiling a request the
+server accepted and dropped needs. Without values every observation is
+uninformative, which is the honest reading for `SetBusy` and for `pkg/tree`
+rather than a degraded one. `Since` measures from the claim, so elapsed time
+starts at the keypress. `Retract` takes one, `RetractAll` takes the claims and
+leaves the observations. An unscoped `Set` shows everything and one scoped to
+nothing shows nothing — not the same state. An out-of-scope entry is kept and
+comes back when its row arrives, and arms no tick chain while it cannot be
+seen. `Adopt` carries claims and scope without aliasing them.
 
-Per-component:
+### `internal/componenttest/expect_test.go` and `setbusy_test.go` — across all three
 
-- `table`: `ActivityColumn` resolves by title prefix; an unresolvable name
-  falls back to the gutter rather than panicking or picking column 0; a windowed
-  table is inert; the selected row's background survives an active cell
-  (`lipgloss.SetColorProfile(termenv.TrueColor)` in `TestMain`, or the assertion
-  is vacuous).
-- `list` / `tree`: the badge is right-aligned and survives truncation of the row
-  text; below `len(label)+2` cells only the glyph is drawn.
+The claim contract and the second entrance, asserted once for list, table and
+tree rather than in whichever was edited last. The tree's exception is asserted
+too (decision 19): a reader finding two components with a third ending and one
+without should be able to find out here that it follows from identity rather
+than from an omission.
 
-`pkg/app`, all of it decision 17's surface:
+### `internal/integration/activity_claim_test.go` — the rule with no compiler
 
-- An action with `Targets` broadcasts start and end around the run; one without
-  broadcasts neither.
-- The start rides `CaptureStarted`, not the launch — so a `runAction` that
-  returns without the command ever executing broadcasts nothing, and no row is
-  left spinning for a run that never began.
-- An action with a `Confirm` still carries its keys: the assertion is on the
-  `ChosenMsg` → `armConfirm` → `ConfirmedMsg` path, which is the one that drops
-  them if `pendingTgts` is forgotten, and which every destructive verb takes.
-- `CaptureStatus` with a `Tag` becomes `UpdateMsg` and appends no record.
-- `Captured` releases both the tag and every `busyKeys` entry pointing at it,
-  or an `Exclusive` verb is permanently disabled on a row that finished.
+Decision 15 driven three ways against a real server with the write held open by
+`?latency=`: no guard, the keypress bump alone, and the full rule. Only the
+third keeps the row spinning. The middle one is the point — it passes the easy
+version (a read already in flight at the keypress) and fails this one — and a
+failed read is asserted through `/chaos/down`, where nothing but the screen's
+own retraction can end the claim.
 
-`pkg/runner`: `Progress` on the writer emits `CaptureStatus` and does not
-disturb line assembly mid-write.
+### `pkg/activity/activity_test.go` — the state machine
 
-Decisions 18-20, in `internal/componenttest` across all three components:
+*Observing.* A key goes busy from data alone. `Derive` is wholesale, so a key
+absent from the observation settles. An empty observation clears everything —
+the case that stops the last spinner, and the one an `if len(busy) > 0` guard
+silently breaks. `Since` persists across observations of the same work and
+restarts after a gap, because a key that settles and comes back is a second
+piece of work. A changed label follows the data.
 
-- A keyed swap whose row matches `ActivityWhen` starts a spinner with no
-  action, broadcast or setter call anywhere.
-- A swap whose row stops matching clears it, with no outcome glyph and no hold.
-- A local entry and a derived entry on one key render the local one.
-- A derived "not busy" observation does **not** retire a live local entry —
-  the stale-poll flicker, which is the one a real app hits within a minute of
-  first use.
-- A local entry finished successfully survives until the next `Derive`, then
-  clears; the same entry finished with an error does not wait, and shows `✗`
-  through the normal hold.
-- With no `ActivityWhen`, a finished local entry clears on its hold as before:
-  the handoff must switch itself off where nothing will ever confirm it.
-- `Options.Confirm` expiring clears an unconfirmed entry through the normal
-  hold rather than leaving it spinning.
-- A confirming `Derive` that reports the key busy hands over with no idle frame
-  between the two entries.
-- `ActivityRevision` changing while a row is not busy flashes an outcome;
-  changing while it *is* busy does not (the spinner already says so); unset
-  does nothing at all.
+*Rendering.* Glyph then label. An unknown key renders nothing. A narrow cell
+drops the word and keeps the glyph. **Width is never exceeded at any width from
+1 to 40** — a loop rather than three cases, since the interesting failures are
+at the boundaries between "glyph plus label", "glyph alone" and "cut". Zero
+width renders nothing. The spinner frame's trailing space is trimmed, or every
+label sits two spaces out. `Style` is applied, and optional.
+
+*Badge.* Right-aligns to the full row width; truncates the row rather than the
+badge; leaves settled rows untouched.
+
+*Tick chain.* An idle `Set` schedules nothing. A second observation does not
+start a second chain. The chain stops when the last row settles. **A starved
+chain is revived** — decision 9's frozen spinner. A healthy chain is not
+duplicated, which is the other half: revival must not fire on ordinary jitter.
+
+*Rebuild and predicates.* `Adopt` carries the observation, re-arms, keeps the
+new `Set`'s palette, and copies rather than aliases. `Busy` matches
+case-insensitively and labels as the value appeared. Both predicates see
+through ANSI styling. `Settled` treats an unknown status as work and a blank
+one as settled.
+
+### `internal/componenttest/activity_test.go` — the shared contract
+
+Six properties, each asserted once and run across `list`, `table` and `tree`
+through a `derivable` interface: a polled status drives the indicator; a
+resting one stops it; rows are independent; the label is the data's own word;
+the indicator survives a theme rebuild; an idle component schedules nothing.
+
+### `internal/componenttest/activity_render_test.go` — the rendering hazards
+
+Fourteen tests against a real table render, because "put a spinner in a column"
+is exactly the change that opens rendering bugs: reflow (decision 6), narrow
+cells, sort and filter identity, the mark gutter's interaction with the
+fallback gutter, styled cells, rule 19's foreground-only escape surviving the
+selected row's background, and the no-write-back invariant — that the rows the
+component holds never contain an indicator, which is the one way this feature
+could feed into its own input.
+
+Three of these initially passed for the wrong reason and are worth naming, as
+the pattern recurs: scanning a whole line for `\x1b[0m` hit the *pane border's*
+reset; `ContainsAny(plain, "abcdefgh")` matched the pane **title**; and
+`ContainsAny(view, "WORKING")` matched the `N` in the `Name` header. Assert
+against the specific line carrying the indicator, and against the exact escape
+pair — `"running\x1b[39m"` present, `"running\x1b[0m"` absent.
+
+### Verification
+
+Each behaviour was mutation-checked: removing the trailing-space trim, letting
+the label draw past the width, dropping the empty-observation case, aliasing in
+`Adopt`, skipping the revival, and reviving on every message each fail the test
+written for it. Two mutations survived their first pass and both found
+something real — one a missing test, one a piece of dead code that was deleted
+rather than covered.
+
+`lipgloss.SetColorProfile(termenv.TrueColor)` in `TestMain`, or every styling
+assertion is vacuously true.
+
+---
 
 ## Open questions
 
-**1. Should the broadcast be scoped to one component?** Two panes showing the
-same key both spin. Scoping means `action.Set` carrying the `focus.Token` of
-the component that produced the selection — `FocusToken()` is already public on
-every component, and `pkg/action` importing `pkg/focus` closes no cycle. The
-argument against is that the same object shown twice arguably *should* spin
-twice, and the token adds a required field to a struct whose current version is
-three plain values. Recommendation: ship unscoped, add `Set.Source` if a real
-screen is bothered by it.
+*Questions 1 and 2 of the previous revision — where busy-ness comes from when
+it is not a field on the row, and whether a dispatching action should show
+anything before the next poll — are answered by decisions 13 and 14. What is
+still open from that pass is only who calls `Expect`, which is recorded with
+the decision rather than here.*
 
-**2. Should `pkg/inspector` get this?** It has path-keyed fields and the same
+**1. Should `pkg/inspector` get this?** It has path-keyed fields and the same
 `SetFields` preservation dance, so it would work. But a record viewer has no
-verb that acts on a field (rule 32 declined marking there for exactly this
-reason), so the only caller would be a screen animating something it fetched
-per-field. Leaning no until someone has that screen.
+verb that acts on a field (rule 32 declined marking there for the same reason),
+so the only caller would be a screen animating something it fetched per-field.
+Leaning no until someone has that screen.
 
-**3. ~~Where does the example live?~~ Settled: `examples/patterns/activity`,
-with `actions` left alone.** An argocd-shaped table — Name / Sync / Health, a
-hidden Rev column, a `pkg/poll` refresh underneath — showing all three sources
-at once. Its fake backend is mutex-guarded and called from the action
-goroutine, which is not scaffolding: it is the discipline a real client needs,
-and the reason an action is handed a context and a writer rather than the
-model. Refresh is deliberately instant server-side so decision 19's wait is
-visible; Sync is slow enough that the handoff to derived state happens
-mid-flight.
+**2. Should two panes showing the same key both spin?** They do. With the
+broadcast gone this is no longer a scoping question about `action.Set` — it is
+simply what deriving from data means, and two components holding the same row
+will both observe it busy. Arguably correct. Recorded because the previous
+design had an open question here and the answer changed shape rather than going
+away.
 
-**5. Should `Derive` be able to say "failed" rather than just "not busy"?**
+**3. Should `Derive` be able to say "failed" rather than just "not busy"?**
 Today the predicate is binary, so a derived run ending badly is communicated
 entirely by the cell reverting to `failed` in the app's own styling. A
-three-valued phase (resting / busy / failed) would let the library tint the
-row for a moment on the way past. It is more API for something the data
-already renders, and it needs the author to classify every resting value
-rather than just the busy ones. Leaning no; revisit if a real screen reads
-flat.
-
-**4. Is `Hold` right at 2s, and should a failure hold longer?** A `✗` that
-disappears while the user is reading the console is a lost outcome, and the
-statusbar receipt is gone by then too. An asymmetric default (2s ok, 8s failed,
-or failures holding until any keypress) is defensible and slightly surprising.
-Wants a real screen to judge against.
+three-valued phase (resting / busy / failed) would let the library tint the row
+for a moment on the way past. It is more API for something the data already
+renders, and it needs the author to classify every resting value rather than
+just the busy ones. Leaning no; revisit if a real screen reads flat.

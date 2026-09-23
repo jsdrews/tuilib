@@ -245,44 +245,22 @@ func TestConsoleVisitLeavesRowLiveWithoutAKeypress(t *testing.T) {
 	}
 }
 
-// A progress phase must not outlive the step it described — "✗ applying" named
-// a step that had finished.
-func TestFailedSyncReportsTheVerbNotThePhase(t *testing.T) {
-	h, srv := newActionApp(t)
-	defer srv.Close()
-
-	if !h.pumpUntil(5*time.Second, func() bool {
-		return strings.Contains(h.render(), "Synced") || strings.Contains(h.render(), "OutOfSync")
-	}) {
-		t.Fatalf("no rows arrived:\n%s", h.render())
-	}
-
-	h.pick("Fail a sync")
-
-	if !h.pumpUntil(8*time.Second, func() bool {
-		return strings.Contains(h.render(), glyph.Default().ActivityFail)
-	}) {
-		t.Fatalf("the failure never reached the row:\n%s", h.render())
-	}
-
-	if v := h.render(); !strings.Contains(v, busyLabel) {
-		t.Errorf("the outcome does not name the verb that failed:\n%s", v)
-	}
-}
-
 // "Can these statuses eventually true up from a read from the server?"
 //
 // They must, and this is the case that proved they did not: a failed sync left
-// demoapi reporting Syncing with nothing to clear it, so the row span forever.
+// demoapi reporting Syncing with nothing to clear it, so the row spun forever.
 // The client was faithfully showing the server; the server was wrong. Which is
 // the point of asserting convergence against a real one rather than trusting
 // the layering in isolation.
 //
-// What converges, and how fast: a derived entry is replaced wholesale by every
-// observation, so it is never anything but the last read. A local entry retires
-// on its own outcome, on the first observation after a successful finish, or on
-// Confirm's expiry — bounded, always. So a read trues the row up within a poll
-// interval in every ordinary case.
+// What converges, and how fast: the indicator set is replaced wholesale by
+// every observation, so it is never anything but the last read. A read
+// therefore trues the row up within one poll interval, always.
+//
+// (This used to gate on a ✗ appearing first. Outcome glyphs belonged to the
+// action-driven path; with the data as the only source there is nothing to
+// report but what the server says, and the failure shows as the status the
+// server settles on.)
 func TestRowConvergesOnTheServerAfterAFailedSync(t *testing.T) {
 	h, srv := newActionApp(t)
 	defer srv.Close()
@@ -295,34 +273,32 @@ func TestRowConvergesOnTheServerAfterAFailedSync(t *testing.T) {
 
 	h.pick("Fail a sync")
 
+	// The server picks the request up and reports it, which is the only way
+	// the row moves at all now.
 	if !h.pumpUntil(8*time.Second, func() bool {
-		return strings.Contains(h.render(), glyph.Default().ActivityFail)
+		return strings.Contains(h.render(), demoapi.SyncSyncing)
 	}) {
-		t.Fatalf("the failure never reached the row:\n%s", h.render())
+		t.Fatalf("the server never reported the sync as running:\n%s", h.render())
 	}
 
 	// No keys from here. The row must end up showing the server's resting
-	// status with no indicator of its own left over — not the ✗, not the phase,
-	// and not a spinner for work that is over.
+	// status with nothing left over — no spinner for work that is over.
 	settled := h.pumpUntil(20*time.Second, func() bool {
 		v := h.render()
-		return strings.Contains(v, demoapi.SyncOutOfSync) &&
-			!strings.Contains(v, busyLabel) &&
-			!strings.Contains(v, glyph.Default().ActivityFail) &&
-			spinnerGlyph(v) == ""
+		return strings.Contains(v, demoapi.SyncOutOfSync) && spinnerGlyph(v) == ""
 	})
 	if !settled {
 		t.Errorf("the row never trued up to the server after a failed sync:\n%s", h.render())
 	}
 }
 
-// One run, many rows — docs/activity.md decision 11, which had no demo and no
-// test until the example grew marking.
+// One run, many rows.
 //
-// The rows all spin because StartMsg carries every key in Set.Targets, and they
-// all clear together because a run has one outcome. That second half is the
-// documented limitation, so it is asserted rather than left to be discovered:
-// if per-target completion is ever built, this is the test that should change.
+// Every marked row spins, and none of it goes through the run: the verb asks
+// the server to sync two applications, and the next poll reports both of them
+// Syncing. So this asserts the derived path at multi-row arity — which is also
+// why the rows settle as the server finishes them rather than together when
+// the run returns.
 func TestOneRunSpinsEveryMarkedRow(t *testing.T) {
 	h, srv := newActionApp(t)
 	defer srv.Close()
@@ -349,8 +325,7 @@ func TestOneRunSpinsEveryMarkedRow(t *testing.T) {
 		t.Errorf("one run did not spin both marked rows:\n%s", h.render())
 	}
 
-	// And they retire together, which is the documented behaviour rather than
-	// an accident: the shell broadcasts one EndMsg for the run.
+	// And they settle, one observation at a time, when the server says so.
 	if !h.pumpUntil(20*time.Second, func() bool {
 		return countIndicators(h.render()) == 0
 	}) {
@@ -365,11 +340,11 @@ func TestOneRunSpinsEveryMarkedRow(t *testing.T) {
 // run-scoped counter drawn as though it were per-row progress.
 func countIndicators(view string) int { return strings.Count(view, busyLabel) }
 
-// The derived path, with no action involved at all: the server starts work of
-// its own and the row says so. This is the half of the feature a read-only
-// dashboard uses, and the half a viewer is most likely to miss — so the example
-// asks demoapi for a short schedule, and the pane title counts what nobody here
-// started.
+// The derived path with no action anywhere near it: the server starts work of
+// its own and the row says so. This is the whole feature, and the case a
+// viewer is most likely to miss because nothing on screen prompted it — so the
+// example asks demoapi for a short schedule, and the pane title counts what
+// the last poll found working.
 func TestServerStartedWorkShowsWithoutAnyAction(t *testing.T) {
 	h, srv := newActionApp(t)
 	defer srv.Close()
@@ -384,7 +359,7 @@ func TestServerStartedWorkShowsWithoutAnyAction(t *testing.T) {
 	// No keys from here. Anything that appears is the server's doing, reported
 	// by ActivityWhen off a poll result.
 	if !h.pumpUntil(15*time.Second, func() bool {
-		return strings.Contains(h.render(), "from the server")
+		return strings.Contains(h.render(), "working")
 	}) {
 		t.Errorf("the server never started work the screen noticed:\n%s", h.render())
 	}
@@ -459,9 +434,9 @@ func TestCommandOnServerBusyRowIsRefusedAndExplained(t *testing.T) {
 		t.Fatalf("could not make the server busy: status %d", resp.StatusCode)
 	}
 
-	// The poll observes it and the row starts spinning with no local entry.
+	// The poll observes it and the row starts spinning.
 	if !h.pumpUntil(6*time.Second, func() bool {
-		return strings.Contains(h.render(), "from the server")
+		return strings.Contains(h.render(), "working")
 	}) {
 		t.Fatalf("the screen never noticed the server's work:\n%s", h.render())
 	}

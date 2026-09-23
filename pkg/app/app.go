@@ -21,7 +21,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/action"
-	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/config"
 	"github.com/jsdrews/tuilib/pkg/confirm"
@@ -389,7 +388,6 @@ type Model struct {
 // actionRun is what one in-flight action was launched for.
 type actionRun struct {
 	keys    []string
-	busy    string
 	receipt string
 }
 
@@ -952,18 +950,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runner.CaptureStarted:
-		// Row indicators start here rather than at the launch site, because
-		// the RunID does not exist until runner.GoWith's command actually
-		// runs — the same fact that made Tag necessary. Hanging it here also
-		// puts the spinner and the log head in the same frame.
-		var startCmd tea.Cmd
-		if run, ok := m.running[msg.Tag]; ok && len(run.keys) > 0 {
-			m.stack, startCmd = m.stack.Update(activity.StartMsg{
-				Keys:  run.keys,
-				Label: run.busy,
-				RunID: msg.RunID,
-			})
-		}
 		// The badge counts this now rather than on completion: a five-minute
 		// build that signals nothing until it finishes turns "keep working
 		// while it runs" into "keep working, blind."
@@ -978,20 +964,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				RunID:  msg.RunID,
 			})
 		}
-		return m, tea.Batch(startCmd, m.forwardCapture(msg))
+		return m, m.forwardCapture(msg)
 
 	case runner.CaptureStatus:
 		// A status is a UI state change, not news, so it never enters the log:
 		// a run reporting progress ten times would otherwise post ten records
 		// into an event the badge counts as one.
-		var cmd tea.Cmd
-		if run, ok := m.running[msg.Tag]; ok && len(run.keys) > 0 {
-			m.stack, cmd = m.stack.Update(activity.UpdateMsg{
-				RunID: msg.RunID,
-				Label: msg.Text,
-			})
-		}
-		return m, tea.Batch(cmd, m.forwardCapture(msg))
+		return m, m.forwardCapture(msg)
 
 	case runner.CapturedLine:
 		if m.outputEnabled() {
@@ -1010,7 +989,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// posting the receipt are scoped to those: a bare runner.Capture
 		// keeps behaving exactly as it always has, which matters because it
 		// is a shipped feature with callers of its own.
-		var actCmd tea.Cmd
 		// Captured means the action's function returned. Whether that means the
 		// work is done is the author's to say, through Action.Receipt.
 		receipt := msg.Label + " completed"
@@ -1018,9 +996,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if run, ok := m.running[msg.Tag]; ok {
 				if run.receipt != "" {
 					receipt = run.receipt
-				}
-				if len(run.keys) > 0 {
-					m.stack, actCmd = m.stack.Update(activity.EndMsg{RunID: msg.RunID, Err: msg.Err})
 				}
 			}
 			delete(m.running, msg.Tag)
@@ -1057,7 +1032,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				RunID:  msg.RunID,
 			})
 		}
-		return m, tea.Batch(actCmd, m.forwardCapture(msg))
+		return m, m.forwardCapture(msg)
 
 	case tea.KeyMsg:
 		if m.overlayUp() {
@@ -1563,19 +1538,33 @@ func (m *Model) armConfirm(a action.Action, target string, targets []string) {
 // events, so logging the invocation separately would make every action report
 // twice (rule 17).
 func (m *Model) runAction(a action.Action, target string, targets []string) tea.Cmd {
+	// The screen raised these verbs, so it is told which one is being run.
+	//
+	// Here rather than where the menu's ChosenMsg arrives, because those are
+	// not the same moment: a verb with Confirm is armed there and runs only
+	// when the modal says yes, and a screen told at the pick would claim rows
+	// for work the user then cancelled. Forwarding from the one place both
+	// paths pass through makes the message mean "this is being dispatched
+	// now", which is what a screen can act on.
+	//
+	// pkg/activity's Expect is the caller this exists for: a screen cannot
+	// claim a row for work it has no way to know was dispatched, and under
+	// the shell the dispatch happens somewhere it cannot see (rule 33).
+	var fwd tea.Cmd
+	m.stack, fwd = m.stack.Update(action.ChosenMsg{Action: a, Target: target, Targets: targets})
+
 	if a.Do != nil {
 		m.logEntry("", "action: "+a.Label, "", output.LevelInfo)
-		return a.Do()
+		return tea.Batch(fwd, a.Do())
 	}
 	if a.Run == nil {
 		m.logEntry("", "action: "+a.Label, "", output.LevelInfo)
-		return nil
+		return fwd
 	}
 
 	tag := action.RunKey(a, target)
 	m.running[tag] = actionRun{
 		keys:    append([]string(nil), targets...),
-		busy:    a.BusyLabel(),
 		receipt: a.ReceiptText(),
 	}
 	// One gate per target, so Sync on {a, b} and Sync on {b, c} collide on b
@@ -1589,12 +1578,12 @@ func (m *Model) runAction(a action.Action, target string, targets []string) tea.
 	if target != "" {
 		detail = a.Label + " · " + target
 	}
-	return runner.GoWith(runner.GoOptions{
+	return tea.Batch(fwd, runner.GoWith(runner.GoOptions{
 		Label:  a.Label,
 		Detail: detail,
 		Tag:    tag,
 		Run:    a.Run,
-	})
+	}))
 }
 
 // rightClick forwards the press to the screen, then opens the menu against

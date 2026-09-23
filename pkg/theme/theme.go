@@ -707,33 +707,16 @@ func (t Theme) Form() form.Options {
 	}
 }
 
-// Activity returns activity.Options pre-filled from the theme — the running
-// spinner and its label in Accent, the outcome glyphs in the Info and Error
-// colors, and the theme's glyph set for ✓ / ✗.
+// Activity returns activity.Options pre-filled from the theme — the spinner
+// and its label in Accent.
 //
 // Nested into List() and Tree(), which render their own rows and can use
 // lipgloss freely. pkg/table needs the cell-safe form instead; see
 // activityCell.
-//
-// Reading InfoBG and ErrorBG as foregrounds is the same reach rule 23 already
-// makes for an error-tinted alert: they are the palette's "this went well" and
-// "this did not", and the Theme has no separate foreground pair for them.
 func (t Theme) Activity() activity.Options {
 	running := lipgloss.NewStyle().Foreground(t.Accent)
-	ok := lipgloss.NewStyle().Foreground(t.InfoBG)
-	failed := lipgloss.NewStyle().Foreground(t.ErrorBG)
 	return activity.Options{
-		Glyphs: t.glyphs(),
-		Style: func(st activity.State, text string) string {
-			switch {
-			case st.Failed():
-				return failed.Render(text)
-			case st.Done:
-				return ok.Render(text)
-			default:
-				return running.Render(text)
-			}
-		},
+		Style: func(_ activity.State, text string) string { return running.Render(text) },
 	}
 }
 
@@ -745,16 +728,6 @@ func (t Theme) Activity() activity.Options {
 // \x1b[39m instead, which the row's Background survives.
 func (t Theme) activityCell() activity.Options {
 	return activity.Options{
-		Glyphs: t.glyphs(),
-		Style: func(st activity.State, text string) string {
-			switch {
-			case st.Failed():
-				return cellColor(t.ErrorBG, text)
-			case st.Done:
-				return cellColor(t.InfoBG, text)
-			default:
-				return cellColor(t.Accent, text)
-			}
-		},
+		Style: func(_ activity.State, text string) string { return cellColor(t.Accent, text) },
 	}
 }

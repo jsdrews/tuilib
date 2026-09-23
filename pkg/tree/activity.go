@@ -6,74 +6,105 @@ import (
 	"github.com/jsdrews/tuilib/pkg/activity"
 )
 
-// Node activity: a spinner and status label on the nodes something is
-// currently working on. See pkg/activity for the state itself.
+// Node activity: a spinner and status label on the nodes the data says are
+// working. See pkg/activity for the state itself.
 //
-// It draws as a right-aligned badge at the end of the row, for the reason
-// pkg/list gives: the leading cells are the mark gutter, the indent and the
-// disclosure arrow, and a prefix that appeared mid-run would shove every one
-// of them sideways.
+// It draws as a right-aligned badge at the end of the node's row, the way
+// pkg/list does and for the same reason: the leading cells are spoken for by
+// the indent, the expand glyph and the mark column.
 //
-// Keys here are node paths — the same identity the tree already uses for
-// expansion state, marking and cursor restore, so nothing new has to be
-// supplied. Activity is on a node, not a subtree: a busy branch says so about
-// itself and nothing about its children, exactly as marking does (rule 32).
+// A tree needs no keyed setter, because a node's path already is its identity
+// — the same path used for expansion state and cursor restore.
 
-// observe recomputes the derived layer from the tree the model now holds, and
-// reports any revision that changed while its node was not busy.
+// observe recomputes the indicator set from the tree the model now holds.
 //
-// Called from SetRoot, and unconditionally rather than only for visible rows:
-// derived state is a fact about the data, and a node inside a collapsed branch
-// is still working. Expanding it should reveal a spinner already turning, not
-// start one.
-//
-// The commands it produces cannot be returned (a setter has no return value),
-// so they queue for the next Update.
+// Called from New and SetRoot. New matters as much as SetRoot: a tree takes
+// its data through Options.Root, so a tree that never calls SetRoot would
+// otherwise never have observed anything at all.
 func (m *Model) observe() {
-	if m.actWhen == nil && m.actRev == nil {
-		return
-	}
+	var paths []string
 	busy := map[string]string{}
-	changes := map[string]activity.Change{}
 	if m.root != nil {
+		// Every node, not only the visible ones: a node inside a collapsed
+		// branch is still working, and expanding it should reveal a spinner
+		// already turning rather than start one.
 		m.walkNodes(m.root, rootPath(m.root), func(path string, n Node) {
-			if m.actWhen != nil {
-				if label, ok := m.actWhen(n); ok {
-					busy[path] = label
-				}
+			paths = append(paths, path)
+			if m.actWhen == nil {
+				return
 			}
-			if m.actRev != nil {
-				// No label: a tree row shows its node, not a status, so the
-				// glyph alone is the whole message.
-				changes[path] = activity.Change{Rev: m.actRev(n)}
+			if label, ok := m.actWhen(n); ok {
+				busy[path] = label
 			}
 		})
 	}
-
-	var cmds []tea.Cmd
-	if m.actWhen != nil {
-		// Unconditionally, including when nothing matches: an empty
-		// observation is a real one, and the only thing that can end a
-		// handoff (decision 19).
-		cmds = append(cmds, m.act.Derive(busy))
+	// Scoping happens on every swap, predicate or not: it is what keeps a
+	// SetBusy map — which comes from somewhere other than this tree — from
+	// animating a path the tree does not hold.
+	m.act.Scope(paths)
+	if m.actWhen == nil {
+		return
 	}
-	if m.actRev != nil {
-		cmds = append(cmds, m.act.Revise(changes))
-	}
-	m.actCmd = tea.Batch(append(cmds, m.actCmd)...)
+	// Unconditionally, including when nothing matches: an empty observation is
+	// a real one, and the only thing that can stop the last spinner.
+	// Values, deliberately nil: a tree has no value to compare.
+	//
+	// The other two components hand Observe each claimed key's current cell,
+	// so an observation can notice the server acted by seeing that value
+	// change. A node's label is the only string a tree can read generically,
+	// and a node's label is its identity — the path expansion state, cursor
+	// restore, marking and activity all key on is built from it. A label that
+	// changed is not the same node reporting something new; it is a different
+	// node. So that signal cannot exist here, and a claim on a tree ends by
+	// being confirmed or by spending its allowance (activity.Options.Settle).
+	m.actCmd = tea.Batch(m.act.Observe(busy, nil), m.actCmd)
 }
 
-// walkNodes visits every node with the path the rest of the tree addresses it
-// by, expanded or not — the same numbering collectAllPaths and allPaths use,
-// so a derived key and a mark key for one node are the same string.
-func (m *Model) walkNodes(n Node, path string, fn func(string, Node)) {
-	fn(path, n)
-	seen := map[string]int{}
-	for _, c := range n.Children() {
-		label := c.Label()
-		seen[label]++
-		m.walkNodes(c, childPath(path, label, seen[label]), fn)
+// SetBusy is the second entrance: the screen says which nodes are working
+// instead of a predicate reading it off the node.
+//
+// For busy-ness that is not a property of the node — an operations API, a job
+// status resource. The map replaces the previous one outright, exactly as a
+// predicate's observation does. Paths the tree does not hold are kept but not
+// drawn.
+//
+// Panics if the tree was built with Options.ActivityWhen: a component uses one
+// entrance or the other, and a screen needing both merges them itself.
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
+	if m.actWhen != nil {
+		panic("tree.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
 	}
+	cmd := m.act.Observe(busy, nil)
+	m.refresh()
+	return cmd
+}
+
+// Expect marks paths as working because the screen has just asked the server to
+// work on them, before any observation can say so.
+//
+// The claim is retired by an observation reporting the node busy, or by
+// spending activity.Options.Settle. Unlike list and table there is no third
+// ending here: a tree has no value to watch for change, because a node's label
+// is its identity rather than a field on it (see observe). A tree backed by a
+// reconciler therefore wants a slightly larger allowance than the same data in
+// a table would.
+func (m *Model) Expect(paths []string, label string) tea.Cmd {
+	cmd := m.act.Expect(paths, label, nil)
+	m.refresh()
+	return cmd
+}
+
+// Retract drops the claims on paths, for a write the server refused.
+func (m *Model) Retract(paths ...string) {
+	m.act.Retract(paths...)
+	m.refresh()
+}
+
+// RetractAll drops every claim, for a read that failed — an outage is the case
+// where no observation is coming to retire them.
+func (m *Model) RetractAll() {
+	m.act.RetractAll()
+	m.refresh()
 }
 
 // flushActivity hands over any command observe queued.
@@ -83,28 +114,7 @@ func (m *Model) flushActivity() tea.Cmd {
 	return cmd
 }
 
-// holdsKey reports whether this tree currently shows a node at that path.
-//
-// It filters the shell's broadcasts. Only flattened rows count, so a node
-// inside a collapsed branch declines — it is not on screen to spin.
-func (m Model) holdsKey(k string) bool {
-	if k == "" {
-		return false
-	}
-	for _, r := range m.rows {
-		if r.path == k {
-			return true
-		}
-	}
-	return false
-}
-
-// withBadge appends the indicator for row r to an already-rendered row.
-//
-// Composed outside the row's own styling: the current row is one styled run
-// padded to the pane's inner width, and a lipgloss-rendered badge nested in it
-// would close that run at its first reset (rule 19). Badge cuts the padding
-// back down to make room, so the row keeps its width either way.
+// withBadge appends the indicator to a rendered row, if its path is busy.
 func (m Model) withBadge(path, row string) string {
 	if !m.act.Active() {
 		return row
@@ -116,51 +126,30 @@ func (m Model) withBadge(path, row string) string {
 	return m.act.Badge(path, row, w)
 }
 
-// SetActivity starts the spinner on one node path, replacing anything already
-// there.
-//
-// Batch the returned command into your screen's command stream — it is the
-// animation's first tick, exactly as SetLoading's is (rule 17).
-func (m *Model) SetActivity(path, label string) tea.Cmd {
-	cmd := m.act.Start(path, label)
-	m.refresh()
-	return cmd
-}
-
-// EndActivity finishes one node, showing ✓ or ✗ for the hold before it clears.
-// A nil err is a success.
-func (m *Model) EndActivity(path string, err error) tea.Cmd {
-	cmd := m.act.Finish(path, err)
-	m.refresh()
-	return cmd
-}
-
-// ClearActivity retires one node's indicator at once, outcome or not.
-func (m *Model) ClearActivity(path string) {
-	m.act.Clear(path)
-	m.refresh()
-}
-
-// Relabel changes what a busy node says without restarting it.
-func (m *Model) Relabel(path, label string) {
-	m.act.Relabel(path, label)
-	m.refresh()
-}
-
-// ActivityState is the in-flight set, for carrying across a SetTheme rebuild.
-// See SetActivityState.
+// ActivityState is the observed set, for carrying across a SetTheme rebuild.
 func (m Model) ActivityState() activity.Set { return m.act }
 
 // SetActivityState adopts the entries of a previous instance's ActivityState,
-// keeping this tree's own palette — the rule-4 pair for node activity.
-//
-// The returned command re-arms the spinner and any hold that was mid-flight;
-// dropping it strands a frozen glyph on the row.
+// keeping this tree's own palette — the rule-4 pair for row activity.
 func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 	cmd := m.act.Adopt(s)
 	m.refresh()
 	return cmd
 }
 
-// ActivityCount is how many nodes are still working, held outcomes excluded.
+// walkNodes visits every node with the path the rest of the tree addresses it
+// by, expanded or not — the same numbering collectAllPaths and allPaths use,
+// so an activity key and a mark key for one node are the same string.
+func (m *Model) walkNodes(n Node, path string, fn func(string, Node)) {
+	fn(path, n)
+	seen := map[string]int{}
+	for _, c := range n.Children() {
+		label := c.Label()
+		seen[label]++
+		m.walkNodes(c, childPath(path, label, seen[label]), fn)
+	}
+}
+
+// ActivityCount is how many of this tree's nodes are working — reported by the
+// last observation, or claimed by Expect and not yet spoken to.
 func (m Model) ActivityCount() int { return m.act.Count() }

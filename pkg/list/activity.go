@@ -6,12 +6,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/activity"
 )
 
-// Row activity: a spinner and status label on the items something is currently
-// working on. See pkg/activity for the state itself.
+// Row activity: a spinner and status label on the items the data says are
+// working. See pkg/activity for the state itself.
 //
 // It draws as a right-aligned badge at the end of the row —
 //
-//	worker-pool                              ⠹ syncing
+//	worker-pool                              ⣾ running
 //
 // rather than as a prefix, because the leading cells are already spoken for by
 // the cursor glyph and the mark column, and pushing every row sideways the
@@ -19,57 +19,105 @@ import (
 // errors on the border. When the row text and the badge cannot both fit, the
 // row gives way: the badge is the news.
 //
-// Unlike pkg/table there is nothing to opt into. A table needs to be told
-// which column to draw in; a badge occupies nothing at all until something is
-// running, so it costs an app that never uses it exactly nothing.
+// Unlike pkg/table there is nothing to opt into beyond the predicate. A table
+// needs to be told which column to draw in; a badge occupies nothing at all
+// until something is running, so it costs an app that never uses it exactly
+// nothing.
 //
 // Entries are held by key, so this works on SetKeyedItems and is naturally
 // inert on anonymous items — an entry whose key matches no row is unreachable
 // rather than approximate, which is marking's rule (rule 32) arrived at from
 // the other direction.
 
-// observe recomputes the derived layer from the items the list now holds, and
-// reports any revision that changed while its row was not busy.
+// observe recomputes the indicator set from the items the list now holds.
 //
-// Called from SetKeyedItems. The commands it produces cannot be returned (a
-// setter has no return value), so they queue for the next Update, exactly as a
+// Called from SetKeyedItems. The command it produces cannot be returned (a
+// setter has no return value), so it queues for the next Update, exactly as a
 // pending SelectedChangedMsg does.
 func (m *Model) observe() {
-	if m.actWhen == nil && m.actRev == nil {
+	// Scoping happens on every swap, predicate or not: it is what keeps a
+	// SetBusy map — which comes from somewhere other than these items — from
+	// animating a key this list does not hold.
+	m.act.Scope(m.itemKeys)
+	if m.actWhen == nil {
 		return
 	}
-	var cmds []tea.Cmd
+	busy := map[string]string{}
+	for i, key := range m.itemKeys {
+		if key == "" || i >= len(m.items) {
+			continue
+		}
+		if label, ok := m.actWhen(m.items[i]); ok {
+			busy[key] = label
+		}
+	}
+	// Unconditionally, including when nothing matches: an empty observation is
+	// a real one, and the only thing that can stop the last spinner.
+	m.actCmd = tea.Batch(m.act.Observe(busy, m.actValues(m.act.Expecting())), m.actCmd)
+}
 
+// actValues is the current text of every key in keys, which is how an
+// observation notices the server acted (activity.Options.Settle).
+//
+// Only meaningful on the predicate path — the predicate reads this text, so a
+// change in it is evidence about the work — and nil off it, where busy-ness
+// comes from elsewhere and the row's text may have nothing to do with it.
+func (m Model) actValues(keys []string) map[string]string {
+	if m.actWhen == nil || len(keys) == 0 {
+		return nil
+	}
+	wanted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		wanted[k] = true
+	}
+	values := make(map[string]string, len(keys))
+	for i, key := range m.itemKeys {
+		if wanted[key] && i < len(m.items) {
+			values[key] = m.items[i]
+		}
+	}
+	return values
+}
+
+// SetBusy is the second entrance: the screen says which items are working
+// instead of a predicate reading it off their text.
+//
+// For busy-ness that is not a property of the row — an operations API, a job
+// status resource. The map replaces the previous one outright, exactly as a
+// predicate's observation does, so there is still one map and one writer.
+// Keys the list does not hold are kept but not drawn.
+//
+// Panics if the list was built with Options.ActivityWhen: a component uses one
+// entrance or the other, and a screen needing both merges them itself.
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
 	if m.actWhen != nil {
-		busy := map[string]string{}
-		for i, key := range m.itemKeys {
-			if key == "" || i >= len(m.items) {
-				continue
-			}
-			if label, ok := m.actWhen(m.items[i]); ok {
-				busy[key] = label
-			}
-		}
-		// Unconditionally, including when nothing matches: an empty
-		// observation is a real one, and the only thing that can end a
-		// handoff (decision 19).
-		cmds = append(cmds, m.act.Derive(busy))
+		panic("list.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
 	}
+	cmd := m.act.Observe(busy, nil)
+	m.refresh()
+	return cmd
+}
 
-	if m.actRev != nil {
-		changes := make(map[string]activity.Change, len(m.itemKeys))
-		for i, key := range m.itemKeys {
-			if key == "" || i >= len(m.items) {
-				continue
-			}
-			// No label: a list row shows its item, not a status, so the glyph
-			// alone is the whole message — "this one changed".
-			changes[key] = activity.Change{Rev: m.actRev(m.items[i])}
-		}
-		cmds = append(cmds, m.act.Revise(changes))
-	}
+// Expect marks keys as working because the screen has just asked the server to
+// work on them, before any observation can say so. The claim is retired by the
+// observations that follow — see activity.Options.Settle.
+func (m *Model) Expect(keys []string, label string) tea.Cmd {
+	cmd := m.act.Expect(keys, label, m.actValues(keys))
+	m.refresh()
+	return cmd
+}
 
-	m.actCmd = tea.Batch(append(cmds, m.actCmd)...)
+// Retract drops the claims on keys, for a write the server refused.
+func (m *Model) Retract(keys ...string) {
+	m.act.Retract(keys...)
+	m.refresh()
+}
+
+// RetractAll drops every claim, for a read that failed — an outage is the case
+// where no observation is coming to retire them.
+func (m *Model) RetractAll() {
+	m.act.RetractAll()
+	m.refresh()
 }
 
 // flushActivity hands over any command observe queued.
@@ -79,29 +127,22 @@ func (m *Model) flushActivity() tea.Cmd {
 	return cmd
 }
 
-// holdsKey reports whether this list currently shows an item with that key.
-//
-// It filters the shell's broadcasts: a component declines keys it does not
-// hold, the same way it declines a mouse event outside its rect. Direct calls
-// to SetActivity are not filtered — there the screen is asserting it knows
-// what it is doing, and the row may still be in flight from a fetch.
-func (m Model) holdsKey(k string) bool {
-	if k == "" {
-		return false
-	}
-	for _, ik := range m.itemKeys {
-		if ik == k {
-			return true
-		}
-	}
-	return false
+// ActivityState is the observed set, for carrying across a SetTheme rebuild.
+func (m Model) ActivityState() activity.Set { return m.act }
+
+// SetActivityState adopts the entries of a previous instance's ActivityState,
+// keeping this list's own palette — the rule-4 pair for row activity.
+func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
+	cmd := m.act.Adopt(s)
+	m.refresh()
+	return cmd
 }
 
-// withBadge appends the indicator for visible row i to an already-rendered row.
-//
-// Composed outside the row's own styling rather than inside it: the cursor row
-// is one styled run, and a lipgloss-rendered badge nested in it would close
-// that run at its first reset (rule 19).
+// ActivityCount is how many of this list's items are working — reported by the
+// last observation, or claimed by Expect and not yet spoken to.
+func (m Model) ActivityCount() int { return m.act.Count() }
+
+// withBadge appends the indicator to a rendered row, if its key is busy.
 func (m Model) withBadge(i int, row string) string {
 	if !m.act.Active() {
 		return row
@@ -116,51 +157,3 @@ func (m Model) withBadge(i int, row string) string {
 	}
 	return m.act.Badge(k, row, w)
 }
-
-// SetActivity starts the spinner on one item, replacing anything already there.
-//
-// Batch the returned command into your screen's command stream — it is the
-// animation's first tick, exactly as SetLoading's is (rule 17).
-func (m *Model) SetActivity(key, label string) tea.Cmd {
-	cmd := m.act.Start(key, label)
-	m.refresh()
-	return cmd
-}
-
-// EndActivity finishes one item, showing ✓ or ✗ for the hold before it clears.
-// A nil err is a success.
-func (m *Model) EndActivity(key string, err error) tea.Cmd {
-	cmd := m.act.Finish(key, err)
-	m.refresh()
-	return cmd
-}
-
-// ClearActivity retires one item's indicator at once, outcome or not.
-func (m *Model) ClearActivity(key string) {
-	m.act.Clear(key)
-	m.refresh()
-}
-
-// Relabel changes what a busy item says without restarting it.
-func (m *Model) Relabel(key, label string) {
-	m.act.Relabel(key, label)
-	m.refresh()
-}
-
-// ActivityState is the in-flight set, for carrying across a SetTheme rebuild.
-// See SetActivityState.
-func (m Model) ActivityState() activity.Set { return m.act }
-
-// SetActivityState adopts the entries of a previous instance's ActivityState,
-// keeping this list's own palette — the rule-4 pair for row activity.
-//
-// The returned command re-arms the spinner and any hold that was mid-flight;
-// dropping it strands a frozen glyph on the row.
-func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
-	cmd := m.act.Adopt(s)
-	m.refresh()
-	return cmd
-}
-
-// ActivityCount is how many items are still working, held outcomes excluded.
-func (m Model) ActivityCount() int { return m.act.Count() }

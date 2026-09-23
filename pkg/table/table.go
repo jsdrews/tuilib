@@ -336,9 +336,13 @@ type Options struct {
 	// key:value scope is. A name matching no column (or an ambiguous one)
 	// falls back to a two-cell gutter.
 	//
-	// Unset turns the whole feature off: no gutter, no cost, and the setters
-	// in activity.go are no-ops. Widths never grow to fit the indicator, so
-	// give a column that will carry one enough Width for its longest label.
+	// The feature is off until ActivityColumn or ActivityWhen is set — a table
+	// that asked for neither carries no gutter and pays nothing. Setting only
+	// a predicate draws in the gutter, for the reason a typo does: a spinner
+	// nobody can see is worse than one in the wrong place, and it would
+	// otherwise animate forever unobserved. Widths never grow to fit the
+	// indicator, so give a column that will carry one enough Width for its
+	// longest label.
 	ActivityColumn string
 
 	// Activity configures the row indicators. Theme.Table() pre-fills it with
@@ -360,13 +364,6 @@ type Options struct {
 	// A locally-started indicator wins over a derived one, so a poll already
 	// in flight when the user acted cannot wipe their spinner.
 	ActivityWhen func(cells Row) (label string, busy bool)
-
-	// ActivityRevision, when set, is a per-row value that changes whenever the
-	// row's underlying work does — finished_at, resourceVersion, an ETag. A
-	// change observed while the row is not busy flashes a brief mark, which is
-	// the only way to notice work that began and ended between two polls.
-	// Unset, nothing happens.
-	ActivityRevision func(cells Row) string
 
 	// SpinnerStyle styles the loading-state spinner glyph. Pass via
 	// theme.Table() for a sensible default.
@@ -540,7 +537,6 @@ type Model struct {
 	actEnabled bool
 	actColName string
 	actWhen    func(Row) (string, bool)
-	actRev     func(Row) string
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update like a pending viewport msg.
@@ -657,10 +653,9 @@ func New(opts Options) Model {
 		marks:         map[string]bool{},
 		markStyle:     opts.MarkStyle,
 		act:           activity.New(opts.Activity),
-		actEnabled:    opts.ActivityColumn != "",
+		actEnabled:    opts.ActivityColumn != "" || opts.ActivityWhen != nil,
 		actColName:    opts.ActivityColumn,
 		actWhen:       opts.ActivityWhen,
-		actRev:        opts.ActivityRevision,
 		hScrollbar:    opts.HScrollbar,
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
@@ -724,7 +719,7 @@ func (m Model) Init() tea.Cmd { return nil }
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var actCmd tea.Cmd
 	if m.actEnabled {
-		actCmd = m.act.Handle(msg, m.holdsKey)
+		actCmd = m.act.Handle(msg)
 	}
 	m, cmd := m.update(msg)
 	if actCmd != nil {

@@ -49,7 +49,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -81,20 +80,6 @@ type Action struct {
 	// in the screen's Help(), since moving discovery off the footer and into
 	// the menu is most of the point.
 	Key key.Binding
-
-	// Busy is what this action's target rows say while it runs — "syncing",
-	// "refreshing", "deleting". Defaults to Label lowercased.
-	//
-	// A field rather than a derivation because the verb and the state are
-	// different words and the gap is exactly where the user's attention is:
-	// "Sync" is what you chose, "syncing" is what is happening. It reaches
-	// the rows through the shell, which broadcasts it against Set.Targets;
-	// a Set with no Targets shows nothing anywhere and this is inert.
-	//
-	// Ignored for a Do action. Do returns an opaque tea.Cmd with no
-	// completion to wait for, so a spinner started for one could never be
-	// stopped.
-	Busy string
 
 	// Receipt replaces the statusbar and log text the shell writes when this
 	// action's Run returns. Default: "<Label> completed".
@@ -166,14 +151,6 @@ func (a Action) ReceiptText() string {
 		return a.Receipt
 	}
 	return a.Label + " completed"
-}
-
-// BusyLabel is what the target rows should say while this action runs.
-func (a Action) BusyLabel() string {
-	if a.Busy != "" {
-		return a.Busy
-	}
-	return strings.ToLower(a.Label)
 }
 
 // Ident is the action's identity for the Exclusive check. Defaults to Label.
