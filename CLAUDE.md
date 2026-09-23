@@ -850,16 +850,78 @@ example in `examples/`.
     you carry the cursor (rule 4); both it and `Derive` return a `tea.Cmd`
     you must batch, exactly as `SetLoading` does.
 
-    **The data is the only source, and that is the design.** There is no
-    action broadcast, no `SetActivity` setter, no second endpoint and no
-    local layer. The remote system is the authority on whether a row is
-    busy, so the component holds no second opinion to reconcile — which is
-    what makes the feature a pure function of the rows, recomputed on a
-    keyed swap and on nothing else. The two things it therefore cannot do
-    are worth knowing before you reach for it: an action the user triggers
-    shows nothing on the row until a later poll reports it, and work that
-    begins and ends between two observations is never seen. Both are open
-    questions in `docs/activity.md`, not oversights.
+    **The data is the source, and there is one map.** No action broadcast,
+    no shell involvement, nothing accumulating: every observation replaces
+    the collection outright, so the component holds no second opinion to
+    reconcile. The remaining thing it cannot do is worth knowing before you
+    reach for it — work somebody else began and ended between two
+    observations is never seen, which is a design choice recorded in
+    `docs/activity.md`, not an oversight.
+
+    **When the busy-ness is not a field on the row, use `SetBusy`.** An
+    operations API, a job-status resource, `GET /jobs?status=running`: the
+    screen hands over the same `map[key]label` the predicate would have
+    computed. It is the second *entrance*, not a second map — a component
+    uses the predicate or it is told, never both, and `SetBusy` on a
+    component built with `ActivityWhen` panics. A screen needing both merges
+    them itself, with `activity.Settled` for its half. Keys the component
+    does not hold are kept but not drawn, so a paged table can be handed the
+    busy set for rows it has not reached; `ActivityCount()` answers over the
+    rows it holds.
+
+    **For work the user starts, `Expect` — and then three lines in the
+    screen that make it safe.** A POST returns in milliseconds and the next
+    poll is seconds away, so without a claim the row the verb was about says
+    nothing for a whole interval. `Expect(keys, label)` covers that window,
+    and every observation retires claims, so it cannot outlive what the data
+    can speak to.
+
+    ```go
+    case action.ChosenMsg:
+        s.gen++                      // reads in flight predate the keypress
+        s.writing++                  // reads issued until the ack predate the write
+        s.claimed[action.RunKey(m.Action, m.Target)] = keys
+        cmds = append(cmds, s.table.Expect(keys, "Syncing"))
+
+    case runner.Captured:            // under the shell, this is the ack
+        s.writing--
+        s.gen++
+        if m.Err != nil { s.table.Retract(keys...) }
+
+    case fetchedMsg:
+        if m.gen < s.seen || s.writing > 0 { break }
+        if m.err != nil { s.table.RetractAll() }
+    ```
+
+    **Don't apply a read taken across your own write.** This is the rule with
+    no compiler behind it, and the `writing` count is the half people skip:
+    bumping only at the keypress drops reads already in flight and leaves the
+    POST's own latency wide open, so a poll fired 50ms later comes back with
+    a newer generation carrying an older truth and the row blinks off and on.
+    `internal/integration/activity_claim_test.go` asserts both halves.
+    `RetractAll` on a failed read is not politeness either: an outage is
+    exactly the case where no observation is coming to retire anything.
+
+    It all assumes a **monotonic read path**. A replica or watch cache can
+    report busy, settled and busy again from three replies that were each
+    true when made, and no client-side counter repairs that.
+
+    **`Options.Settle` is an allowance of observations, not a duration.** It
+    is how many reads that *repeat the pre-dispatch value* a claim survives;
+    a read reporting the key busy confirms it instead, and one reporting a
+    different settled value retires it outright. Zero — the default — retires
+    on the next observation and is right for any API whose handler sets the
+    status inline. A reconciler wants one or two. It is a ceiling, so a claim
+    nothing ever confirms still ends, and it is the one sanctioned exception
+    to the anti-pattern below about holding an indicator open: it declines to
+    treat a read that said nothing as having said something. `pkg/tree` has
+    no third ending — a node's label is its identity, not a field on it — so
+    give a tree a slightly larger allowance than the same data in a table.
+
+    **Stamp per stream, not per screen.** A screen fetching rows from one
+    endpoint and busy-ness from another has two generations, not one:
+    sharing a counter means a reply from whichever endpoint landed second is
+    dropped as stale forever. A write bumps every stream.
 
     **`activity.Settled(values...)` is usually the better predicate.** It names
     the statuses that mean nothing is happening and treats everything else as
@@ -1151,6 +1213,12 @@ example in `examples/`.
   Without a TTY lipgloss falls back to the Ascii profile and strips every
   style, so a render comparison silently passes no matter what the code
   does. `lipgloss.SetColorProfile(termenv.TrueColor)` in TestMain.
+- **Don't let a claim outlive the reads that would retire it.** `Expect` is
+  safe because every observation retires claims — which is a promise the screen
+  has to keep. A read applied across your own write clears the claim with a
+  pre-write value (the row blinks), and a read that *failed* retires nothing at
+  all, so a claim held through an outage spins for the length of it. Both halves
+  live in the screen: the `writing` count and `RetractAll`. See rule 33.
 - **Don't animate a row by re-pushing the rows.** A screen that owns a
   `spinner.Model` and calls `SetKeyedRows` on every tick is fighting whatever
   else writes those rows — usually a `pkg/poll` refresh two seconds away — and
@@ -1165,6 +1233,12 @@ example in `examples/`.
   too long lies, and the right number is a poll interval the component does not
   know. If the row genuinely needs to say more than the data says, that is a
   design question for `docs/activity.md`, not a timer.
+
+  `Options.Settle` is the one exception and is not a counterexample: it counts
+  *observations that repeated the pre-dispatch value*, so it holds nothing open
+  past what the data said — it declines to treat a read that said nothing as
+  having said something. It has no duration in it to be too short or too long,
+  and it is a ceiling, so the wait always ends.
 - **Don't give a row indicator an outcome glyph.** When `running` becomes
   `failed` the cell goes back to rendering the row's own value, which already
   says `failed` in the app's own colours. A `✗` over the top of it is the
@@ -1552,18 +1626,20 @@ path.
   `examples/components/metrics` and rule 24 (auto-refresh).
 - **Row activity:** `pkg/activity` is the per-row spinner and status label,
   and it is deliberately small — `State` (a label and a `Since`), `Set`,
-  `Derive` for one observation of the data, `Busy` / `Settled` for the
-  predicate, `Render` and `Badge` for the two placements, and `Adopt` for the
-  rule-4 carry. There is one layer: `Derive` replaces the whole collection, so
-  the set is never anything but the last read, and there is nothing to
-  reconcile, expire or damp. No messages, no setters, no timers but the
-  spinner's. It is a true leaf — `bubbletea`, `bubbles/spinner`, `x/ansi`, and
-  nothing from tuilib — and it emits no escapes of its own: `Render` hands back
-  text the component colours through `Options.Style`, because a table cell
-  needs a foreground-only escape (rule 19) and a list row does not, and only
-  the component knows which. What it deliberately does not cover — a locally
-  dispatched action, and work that starts and ends between two polls — is
-  written up as open questions. See rule 33, `docs/activity.md`, and
+  `Observe` / `Derive` for one observation of the data, `Expect` / `Retract` /
+  `RetractAll` for work the user started, `Scope` for the keys the component
+  holds, `Busy` / `Settled` for the predicate, `Render` and `Badge` for the two
+  placements, and `Adopt` for the rule-4 carry. There is one map of observed
+  state: `Observe` replaces it wholesale, so it is never anything but the last
+  read, and there is nothing to reconcile or damp. A claim from `Expect` sits
+  beside it and is retired by every observation (`Options.Settle`), never
+  written back into. No messages, no timers but the spinner's. It is a true
+  leaf — `bubbletea`, `bubbles/spinner`, `x/ansi`, and nothing from tuilib —
+  and it emits no escapes of its own: `Render` hands back text the component
+  colours through `Options.Style`, because a table cell needs a foreground-only
+  escape (rule 19) and a list row does not, and only the component knows which.
+  What it deliberately does not cover is work somebody *else* started and
+  finished between two polls. See rule 33, `docs/activity.md`, and
   `examples/patterns/activity`.
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options

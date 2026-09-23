@@ -315,7 +315,7 @@ func TestRefreshFinishesBeforeAnyPollCouldSeeIt(t *testing.T) {
 	}
 }
 
-// Rev is what ActivityRevision watches, so it must change when work completes
+// Rev is the revision a client could watch, so it must change when work completes
 // and not otherwise.
 func TestRevChangesOnlyOnCompletion(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 20})

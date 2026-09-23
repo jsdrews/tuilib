@@ -173,8 +173,8 @@ func (w *lineWriter) emit(b []byte) {
 	w.st.line(string(bytes.TrimSuffix(b, []byte("\r"))), false)
 }
 
-// Progress reports what the run is doing now, satisfying the optional
-// interface activity.Progress looks for on the writer it is given.
+// Progress reports what the run is doing now, through the optional interface
+// a caller can type-assert for on the writer it is given.
 //
 // It bypasses the line buffer deliberately: a status is not output, so it must
 // not be interleaved into a half-written line or be held back waiting for a

@@ -118,6 +118,10 @@ func (m Model) withActivity(i int, cells Row) Row {
 // returned (a setter has no return value), so it queues for the next Update,
 // exactly as a pending ViewportChangedMsg does.
 func (m *Model) observe() {
+	// Scoping happens on every swap, predicate or not: it is what keeps a
+	// SetBusy map — which comes from somewhere other than these rows — from
+	// animating a key this table does not hold.
+	m.act.Scope(m.rowKeys)
 	if m.actWhen == nil {
 		return
 	}
@@ -132,7 +136,124 @@ func (m *Model) observe() {
 	}
 	// Unconditionally, including when nothing matches: an empty observation is
 	// a real one, and the only thing that can stop the last spinner.
-	m.actCmd = tea.Batch(m.act.Derive(busy), m.actCmd)
+	m.actCmd = tea.Batch(m.act.Observe(busy, m.actValues()), m.actCmd)
+}
+
+// actValues is the current activity-column cell for every key carrying a
+// claim, which is how an observation notices the server acted (Options.Settle).
+//
+// Only on the predicate path, and that restriction is the point rather than a
+// limitation. Under ActivityWhen the column is the status by construction — the
+// predicate reads it — so a change in it is evidence about the work. Under
+// SetBusy the busy-ness comes from elsewhere and this column may have nothing
+// to do with it, where a cell moving for unrelated reasons would retire a claim
+// that is still perfectly live.
+//
+// Empty whenever nothing has been dispatched, which is almost always.
+func (m Model) actValues() map[string]string {
+	want := m.act.Expecting()
+	if len(want) == 0 {
+		return nil
+	}
+	col := m.activityCol()
+	wanted := make(map[string]bool, len(want))
+	for _, k := range want {
+		wanted[k] = true
+	}
+	values := make(map[string]string, len(want))
+	for i, key := range m.rowKeys {
+		if !wanted[key] || i >= len(m.rows) {
+			continue
+		}
+		if col >= 0 && col < len(m.rows[i]) {
+			values[key] = m.rows[i][col]
+			continue
+		}
+		values[key] = ""
+	}
+	return values
+}
+
+// SetBusy is the second entrance: the screen says which rows are working
+// instead of a predicate reading it off their cells.
+//
+// For busy-ness that is not a field on the row — an operations API, a job
+// status resource, GET /jobs?status=running. The map is the whole truth as of
+// that moment and replaces the previous one outright, exactly as a predicate's
+// observation does; there is still one map and one writer.
+//
+// Keys the table does not hold are kept but not drawn, so a paged table can be
+// handed the busy set for rows it has not reached yet.
+//
+// Panics if the table was built with Options.ActivityWhen. Two writers for one
+// map is the property that makes this feature unable to contradict itself, and
+// a component uses one entrance or the other. A screen that needs both merges
+// them itself and calls this — activity.Settled is available for the half that
+// reads off the row.
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
+	if m.actWhen != nil {
+		panic("table.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
+	}
+	m.actEnabled = true
+	cmd := m.act.Observe(busy, nil)
+	m.refresh()
+	return cmd
+}
+
+// Expect marks keys as working because the screen has just asked the server to
+// work on them, before any observation can say so.
+//
+// The claim is retired by the observations that follow — see Options.Settle for
+// the three ways that happens. It is not a second source of truth and cannot
+// outlive the data's ability to speak to it.
+//
+// The screen must not apply a read taken across its own write, or the claim is
+// cleared by a reply that predates it. See the activity example.
+func (m *Model) Expect(keys []string, label string) tea.Cmd {
+	m.actEnabled = true
+	cmd := m.act.Expect(keys, label, m.claimValues(keys))
+	m.refresh()
+	return cmd
+}
+
+// claimValues is each key's activity-column cell at the moment of the claim.
+func (m Model) claimValues(keys []string) map[string]string {
+	if m.actWhen == nil || len(keys) == 0 {
+		return nil
+	}
+	col := m.activityCol()
+	wanted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		wanted[k] = true
+	}
+	at := make(map[string]string, len(keys))
+	for i, key := range m.rowKeys {
+		if !wanted[key] || i >= len(m.rows) {
+			continue
+		}
+		if col >= 0 && col < len(m.rows[i]) {
+			at[key] = m.rows[i][col]
+			continue
+		}
+		at[key] = ""
+	}
+	return at
+}
+
+// Retract drops the claims on keys, for a write the server refused.
+func (m *Model) Retract(keys ...string) {
+	m.act.Retract(keys...)
+	m.refresh()
+}
+
+// RetractAll drops every claim, for a read that failed.
+//
+// Required rather than polite: a claim is a promise that the next observation
+// will explain it, and an outage is exactly the case where no observation is
+// coming to keep it.
+func (m *Model) RetractAll() {
+	m.act.RetractAll()
+	m.refresh()
 }
 
 // flushActivity hands over any command observe queued.
@@ -160,5 +281,6 @@ func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 	return cmd
 }
 
-// ActivityCount is how many rows the last observation reported working.
+// ActivityCount is how many of this table's rows are working — reported by the
+// last observation, or claimed by Expect and not yet spoken to.
 func (m Model) ActivityCount() int { return m.act.Count() }

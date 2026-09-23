@@ -35,6 +35,10 @@ import (
 // setter has no return value), so it queues for the next Update, exactly as a
 // pending SelectedChangedMsg does.
 func (m *Model) observe() {
+	// Scoping happens on every swap, predicate or not: it is what keeps a
+	// SetBusy map — which comes from somewhere other than these items — from
+	// animating a key this list does not hold.
+	m.act.Scope(m.itemKeys)
 	if m.actWhen == nil {
 		return
 	}
@@ -49,7 +53,71 @@ func (m *Model) observe() {
 	}
 	// Unconditionally, including when nothing matches: an empty observation is
 	// a real one, and the only thing that can stop the last spinner.
-	m.actCmd = tea.Batch(m.act.Derive(busy), m.actCmd)
+	m.actCmd = tea.Batch(m.act.Observe(busy, m.actValues(m.act.Expecting())), m.actCmd)
+}
+
+// actValues is the current text of every key in keys, which is how an
+// observation notices the server acted (activity.Options.Settle).
+//
+// Only meaningful on the predicate path — the predicate reads this text, so a
+// change in it is evidence about the work — and nil off it, where busy-ness
+// comes from elsewhere and the row's text may have nothing to do with it.
+func (m Model) actValues(keys []string) map[string]string {
+	if m.actWhen == nil || len(keys) == 0 {
+		return nil
+	}
+	wanted := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		wanted[k] = true
+	}
+	values := make(map[string]string, len(keys))
+	for i, key := range m.itemKeys {
+		if wanted[key] && i < len(m.items) {
+			values[key] = m.items[i]
+		}
+	}
+	return values
+}
+
+// SetBusy is the second entrance: the screen says which items are working
+// instead of a predicate reading it off their text.
+//
+// For busy-ness that is not a property of the row — an operations API, a job
+// status resource. The map replaces the previous one outright, exactly as a
+// predicate's observation does, so there is still one map and one writer.
+// Keys the list does not hold are kept but not drawn.
+//
+// Panics if the list was built with Options.ActivityWhen: a component uses one
+// entrance or the other, and a screen needing both merges them itself.
+func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
+	if m.actWhen != nil {
+		panic("list.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
+	}
+	cmd := m.act.Observe(busy, nil)
+	m.refresh()
+	return cmd
+}
+
+// Expect marks keys as working because the screen has just asked the server to
+// work on them, before any observation can say so. The claim is retired by the
+// observations that follow — see activity.Options.Settle.
+func (m *Model) Expect(keys []string, label string) tea.Cmd {
+	cmd := m.act.Expect(keys, label, m.actValues(keys))
+	m.refresh()
+	return cmd
+}
+
+// Retract drops the claims on keys, for a write the server refused.
+func (m *Model) Retract(keys ...string) {
+	m.act.Retract(keys...)
+	m.refresh()
+}
+
+// RetractAll drops every claim, for a read that failed — an outage is the case
+// where no observation is coming to retire them.
+func (m *Model) RetractAll() {
+	m.act.RetractAll()
+	m.refresh()
 }
 
 // flushActivity hands over any command observe queued.
@@ -70,7 +138,8 @@ func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 	return cmd
 }
 
-// ActivityCount is how many rows the last observation reported working.
+// ActivityCount is how many of this list's items are working — reported by the
+// last observation, or claimed by Expect and not yet spoken to.
 func (m Model) ActivityCount() int { return m.act.Count() }
 
 // withBadge appends the indicator to a rendered row, if its key is busy.
