@@ -1,13 +1,17 @@
 # Row activity — design
 
-Status: **implemented.** `pkg/activity` (a leaf, ~165 lines of code),
-`theme.Activity()`, the three components, and the shared contract in
-`internal/componenttest`.
+Status: **implemented.** `pkg/activity` (a leaf, under 300 lines of code),
+`theme.Activity()`, the three components, rule 33 in CLAUDE.md, and the shared
+contract in `internal/componenttest`.
 
-**One way in: the data.** A component observes the rows it holds on every keyed
-swap, a predicate says which of them are working, and those rows spin. There is
-no action broadcast, no shell involvement, no setter a screen calls, and no
-second endpoint. A `pkg/poll` refresh and a predicate are the whole mechanism.
+**The data is the source, and there is one map.** A component observes the rows
+it holds on every keyed swap, a predicate says which of them are working, and
+those rows spin. When the busy-ness is not a field on the row, the screen hands
+the same map over with `SetBusy` instead — a second entrance, not a second map.
+For the gap between a keypress and the next observation, `Expect` places a
+claim that every observation retires. There is no action broadcast and no shell
+involvement: a `pkg/poll` refresh and a predicate remain the whole mechanism
+for a read-only screen.
 
 An earlier version of this design carried a second layer — state the TUI knew
 about because it had started the work itself — and the machinery to reconcile
@@ -15,7 +19,7 @@ the two. That is recorded under [What was removed](#what-was-removed-and-why),
 along with the three things it was reaching for. The removed implementation is
 parked at `pkg/activity/activity.go.old`.
 
-Decisions 1-17 are built and green. **13-17 shipped in their amended form** —
+Decisions 1-21 are built and green. **13-17 shipped in their amended form** —
 [Work the user starts](#work-the-user-starts).
 They put the user's own actions back on the row in five pieces rather than the
 previous version's six reconciliation mechanisms, by moving the hard part out
@@ -285,7 +289,7 @@ The intuition is that a content-auto column will *widen* when `Synced` becomes
 `⣾ Syncing`, reflowing the table under the user. It cannot: `recomputeWidths`
 sizes columns from the rows the table *holds*, and the indicator is substituted
 at render time and never enters them. Activity cannot move a column, and
-`TestTableActivityDoesNotReflowColumns` holds that.
+`TestNoArrangementOfBusyRowsReflowsTheTable` holds that.
 
 What actually goes wrong is the reverse. A column auto-sized to fit `Synced` is
 six cells wide, the indicator is capped to the width it is given, and the label
@@ -1061,7 +1065,10 @@ matters, and a dependency restored on the half that does not.
 The recommendation is the screen. Worth revisiting only if several real screens
 end up writing the identical two lines.
 
-### What lands in CLAUDE.md when this is built
+### What landed in CLAUDE.md
+
+Built as rule 33. The reasoning that shaped it:
+
 
 Rule 33 currently says the data is the only source, and one of its
 anti-patterns — "don't hold a row indicator open past what the data says" —
@@ -1372,25 +1379,39 @@ needs.
 ```go
 // State is one key's in-flight state.
 type State struct {
-    Label string     // the value the predicate matched — the server's own word
+    Label string     // the server's own word, or a claim's guess until observed
     Since time.Time  // first observed busy, not last: elapsed measures the work
 }
 
 type Options struct {
     Spinner *spinner.Spinner            // nil → spinner.Dot, matching pane
     Style   func(State, string) string  // nil → plain; see decision 11
+    Settle  int                         // decision 16 — unchanged observations a claim survives; 0 = retire on the next
 }
 
 // Set is the keyed collection of busy rows plus the spinner that animates
 // them. Components embed one; it is also the unit ActivityState carries.
-type Set struct{ /* map[string]State, spinner.Model, tick bookkeeping */ }
+type Set struct{ /* busy map, claims, scope, spinner.Model, tick bookkeeping */ }
 
 func New(opts Options) Set
 
 // Derive replaces the whole collection from one observation. Keys present are
 // busy with that label; keys absent are not. Since survives for a key that
-// stays busy. The command is the animation's first tick.
+// stays busy. The command is the animation's first tick. It is Observe(busy, nil).
 func (s *Set) Derive(busy map[string]string) tea.Cmd
+
+// Observe is Derive plus the values each claim is judged against — 13/16.
+func (s *Set) Observe(busy, values map[string]string) tea.Cmd
+
+// Claims — decisions 14 and 17. at carries each key's value when claimed.
+func (s *Set) Expect(keys []string, label string, at map[string]string) tea.Cmd
+func (s Set) Expecting() []string   // which values are worth collecting
+func (s *Set) Retract(keys ...string) // a write was refused
+func (s *Set) RetractAll()            // reads have stopped
+
+// Scope names the keys the component holds; entries outside it are kept but
+// not rendered, counted or animated — decision 13.
+func (s *Set) Scope(keys []string)
 
 // Handle advances the animation, and on any other message takes the chance to
 // notice the chain has stalled (decision 9).
@@ -1477,26 +1498,7 @@ broadcast, and nothing read them afterwards. `Set.Targets` stays: it feeds the
 per-target `Exclusive` gate, and under decision 17's recommendation it is also
 what a screen passes to `Expect`.
 
-### Additions for decisions 13-17
-
-```go
-// pkg/activity
-func (s *Set) Observe(busy, values map[string]string) tea.Cmd // 13/16 — Derive, plus what a claim is judged against
-func (s *Set) Derive(busy map[string]string) tea.Cmd          // unchanged: Observe(busy, nil)
-func (s *Set) Expect(keys []string, label string, at map[string]string) tea.Cmd // 14
-func (s *Set) Expecting() []string                            // which values are worth collecting
-func (s *Set) Scope(keys []string)                            // 13 — keys the component holds
-func (s *Set) Retract(keys ...string)                         // 17 — a write was refused
-func (s *Set) RetractAll()                                    // 17 — reads have stopped
-
-Options.Settle int   // 16 — unchanged observations a claim survives; 0 = retire on the next
-
-// pkg/list, pkg/table, pkg/tree — forwarded, with the values gathered for you
-func (m *Model) SetBusy(busy map[string]string) tea.Cmd
-func (m *Model) Expect(keys []string, label string) tea.Cmd
-func (m *Model) Retract(keys ...string)
-func (m *Model) RetractAll()
-```
+### How decisions 13-17 changed the surface
 
 `Set` grows three fields — `expected map[string]claim`, the scope, and the
 allowance — and `Observe` grows a `retire` pass. `Render`, `Active`, `Count`,
