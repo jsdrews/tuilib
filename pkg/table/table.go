@@ -157,6 +157,12 @@ type Row []string
 type KeyedRow struct {
 	Key   string
 	Cells []string
+
+	// Data is the screen's own record for this row, carried for
+	// Options.BusyWhen. The table never reads it otherwise, so the status that
+	// says work is in progress does not have to be a column — Argo's
+	// operationState.phase, a job id, anything the screen fetched.
+	Data any
 }
 
 // RowFocusedMsg is emitted by the table when the cursor lands on a
@@ -336,7 +342,7 @@ type Options struct {
 	// key:value scope is. A name matching no column (or an ambiguous one)
 	// falls back to a two-cell gutter.
 	//
-	// The feature is off until ActivityColumn or ActivityWhen is set — a table
+	// The feature is off until ActivityColumn or BusyWhen is set — a table
 	// that asked for neither carries no gutter and pays nothing. Setting only
 	// a predicate draws in the gutter, for the reason a typo does: a spinner
 	// nobody can see is worse than one in the wrong place, and it would
@@ -350,20 +356,38 @@ type Options struct {
 	// hole in the selected row's background (rule 19).
 	Activity activity.Options
 
-	// ActivityWhen derives in-flight state from a row's own cells, for work
-	// that changes without anyone in this session doing anything — a scheduled
-	// AWX job, an Argo rollout someone else triggered. Evaluated on every
-	// SetKeyedRows; a row that matches spins, a row that stops matching stops,
-	// with no outcome glyph, because the cell's own value already says how it
-	// ended.
+	// BusyWhen says which rows are working. It reads the whole keyed row,
+	// Data included, and reports the row's status and whether that status
+	// means work is in progress. Evaluated on every SetKeyedRows / ApplyRead;
+	// a row that matches spins, a row that stops matching stops.
 	//
-	//	o.ActivityWhen = func(c table.Row) (string, bool) {
-	//	    return activity.Busy("running", "pending")(c[statusCol])
+	//	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+	//	    phase := r.Data.(argoApp).Phase
+	//	    return phase, phase == "Running"
 	//	}
 	//
-	// A locally-started indicator wins over a derived one, so a poll already
-	// in flight when the user acted cannot wipe their spinner.
-	ActivityWhen func(cells Row) (label string, busy bool)
+	// status is reported for every row, busy or not. It is what the row
+	// shows while busy and what an Observed operation compares against to
+	// notice the server acted — so it must be the field the predicate reads,
+	// which v1's comparison against the display column could not guarantee.
+	//
+	// Busy-ness that comes from another endpoint — GET /jobs?status=running
+	// — goes into Data alongside the row, not through a second entrance.
+	BusyWhen func(r KeyedRow) (status string, busy bool)
+
+	// Revision is optional: a value that changes whenever an operation on the
+	// row finishes — Argo's status.operationState.finishedAt, a job counter,
+	// demoapi's rev. It answers what the status alone cannot: a sync that
+	// starts and ends between two reads and leaves the status where it was
+	// (Succeeded, then Succeeded). With it, the first read after the request
+	// answered sees the revision move and ends the spinner as done
+	// (UnobservedMsg with Changed set). Without it, the spinner waits out
+	// Activity.Settle and the report cannot say whether anything happened.
+	//
+	// Pick a value that moves when work finishes, not on every update: a
+	// resourceVersion also moves when health flips mid-sync, which would end a
+	// spinner before the controller has reported the work.
+	Revision func(r KeyedRow) string
 
 	// SpinnerStyle styles the loading-state spinner glyph. Pass via
 	// theme.Table() for a sensible default.
@@ -536,7 +560,13 @@ type Model struct {
 	act        activity.Set
 	actEnabled bool
 	actColName string
-	actWhen    func(Row) (string, bool)
+
+	// busyWhen and revision are the activity predicate and its optional
+	// revision, over the whole keyed row. rowData holds each row's Data for
+	// them, aligned with rowKeys.
+	busyWhen func(KeyedRow) (string, bool)
+	revision func(KeyedRow) string
+	rowData  []any
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update like a pending viewport msg.
@@ -653,9 +683,10 @@ func New(opts Options) Model {
 		marks:         map[string]bool{},
 		markStyle:     opts.MarkStyle,
 		act:           activity.New(opts.Activity),
-		actEnabled:    opts.ActivityColumn != "" || opts.ActivityWhen != nil,
+		actEnabled:    opts.ActivityColumn != "" || opts.BusyWhen != nil,
 		actColName:    opts.ActivityColumn,
-		actWhen:       opts.ActivityWhen,
+		busyWhen:      opts.BusyWhen,
+		revision:      opts.Revision,
 		hScrollbar:    opts.HScrollbar,
 		colSep:        colSep,
 		headerRule:    opts.Borders.HeaderRule,
@@ -988,6 +1019,7 @@ func (m *Model) SetWindow(rows []Row, offset, total int) {
 	m.winTotal = total
 	m.rows = append([]Row(nil), rows...)
 	m.rowKeys = nil
+	m.rowData = nil
 	m.rebuildDistinct()
 	m.recomputeWidths()
 	m.applyFilter()
@@ -1022,6 +1054,7 @@ func (m *Model) SetRows(rows []Row) {
 	m.clearWindow()
 	m.rows = append([]Row(nil), rows...)
 	m.rowKeys = nil
+	m.rowData = nil
 	m.rebuildDistinct()
 	m.recomputeWidths()
 	m.applyFilter()
@@ -1042,9 +1075,11 @@ func (m *Model) SetKeyedRows(rows []KeyedRow) {
 
 	m.rows = make([]Row, len(rows))
 	m.rowKeys = make([]string, len(rows))
+	m.rowData = make([]any, len(rows))
 	for i, r := range rows {
 		m.rows[i] = append(Row(nil), r.Cells...)
 		m.rowKeys[i] = r.Key
+		m.rowData[i] = r.Data
 	}
 	m.rebuildDistinct()
 	m.recomputeWidths()
@@ -1240,6 +1275,23 @@ func (m Model) Visible() []Row { return m.visible }
 
 // Rows returns the full unfiltered row set.
 func (m Model) Rows() []Row { return m.rows }
+
+// KeyedRows is the keyed row set as last handed to SetKeyedRows or ApplyRead,
+// Data included, in source order — what a SetTheme rebuild passes back to the
+// new table (rule 4). Nil when the rows are anonymous or windowed.
+func (m Model) KeyedRows() []KeyedRow {
+	if m.rowKeys == nil {
+		return nil
+	}
+	out := make([]KeyedRow, len(m.rows))
+	for i := range m.rows {
+		out[i] = KeyedRow{Key: m.rowKeys[i], Cells: append([]string(nil), m.rows[i]...)}
+		if i < len(m.rowData) {
+			out[i].Data = m.rowData[i]
+		}
+	}
+	return out
+}
 
 // Columns returns the current column layout.
 func (m Model) Columns() []Column { return m.cols }

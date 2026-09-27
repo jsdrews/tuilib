@@ -456,7 +456,13 @@ Follows [golang-standards/project-layout](https://github.com/golang-standards/pr
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `go build`, `go vet`, and
-`go test` on every push / PR. On merge to `master`, the release job auto-tags
+GitHub Actions (`.github/workflows/ci.yml`) runs `go build`, `go vet`, `go
+test`, and the integration tests on every push / PR.
+
+The integration tests (`internal/integration`) drive whole screens against
+`demoapi` on real timers, so they sit behind a build tag to keep `go test ./...`
+fast. Run them with `task test:integration` or
+`go test -tags integration ./internal/integration/...`; `task check` runs
+everything. On merge to `master`, the release job auto-tags
 with a semver bump: patch if `bug`/`bugfix`/`fix` appears in the branch name
 or merge-commit message, minor otherwise. Starts at `0.1.0`, no `v` prefix.

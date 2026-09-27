@@ -67,11 +67,25 @@ func lastField(values ...string) func(string) (string, bool) {
 	}
 }
 
+// listBusyWhen and treeBusyWhen are the shared contract's predicates: busy on
+// "running" or "pending", with the status reported for every row.
+func listBusyWhen(it list.KeyedItem) (string, bool) {
+	return lastField("running", "pending")(it.Display)
+}
+
+func treeBusyWhen(n tree.Node) (string, bool) {
+	sn, ok := n.(statusNode)
+	if !ok {
+		return "", false
+	}
+	return activity.Busy("running", "pending")(sn.status)
+}
+
 type listDerive struct{ m list.Model }
 
 func newListDerive() derivable {
 	o := theme.Dark().List()
-	o.ActivityWhen = lastField("running", "pending")
+	o.BusyWhen = listBusyWhen
 	d := &listDerive{m: list.New(o)}
 	d.observe(statusOf(nil))
 	d.setRect(placed())
@@ -105,8 +119,8 @@ func newTableDerive() derivable {
 	o := theme.Dark().Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
-	o.ActivityWhen = func(c table.Row) (string, bool) {
-		return activity.Busy("running", "pending")(c[1])
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		return activity.Busy("running", "pending")(r.Cells[1])
 	}
 	d := &tableDerive{m: table.New(o)}
 	d.observe(statusOf(nil))
@@ -155,13 +169,7 @@ func newTreeDerive() derivable {
 	// Root at construction, so New's preExpand opens it — SetRoot alone leaves
 	// a fresh tree collapsed, and a spinner on a hidden child proves nothing.
 	o.Root = derivedTree(statusOf(nil))
-	o.ActivityWhen = func(n tree.Node) (string, bool) {
-		sn, ok := n.(statusNode)
-		if !ok {
-			return "", false
-		}
-		return activity.Busy("running", "pending")(sn.status)
-	}
+	o.BusyWhen = treeBusyWhen
 	d := &treeDerive{m: tree.New(o)}
 	d.setRect(placed())
 	return d

@@ -27,13 +27,37 @@ import (
 // seed and the elapsed time, so a test that steps the clock by four seconds
 // and reads sees exactly what a real four seconds would have produced.
 
-// App is one application.
+// App is one application, shaped the way Argo CD reports one.
+//
+// Sync and Phase are separate fields because they are separate facts in Argo,
+// and an earlier version of this fixture that merged them taught every client
+// the wrong one. Sync is the comparison between desired and live state —
+// Synced or OutOfSync, and nothing else. Phase is status.operationState.phase:
+// what an operation against the app is doing right now. A sync in progress
+// leaves Sync alone and sets Phase to Running; a client watching Sync for
+// in-flight work sees nothing at all, which is exactly what a real Argo does.
 type App struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Region string `json:"region"`
 	Sync   string `json:"sync"`
 	Health string `json:"health"`
+
+	// Phase is the last operation's phase: "" before any, Running while one
+	// runs, then Succeeded or Failed until the next. It stays after the work
+	// ends, as Argo's operationState does, so "not Running" is the settled
+	// test rather than "empty".
+	Phase string `json:"phase"`
+
+	// ReconciledAt is when the server last compared desired and live state.
+	// A refresh moves it; that is the only visible evidence a refresh
+	// happened when it finds nothing new.
+	ReconciledAt time.Time `json:"reconciledAt"`
+
+	// drift is live state that has moved away from desired without the
+	// server having noticed yet. Not on the wire: it is what a refresh
+	// discovers, and what makes one worth blocking for.
+	drift bool
 
 	// Rev changes whenever a job against this app completes — a revision
 	// whose contract is to move when the work does, the way finished_at or
@@ -47,9 +71,9 @@ type App struct {
 	// ?stale=, which is how this fixture reproduces a read from a replica or
 	// a watch cache that has not caught up — the one thing a client cannot
 	// fix from its own side, because the server genuinely said both.
-	prevSync, prevHealth string
-	prevRev              int64
-	changedAt            time.Time
+	prevSync, prevHealth, prevPhase string
+	prevRev                         int64
+	changedAt                       time.Time
 }
 
 // asOf reports this app as a reader lagging by d would still be seeing it.
@@ -61,7 +85,7 @@ func (a App) asOf(now time.Time, d time.Duration) App {
 	if d <= 0 || !a.changedAt.After(now.Add(-d)) {
 		return a
 	}
-	a.Sync, a.Health, a.Rev = a.prevSync, a.prevHealth, a.prevRev
+	a.Sync, a.Health, a.Phase, a.Rev = a.prevSync, a.prevHealth, a.prevPhase, a.prevRev
 	return a
 }
 
@@ -89,9 +113,9 @@ type Job struct {
 	reflectAt time.Time
 	reflected bool
 
-	// phases is what the app says while this job runs, walked in order across
-	// the job's duration. One entry is the ordinary case; several model work
-	// that reports where it has got to.
+	// phases is what the app's Phase says while this job runs, walked in
+	// order across the job's duration. One entry — Running — is the ordinary
+	// case; several model work that reports where it has got to.
 	phases []string
 
 	// result is what the app's Sync becomes when this job lands.
@@ -116,13 +140,18 @@ func (j *Job) phase(now time.Time) string {
 	return j.phases[max(0, min(i, len(j.phases)-1))]
 }
 
-// Sync states. The two the examples treat as in-flight are the two a server
-// reports while it is working.
+// Sync states. There is no in-flight one: Argo's sync status is a comparison,
+// not an activity, and work in progress is reported in Phase.
 const (
 	SyncSynced    = "Synced"
 	SyncOutOfSync = "OutOfSync"
-	SyncSyncing   = "Syncing"
-	SyncRefresh   = "Refreshing"
+)
+
+// Operation phases, as status.operationState.phase reports them.
+const (
+	PhaseRunning   = "Running"
+	PhaseSucceeded = "Succeeded"
+	PhaseFailed    = "Failed"
 )
 
 // Job statuses.
@@ -133,8 +162,8 @@ const (
 )
 
 // Durations the fixture uses. Sync is slow enough that any reasonable poll
-// observes it running; refresh finishes before the next poll can see it, which
-// is the case docs/activity.md decision 19 exists for.
+// observes it running. Refresh is a blocking request, not a job: the
+// connection is held for refreshDuration and the app shows nothing while it is.
 const (
 	syncDuration = 4 * time.Second
 	// A failing sync fails early, which is both what real ones do and what
@@ -142,7 +171,7 @@ const (
 	// log stream is what tells a client it failed, and a four-second job would
 	// still be reporting Syncing for seconds after that.
 	failDuration    = 1500 * time.Millisecond
-	refreshDuration = 0
+	refreshDuration = 2 * time.Second
 )
 
 // appColumns is the filter and sort vocabulary, in wire order.
@@ -151,9 +180,9 @@ const (
 // the same parser pkg/table's filter bar uses. Reimplementing the grammar here
 // would let the fixture drift from it, and then every example would be
 // teaching a syntax the library does not implement.
-var appColumns = []string{"Name", "Region", "Sync", "Health"}
+var appColumns = []string{"Name", "Region", "Sync", "Health", "Phase"}
 
-func (a App) cells() []string { return []string{a.Name, a.Region, a.Sync, a.Health} }
+func (a App) cells() []string { return []string{a.Name, a.Region, a.Sync, a.Health, a.Phase} }
 
 var (
 	regions  = []string{"eu-west", "eu-central", "us-east", "us-west", "ap-south", "sa-east"}
@@ -174,7 +203,7 @@ type launchOpts struct {
 	// blackhole accepts the request, returns an id, and starts nothing.
 	blackhole bool
 
-	// say overrides the status the app reports while the job runs — an
+	// say overrides the phase the app reports while the job runs — an
 	// unfamiliar phase, different casing, a counter, a long or wide string.
 	say string
 
@@ -243,6 +272,10 @@ func newWorld(opts Options) *world {
 			Sync:   sync,
 			Health: healths[w.rng.Intn(len(healths))],
 			Rev:    1,
+			// Not drawn from the rng, so adding it left every seeded world
+			// the shape existing tests pinned.
+			drift:        sync == SyncSynced && i%3 == 1,
+			ReconciledAt: now(),
 		}
 		w.byID[w.apps[i].ID] = i
 	}
@@ -330,7 +363,7 @@ func (w *world) reflect(j *Job, at time.Time) {
 	j.reflected = true
 	if i, ok := w.byID[j.App]; ok {
 		w.mark(i, at)
-		w.apps[i].Sync = j.phase(at)
+		w.apps[i].Phase = j.phase(at)
 	}
 }
 
@@ -349,9 +382,9 @@ func (w *world) refreshPhases(now time.Time) {
 		if !ok {
 			continue
 		}
-		if p := j.phase(now); p != w.apps[i].Sync {
+		if p := j.phase(now); p != w.apps[i].Phase {
 			w.mark(i, now)
-			w.apps[i].Sync = p
+			w.apps[i].Phase = p
 		}
 	}
 }
@@ -361,7 +394,7 @@ func (w *world) refreshPhases(now time.Time) {
 // change happens, not the moment it was noticed.
 func (w *world) mark(i int, at time.Time) {
 	a := &w.apps[i]
-	a.prevSync, a.prevHealth, a.prevRev = a.Sync, a.Health, a.Rev
+	a.prevSync, a.prevHealth, a.prevPhase, a.prevRev = a.Sync, a.Health, a.Phase, a.Rev
 	a.changedAt = at
 }
 
@@ -377,13 +410,19 @@ func (w *world) complete(j *Job) {
 		return
 	}
 	// Always, success or failure. Skipping this for a failed job left the app
-	// reporting the Syncing that start set, with nothing to ever clear it —
-	// a row that spun forever because the server genuinely said it was
-	// working. The job carries where the app lands either way; failing means
-	// it lands OutOfSync rather than Synced, not that it lands nowhere.
+	// reporting Running with nothing to ever clear it — a row that spun
+	// forever because the server genuinely said it was working. The job
+	// carries where the app lands either way; failing means it lands
+	// OutOfSync rather than Synced, not that it lands nowhere.
 	w.mark(i, j.finishAt)
 	w.apps[i].Sync = j.result
 	w.apps[i].Health = j.health
+	w.apps[i].Phase = PhaseSucceeded
+	if j.fails {
+		w.apps[i].Phase = PhaseFailed
+	}
+	w.apps[i].ReconciledAt = j.finishAt
+	w.apps[i].drift = false
 
 	// Rev moves on completion whether or not the job succeeded: something
 	// happened to this row, which is what a revision reports.
@@ -418,7 +457,7 @@ func (w *world) fireScheduled(at time.Time) {
 
 	if w.rng.Intn(2) == 0 {
 		// A schedule fires a real sync: slow, so a poll sees it running and
-		// a screen with ActivityWhen spins a row nobody touched.
+		// a screen with BusyWhen spins a row nobody touched.
 		o := launchOpts{duration: -1}
 		if len(w.vocab) > 0 {
 			o.say = w.vocab[w.rng.Intn(len(w.vocab))]
@@ -430,10 +469,12 @@ func (w *world) fireScheduled(at time.Time) {
 	// Or something completes entirely between two reads, leaving nothing
 	// behind but a moved revision. No client in this repo notices, which is
 	// the point of keeping it: it is the case the derived-only design
-	// knowingly cannot see.
+	// knowingly cannot see. It also drifts the live state, which nothing
+	// shows until a refresh goes looking.
 	i := w.byID[a.ID]
 	w.mark(i, at)
 	a.Rev++
+	a.drift = true
 	if a.Health == "Healthy" {
 		a.Health = "Degraded"
 	} else {
@@ -457,10 +498,7 @@ func (w *world) start(appID, kind string, at time.Time, d time.Duration, result,
 	if len(phases) == 0 {
 		say := o.say
 		if say == "" {
-			say = SyncSyncing
-			if kind == "refresh" {
-				say = SyncRefresh
-			}
+			say = PhaseRunning
 		}
 		phases = []string{say}
 	}
@@ -665,12 +703,6 @@ func (w *world) launch(appID, kind string, o launchOpts) (Job, error) {
 
 	d := o.duration
 	switch kind {
-	case "refresh":
-		// Instant server-side by default: finished before any poll can see it.
-		if d < 0 {
-			d = refreshDuration
-		}
-		return *w.start(appID, kind, now, d, SyncOutOfSync, "Progressing", false, o), nil
 	case "fail":
 		if d < 0 {
 			d = failDuration
@@ -741,12 +773,13 @@ func (w *world) spawn(id string, busy bool) (App, bool) {
 	}
 	now := w.now()
 	a := App{
-		ID:     id,
-		Name:   fmt.Sprintf("%s-%s-%02d", teams[w.rng.Intn(len(teams))], services[w.rng.Intn(len(services))], len(w.apps)%100),
-		Region: regions[w.rng.Intn(len(regions))],
-		Sync:   SyncOutOfSync,
-		Health: "Progressing",
-		Rev:    1,
+		ID:           id,
+		Name:         fmt.Sprintf("%s-%s-%02d", teams[w.rng.Intn(len(teams))], services[w.rng.Intn(len(services))], len(w.apps)%100),
+		Region:       regions[w.rng.Intn(len(regions))],
+		Sync:         SyncOutOfSync,
+		Health:       "Progressing",
+		Rev:          1,
+		ReconciledAt: now,
 	}
 	w.apps = append(w.apps, a)
 	w.byID[id] = len(w.apps) - 1
@@ -775,4 +808,30 @@ func (w *world) asOf(rows []App, d time.Duration) []App {
 		out[i] = a.asOf(now, d)
 	}
 	return out
+}
+
+// refresh is the moment a blocking refresh completes: the server compares
+// desired and live state and reports what it found.
+//
+// It starts no job and sets no Phase, because Argo's does neither. The only
+// thing a refresh that finds nothing leaves behind is ReconciledAt — which is
+// why a client that watches the app for evidence of one sees nothing, and why
+// the request itself is the only thing that knows when it ends.
+func (w *world) refresh(id string) (App, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.advance()
+
+	i, ok := w.byID[id]
+	if !ok {
+		return App{}, false
+	}
+	a := &w.apps[i]
+	if a.drift && a.Sync == SyncSynced {
+		w.mark(i, w.now())
+		a.Sync = SyncOutOfSync
+	}
+	a.drift = false
+	a.ReconciledAt = w.now()
+	return *a, true
 }

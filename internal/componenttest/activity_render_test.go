@@ -53,7 +53,8 @@ func derivedTable(t *testing.T, statusWidth int, opts ...func(*table.Options)) t
 		{Title: "Status", Width: statusWidth},
 	}
 	o.ActivityColumn = "Status"
-	o.ActivityWhen = func(c table.Row) (string, bool) {
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		c := r.Cells
 		return activity.Busy("running", "pending")(c[1])
 	}
 	for _, fn := range opts {
@@ -148,7 +149,7 @@ func TestANarrowColumnKeepsTheGlyphAndDropsTheWord(t *testing.T) {
 	// one or two characters, and the assertion has to be able to see those.
 	const label = "WORKING"
 	busy := func(o *table.Options) {
-		o.ActivityWhen = func(c table.Row) (string, bool) { return activity.Busy(label)(c[1]) }
+		o.BusyWhen = func(r table.KeyedRow) (string, bool) { return activity.Busy(label)(r.Cells[1]) }
 	}
 
 	wide := derivedTable(t, 14, busy)
@@ -296,7 +297,8 @@ func TestTheIndicatorDoesNotBreakTheSelectedRowBackground(t *testing.T) {
 func TestAPredicateWithNoColumnStillDraws(t *testing.T) {
 	o := theme.Dark().Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 12}}
-	o.ActivityWhen = func(c table.Row) (string, bool) {
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		c := r.Cells
 		return activity.Busy("running")(c[1])
 	}
 	m := table.New(o)
@@ -343,7 +345,8 @@ func TestABlankStatusIsNotBusy(t *testing.T) {
 	o := theme.Dark().Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 12}}
 	o.ActivityColumn = "Status"
-	o.ActivityWhen = func(c table.Row) (string, bool) {
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		c := r.Cells
 		return activity.Settled("ok", "failed")(c[1])
 	}
 	m := table.New(o)
@@ -361,7 +364,7 @@ func TestAWideCharacterLabelIsMeasuredNotCounted(t *testing.T) {
 	o := theme.Dark().Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 10}}
 	o.ActivityColumn = "Status"
-	o.ActivityWhen = func(c table.Row) (string, bool) { return activity.Busy("同期中")(c[1]) }
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) { return activity.Busy("同期中")(r.Cells[1]) }
 	m := table.New(o)
 	m.SetRect(geom.New(0, 0, 60, 12))
 	m.SetKeyedRows([]table.KeyedRow{{Key: "api", Cells: []string{"api", "同期中"}}})

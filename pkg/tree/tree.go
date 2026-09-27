@@ -138,11 +138,19 @@ type Options struct {
 	// Nothing to opt into: the badge occupies no space until something runs.
 	Activity activity.Options
 
-	// ActivityWhen derives in-flight state from a node itself, for work that
-	// changes without anyone in this session doing anything. Evaluated over
-	// every node on SetRoot, collapsed ones included. A locally-started
-	// indicator wins over a derived one.
-	ActivityWhen func(n Node) (label string, busy bool)
+	// BusyWhen says which nodes are working, from the node itself — your
+	// Node implementation carries whatever the server reported. It returns the
+	// node's status and whether that status means work is in progress, for
+	// every node, busy or not: the badge's label while busy, and what a
+	// dispatched operation compares against. Evaluated over every node on
+	// SetRoot / ApplyRead, collapsed ones included. See CLAUDE.md rule 33 and
+	// docs/activity-guide.md.
+	BusyWhen func(n Node) (status string, busy bool)
+
+	// Revision is optional: a value that moves when an operation on the node
+	// finishes, so a sync that ends where it began still reads as done. See
+	// table.Options.Revision.
+	Revision func(n Node) string
 
 	// Filter configures the embedded filter. Ignored when Searchable=false.
 	Filter filter.Options
@@ -285,8 +293,9 @@ type Model struct {
 	markStyle  lipgloss.Style
 
 	// act is per-node in-flight state, keyed by path like the marks beside it.
-	act     activity.Set
-	actWhen func(Node) (string, bool)
+	act      activity.Set
+	busyWhen func(Node) (string, bool)
+	revision func(Node) string
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update.
@@ -347,7 +356,8 @@ func New(opts Options) Model {
 		markable:         opts.Markable,
 		markStyle:        opts.MarkStyle,
 		act:              activity.New(opts.Activity),
-		actWhen:          opts.ActivityWhen,
+		busyWhen:         opts.BusyWhen,
+		revision:         opts.Revision,
 		matchStyle:       opts.MatchStyle,
 		currentLineStyle: opts.CurrentLineStyle,
 		keys:             opts.Keys,
@@ -590,6 +600,10 @@ func (m *Model) SetQuery(s string) {
 //   - Nil root clears expand state and cursor.
 //
 // This is the auto-refresh primitive: fetch new tree, call SetRoot, done.
+// Root is the tree as last handed to SetRoot, ApplyRead or Options.Root — what
+// a SetTheme rebuild passes back to the new tree (rule 4).
+func (m Model) Root() Node { return m.root }
+
 func (m *Model) SetRoot(n Node) {
 	var prevPath string
 	if m.cursor >= 0 && m.cursor < len(m.rows) {

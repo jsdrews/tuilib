@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -36,8 +37,8 @@ func TestWhatEachKindOfObservationDoesToAClaim(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := claimed(3)
-			s.Expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
-			s.Observe(tc.busy, tc.values)
+			s.expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
+			s.observe(tc.busy, tc.values)
 
 			_, stillClaimed := s.expected["a"]
 			if stillClaimed != tc.kept {
@@ -51,8 +52,8 @@ func TestWhatEachKindOfObservationDoesToAClaim(t *testing.T) {
 // whatever it says, which is right for any API that sets status inline.
 func TestZeroSettleRetiresOnTheNextObservation(t *testing.T) {
 	s := claimed(0)
-	s.Expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
-	s.Observe(nil, map[string]string{"a": "OutOfSync"})
+	s.expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
+	s.observe(nil, map[string]string{"a": "OutOfSync"})
 
 	if _, ok := s.State("a"); ok {
 		t.Error("a claim survived an observation with a zero allowance")
@@ -64,30 +65,30 @@ func TestZeroSettleRetiresOnTheNextObservation(t *testing.T) {
 // silently dropped is what this bound exists for.
 func TestAnUnconfirmedClaimAlwaysEnds(t *testing.T) {
 	s := claimed(2)
-	s.Expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
+	s.expect([]string{"a"}, "Syncing", map[string]string{"a": "OutOfSync"})
 	for i := range 2 {
-		s.Observe(nil, map[string]string{"a": "OutOfSync"})
+		s.observe(nil, map[string]string{"a": "OutOfSync"})
 		if _, ok := s.State("a"); !ok {
 			t.Fatalf("claim died on observation %d of an allowance of 2", i+1)
 		}
 	}
-	s.Observe(nil, map[string]string{"a": "OutOfSync"})
+	s.observe(nil, map[string]string{"a": "OutOfSync"})
 	if _, ok := s.State("a"); ok {
 		t.Error("claim outlived its allowance")
 	}
 }
 
 // Values are how an observation proves the server acted, so without them every
-// observation is uninformative — which is the honest reading for a caller that
-// cannot supply them (the SetBusy entrance, and pkg/tree).
+// observation is uninformative — which is the honest reading for a component
+// with no predicate, whose reads can only count claims down.
 func TestWithoutValuesEveryObservationIsUninformative(t *testing.T) {
 	s := claimed(1)
-	s.Expect([]string{"a"}, "Syncing", nil)
-	s.Observe(nil, nil)
+	s.expect([]string{"a"}, "Syncing", nil)
+	s.observe(nil, nil)
 	if _, ok := s.State("a"); !ok {
 		t.Fatal("the allowance was spent by an observation that could say nothing")
 	}
-	s.Observe(nil, nil)
+	s.observe(nil, nil)
 	if _, ok := s.State("a"); ok {
 		t.Error("the allowance was never spent, so the claim cannot end")
 	}
@@ -99,8 +100,8 @@ func TestWithoutValuesEveryObservationIsUninformative(t *testing.T) {
 // than the screen's guess.
 func TestAnObservedLabelSupersedesAClaimedOne(t *testing.T) {
 	s := claimed(5)
-	s.Expect([]string{"a"}, "Syncing", nil)
-	s.Observe(map[string]string{"a": "Reconciling"}, nil)
+	s.expect([]string{"a"}, "Syncing", nil)
+	s.observe(map[string]string{"a": "Reconciling"}, nil)
 
 	st, ok := s.State("a")
 	if !ok {
@@ -115,11 +116,11 @@ func TestAnObservedLabelSupersedesAClaimedOne(t *testing.T) {
 // at the keypress — not at the poll that first caught up with it.
 func TestSinceMeasuresFromTheClaim(t *testing.T) {
 	s := claimed(5)
-	s.Expect([]string{"a"}, "Syncing", nil)
+	s.expect([]string{"a"}, "Syncing", nil)
 	at, _ := s.State("a")
 
 	time.Sleep(2 * time.Millisecond)
-	s.Observe(map[string]string{"a": "Syncing"}, nil)
+	s.observe(map[string]string{"a": "Syncing"}, nil)
 
 	st, _ := s.State("a")
 	if !st.Since.Equal(at.Since) {
@@ -129,30 +130,34 @@ func TestSinceMeasuresFromTheClaim(t *testing.T) {
 
 // --- taking it back -------------------------------------------------------
 
-func TestRetractDropsOnlyWhatItNames(t *testing.T) {
+// A refused request withdraws its own claims and nobody else's.
+func TestARefusalWithdrawsOnlyItsOwnClaims(t *testing.T) {
 	s := claimed(5)
-	s.Expect([]string{"a", "b"}, "Syncing", nil)
-	s.Retract("a")
+	refused, _ := s.Dispatch([]string{"a"}, "Syncing", Observed)
+	s.Dispatch([]string{"b"}, "Syncing", Observed)
+	s.Done(refused, errors.New("409"))
 
 	if _, ok := s.State("a"); ok {
-		t.Error("the retracted claim is still there")
+		t.Error("the refused claim is still there")
 	}
 	if _, ok := s.State("b"); !ok {
-		t.Error("retracting one claim took its sibling")
+		t.Error("refusing one operation took another's claim")
 	}
 }
 
-func TestRetractAllDropsEveryClaimAndLeavesObservations(t *testing.T) {
+// A failed read withdraws claims waiting on reads, and leaves observations —
+// those turn Unknown instead (see op_test.go).
+func TestAFailedReadDropsClaimsAndKeepsObservations(t *testing.T) {
 	s := claimed(5)
-	s.Derive(map[string]string{"observed": "running"})
-	s.Expect([]string{"claimed"}, "Syncing", nil)
-	s.RetractAll()
+	s.derive(map[string]string{"observed": "running"})
+	s.expect([]string{"claimed"}, "Syncing", nil)
+	s.Accept(s.BeginRead(), errors.New("503"))
 
 	if _, ok := s.State("claimed"); ok {
 		t.Error("a claim survived the reads stopping")
 	}
 	if _, ok := s.State("observed"); !ok {
-		t.Error("RetractAll took an observation with it; it only owns the claims")
+		t.Error("a failed read took an observation with it")
 	}
 }
 
@@ -162,12 +167,12 @@ func TestRetractAllDropsEveryClaimAndLeavesObservations(t *testing.T) {
 // is not the same as one told it holds nothing.
 func TestAnUnscopedSetShowsEverything(t *testing.T) {
 	s := claimed(0)
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	if _, ok := s.State("a"); !ok {
 		t.Error("an unscoped Set hid a key")
 	}
 
-	s.Scope(nil)
+	s.setScope(nil)
 	if _, ok := s.State("a"); ok {
 		t.Error("a Set told it holds no keys still showed one")
 	}
@@ -176,13 +181,13 @@ func TestAnUnscopedSetShowsEverything(t *testing.T) {
 // Kept, not discarded — rows and busy-ness arrive on separate cadences.
 func TestAnOutOfScopeEntryIsKeptAndComesBack(t *testing.T) {
 	s := claimed(0)
-	s.Scope([]string{"a"})
-	s.Derive(map[string]string{"a": "running", "b": "running"})
+	s.setScope([]string{"a"})
+	s.derive(map[string]string{"a": "running", "b": "running"})
 
 	if got := s.Count(); got != 1 {
 		t.Errorf("Count = %d, want 1 — only one of the two is held", got)
 	}
-	s.Scope([]string{"a", "b"})
+	s.setScope([]string{"a", "b"})
 	if _, ok := s.State("b"); !ok {
 		t.Error("the out-of-scope entry was discarded rather than kept")
 	}
@@ -192,8 +197,8 @@ func TestAnOutOfScopeEntryIsKeptAndComesBack(t *testing.T) {
 // tick every frame.
 func TestAnEntryNoOneCanSeeArmsNoTickChain(t *testing.T) {
 	s := claimed(0)
-	s.Scope([]string{"a"})
-	if cmd := s.Derive(map[string]string{"elsewhere": "running"}); cmd != nil {
+	s.setScope([]string{"a"})
+	if cmd := s.derive(map[string]string{"elsewhere": "running"}); cmd != nil {
 		t.Error("a tick chain started for a key the component does not hold")
 	}
 }
@@ -202,9 +207,9 @@ func TestAnEntryNoOneCanSeeArmsNoTickChain(t *testing.T) {
 
 func TestAdoptCarriesClaimsAndScope(t *testing.T) {
 	old := claimed(4)
-	old.Scope([]string{"a"})
-	old.Expect([]string{"a"}, "Syncing", nil)
-	old.Derive(map[string]string{"elsewhere": "running"})
+	old.setScope([]string{"a"})
+	old.expect([]string{"a"}, "Syncing", nil)
+	old.derive(map[string]string{"elsewhere": "running"})
 
 	fresh := claimed(4)
 	fresh.Adopt(old)
@@ -219,31 +224,13 @@ func TestAdoptCarriesClaimsAndScope(t *testing.T) {
 
 func TestAdoptDoesNotAliasTheOtherSetsClaims(t *testing.T) {
 	old := claimed(4)
-	old.Expect([]string{"a"}, "Syncing", nil)
+	old.expect([]string{"a"}, "Syncing", nil)
 
 	fresh := claimed(4)
 	fresh.Adopt(old)
-	old.Retract("a")
+	delete(old.expected, "a")
 
 	if _, ok := fresh.State("a"); !ok {
-		t.Error("retracting on the discarded Set reached into the live one")
-	}
-}
-
-// --- Expecting ------------------------------------------------------------
-
-// Components call it to find out which values are worth collecting, so it must
-// be empty in the ordinary case where nobody has dispatched anything.
-func TestExpectingIsEmptyUntilSomethingIsClaimed(t *testing.T) {
-	s := claimed(0)
-	s.Derive(map[string]string{"a": "running"})
-	if got := s.Expecting(); len(got) != 0 {
-		t.Errorf("Expecting = %v, want nothing — an observation is not a claim", got)
-	}
-
-	s.Expect([]string{"b"}, "Syncing", nil)
-	got := s.Expecting()
-	if len(got) != 1 || got[0] != "b" {
-		t.Errorf("Expecting = %v, want [b]", got)
+		t.Error("a change to the discarded Set reached into the live one")
 	}
 }

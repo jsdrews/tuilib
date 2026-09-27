@@ -715,8 +715,14 @@ func (t Theme) Form() form.Options {
 // activityCell.
 func (t Theme) Activity() activity.Options {
 	running := lipgloss.NewStyle().Foreground(t.Accent)
+	unknown := lipgloss.NewStyle().Foreground(t.Muted)
 	return activity.Options{
-		Style: func(_ activity.State, text string) string { return running.Render(text) },
+		Style: func(st activity.State, text string) string {
+			if st.Unknown {
+				return unknown.Render(text)
+			}
+			return running.Render(text)
+		},
 	}
 }
 
@@ -728,6 +734,11 @@ func (t Theme) Activity() activity.Options {
 // \x1b[39m instead, which the row's Background survives.
 func (t Theme) activityCell() activity.Options {
 	return activity.Options{
-		Style: func(_ activity.State, text string) string { return cellColor(t.Accent, text) },
+		Style: func(st activity.State, text string) string {
+			if st.Unknown {
+				return cellColor(t.Muted, text)
+			}
+			return cellColor(t.Accent, text)
+		},
 	}
 }

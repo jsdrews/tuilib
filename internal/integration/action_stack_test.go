@@ -1,3 +1,5 @@
+//go:build integration
+
 package integration
 
 import (
@@ -30,10 +32,11 @@ import (
 // against demoapi", and the reason it uses examples/patterns/activity rather
 // than a purpose-built screen is that the example is the thing people copy.
 
-// busyLabel is what a working row says. It is the server's vocabulary, and the
-// example's verbs use the same strings for Busy — so this one constant covers
-// the local indicator and the derived one that replaces it.
-const busyLabel = demoapi.SyncSyncing
+// busyLabel is what a working row says. It is the server's vocabulary — Argo's
+// operationState.phase — and the example's sync verbs claim with the same
+// word, so this one constant covers the claim and the observation that
+// replaces it.
+const busyLabel = demoapi.PhaseRunning
 
 // syncReceipt is what the example's Sync reports when its Run returns. It is
 // deliberately "requested" rather than "completed": the function returns once
@@ -90,7 +93,9 @@ func TestSyncFromTheMenuDrivesRowIndicatorAndConsole(t *testing.T) {
 		t.Fatalf("no rows arrived from the server:\n%s", h.render())
 	}
 
-	h.pick("Sync")
+	// The verb that streams its job: plain Sync only dispatches now, and its
+	// Run answers at the 202 with no log to follow.
+	h.pick("Sync and follow")
 
 	// 1. The row says so before the server has been asked anything — the shell
 	//    broadcasting Set.Targets, labelled with the verb's Busy text.
@@ -276,7 +281,7 @@ func TestRowConvergesOnTheServerAfterAFailedSync(t *testing.T) {
 	// The server picks the request up and reports it, which is the only way
 	// the row moves at all now.
 	if !h.pumpUntil(8*time.Second, func() bool {
-		return strings.Contains(h.render(), demoapi.SyncSyncing)
+		return strings.Contains(h.render(), demoapi.PhaseRunning)
 	}) {
 		t.Fatalf("the server never reported the sync as running:\n%s", h.render())
 	}
@@ -357,7 +362,7 @@ func TestServerStartedWorkShowsWithoutAnyAction(t *testing.T) {
 	}
 
 	// No keys from here. Anything that appears is the server's doing, reported
-	// by ActivityWhen off a poll result.
+	// by BusyWhen off a poll result.
 	if !h.pumpUntil(15*time.Second, func() bool {
 		return strings.Contains(h.render(), "working")
 	}) {
@@ -449,7 +454,7 @@ func TestCommandOnServerBusyRowIsRefusedAndExplained(t *testing.T) {
 	if !strings.Contains(v, "already") {
 		t.Errorf("the menu offered a verb for a row the server is working on:\n%s", v)
 	}
-	if !strings.Contains(strings.ToLower(v), "syncing") {
+	if !strings.Contains(strings.ToLower(v), strings.ToLower(busyLabel)) {
 		t.Errorf("the reason does not say what it is already doing:\n%s", v)
 	}
 

@@ -95,6 +95,10 @@ type Action struct {
 	//
 	// The failure text is not affected: an error is an error whenever it
 	// arrives.
+	//
+	// Run only. A Do action returns its own tea.Cmd and the shell never learns
+	// when that work ends, so it writes no receipt at all; post one yourself
+	// with app.Info when your reply message arrives.
 	Receipt string
 
 	// Confirm, when non-empty, puts a yes/no modal between the pick and the
@@ -194,8 +198,9 @@ type Set struct {
 	// useless key, while a key is identity and reads badly on a border.
 	// Neither can be derived from the other.
 	//
-	// Supplying them is what lets the shell put a spinner on the rows an
-	// action is working on, and what sharpens the Exclusive gate from
+	// Supplying them is what lets a screen claim those rows when the verb is
+	// dispatched — the shell forwards them on action.ChosenMsg and draws no
+	// spinner itself — and what sharpens the Exclusive gate from
 	// per-selection to per-target. A Set that leaves them empty behaves
 	// exactly as it did before they existed.
 	Targets []string

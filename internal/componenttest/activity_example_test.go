@@ -24,7 +24,7 @@ import (
 // asserted rather than trusted. Same reasoning as multiselect_example_test.go.
 //
 // What is asserted here is what belongs to the example: that it renders what
-// the server sends, and that ActivityWhen is wired to the column the data
+// the server sends, and that BusyWhen is wired to the column the data
 // actually arrives in. That the server schedules background work and moves a
 // revision is demoapi's promise, and demoapi tests it against a pinned clock
 // rather than making this suite wait out real seconds.
@@ -99,7 +99,7 @@ func TestActivityExampleRendersWhatTheServerSends(t *testing.T) {
 
 // Promise 2, and the part that is genuinely the example's: a status the server
 // reports spins the row, with no broadcast anywhere — this test is not the
-// shell, so nothing but ActivityWhen can produce the indicator.
+// shell, so nothing but BusyWhen can produce the indicator.
 //
 // The action is launched through the screen's own Actions(), so the wiring
 // under test is the one a user drives: Selection() → a POST → the server
@@ -132,13 +132,13 @@ func TestActivityExampleDerivesFromTheServer(t *testing.T) {
 		var v string
 		s, v = refreshOnce(s)
 		// No shell here, so no broadcast is possible: the only thing that can
-		// have produced an indicator is ActivityWhen reading the polled data.
+		// have produced an indicator is BusyWhen reading the polled data.
 		//
 		// Named from demoapi's own constant rather than typed as a literal.
 		// Two earlier versions of this assertion hardcoded the casing and both
 		// broke when the example changed how it labels a busy row — which is a
 		// presentation choice this test has no business depending on.
-		if strings.Contains(v, demoapi.SyncSyncing) {
+		if strings.Contains(v, demoapi.PhaseRunning) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

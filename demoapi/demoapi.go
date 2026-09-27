@@ -42,6 +42,16 @@
 // request it applies to, or — where the effect has to outlive one request — an
 // endpoint under /chaos/.
 //
+// The shape follows Argo CD, because that is the API the activity feature was
+// found wanting against. Sync is a comparison (Synced, OutOfSync) and never an
+// activity; work in progress is Phase. The three ways a client learns an
+// operation ended are all here, one per verb:
+//
+//	POST /apps/{id}/sync                   // fire-and-observe: 202 at once, Phase says Running
+//	GET  /apps/{id}?refresh=normal         // blocking: held until reconciled, the app shows nothing
+//	GET  /jobs/{job}                       // job handle: the id the 202 returned
+//
+//	GET  /apps/{id}?refresh=1&takes=5s     // how long the refresh holds the connection
 //	GET  /apps?stale=2s                    // a replica that has not caught up
 //	POST /apps/{id}/sync?reconcile=2s      // accepted now, reported later
 //	POST /apps/{id}/sync?blackhole=1       // accepted, given an id, dropped
@@ -105,12 +115,12 @@ type Options struct {
 	// DefaultSchedule.
 	//
 	// A demo wants this short: background work is the thing a screen with
-	// ActivityWhen exists to show, and a viewer who has to wait out two
+	// BusyWhen exists to show, and a viewer who has to wait out two
 	// intervals to see one concludes the feature does not work.
 	Schedule time.Duration
 
-	// Vocab is the set of status strings scheduled work reports while
-	// running. Nil means "Syncing" for everything, which is what a demo
+	// Vocab is the set of phases scheduled work reports while running. Nil
+	// means "Running" for everything, as Argo reports it, which is what a demo
 	// wants; a list is how a screen is shown statuses it was not written
 	// against — an unfamiliar phase, other casing, a counter, a wide rune.
 	//
@@ -161,6 +171,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /apps/{id}", s.getApp)
 	s.mux.HandleFunc("POST /apps/{id}/{action}", s.launch)
 	s.mux.HandleFunc("GET /jobs", s.listJobs)
+	s.mux.HandleFunc("GET /jobs/{id}", s.getJob)
 	s.mux.HandleFunc("GET /jobs/{id}/log", s.jobLog)
 
 	// Chaos is stateful, so it is endpoints rather than query parameters: a
@@ -292,6 +303,11 @@ func (s *server) facets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getApp(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("refresh") != "" {
+		s.refreshApp(w, r)
+		return
+	}
 	a, ok := s.w.app(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(r.PathValue("id"))+" not found")
@@ -303,10 +319,55 @@ func (s *server) getApp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, describe(a, s.w.listJobs(a.ID)))
 }
 
+// refreshApp is Argo's refresh: a GET that holds the connection until the
+// server has re-compared desired and live state, then answers with the app.
+//
+// It runs no job and sets no Phase. For its whole duration the app reads
+// exactly as it did before, so nothing a poll returns can say a refresh is
+// happening or has ended — only the open request knows. That is the shape
+// activity.Held exists for.
+//
+// The hold is real time, not the world's clock, for the reason ?latency= is:
+// it is the connection that waits. ?takes= sets it; a test passes ?takes=0.
+func (s *server) refreshApp(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.w.app(id); !ok {
+		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
+		return
+	}
+	d := refreshDuration
+	if v := r.URL.Query().Get("takes"); v != "" {
+		d = duration(v)
+	}
+	if d > 0 {
+		select {
+		case <-time.After(d):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	a, ok := s.w.refresh(id)
+	if !ok {
+		// Deleted while the connection was held.
+		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *server) getJob(w http.ResponseWriter, r *http.Request) {
+	j, ok := s.w.job(r.PathValue("id"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "job "+strconv.Quote(r.PathValue("id"))+" not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, j)
+}
+
 func (s *server) launch(w http.ResponseWriter, r *http.Request) {
 	kind := r.PathValue("action")
 	switch kind {
-	case "sync", "refresh", "fail":
+	case "sync", "fail":
 	default:
 		writeErr(w, http.StatusNotFound, "no such action "+strconv.Quote(kind))
 		return

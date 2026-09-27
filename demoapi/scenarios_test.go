@@ -19,8 +19,9 @@ import (
 // the clock and reading produces exactly what the equivalent real interval
 // would have.
 
-// syncOf reads one application's sync status, optionally through a lag.
-func syncOf(t *testing.T, c *http.Client, id, query string) string {
+// phaseOf reads one application's operation phase — the field that says work
+// is in progress — optionally through a lag.
+func phaseOf(t *testing.T, c *http.Client, id, query string) string {
 	t.Helper()
 	var p page
 	if code := getJSON(t, c, "/apps?limit=5000"+query, &p); code != http.StatusOK {
@@ -28,7 +29,7 @@ func syncOf(t *testing.T, c *http.Client, id, query string) string {
 	}
 	for _, a := range p.Rows {
 		if a.ID == id {
-			return a.Sync
+			return a.Phase
 		}
 	}
 	return ""
@@ -54,24 +55,24 @@ func hasApp(t *testing.T, c *http.Client, id string) bool {
 func TestReconcileDelaysWhenTheAppReportsTheWork(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
-	before := syncOf(t, c, "app-00000", "")
+	before := phaseOf(t, c, "app-00000", "")
 	if code := post(t, c, "/apps/app-00000/sync?reconcile=2s", nil); code != http.StatusAccepted {
 		t.Fatalf("launch = %d, want 202", code)
 	}
 
 	// Accepted, and the server still says what it said before.
-	if got := syncOf(t, c, "app-00000", ""); got != before {
+	if got := phaseOf(t, c, "app-00000", ""); got != before {
 		t.Errorf("immediately after launch = %q, want the pre-launch %q", got, before)
 	}
 	clk.advance(1900 * time.Millisecond)
-	if got := syncOf(t, c, "app-00000", ""); got != before {
+	if got := phaseOf(t, c, "app-00000", ""); got != before {
 		t.Errorf("inside the reconcile window = %q, want the pre-launch %q", got, before)
 	}
 
 	// And then it catches up with itself.
 	clk.advance(200 * time.Millisecond)
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSyncing {
-		t.Errorf("past the reconcile window = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseRunning {
+		t.Errorf("past the reconcile window = %q, want %q", got, PhaseRunning)
 	}
 }
 
@@ -81,8 +82,8 @@ func TestWithoutReconcileTheStatusIsImmediate(t *testing.T) {
 	c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
 	post(t, c, "/apps/app-00000/sync", nil)
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSyncing {
-		t.Errorf("sync = %q, want %q with no reconcile lag", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseRunning {
+		t.Errorf("sync = %q, want %q with no reconcile lag", got, PhaseRunning)
 	}
 }
 
@@ -94,12 +95,12 @@ func TestReconcileLongerThanTheWorkIsNeverSeenRunning(t *testing.T) {
 	post(t, c, "/apps/app-00000/sync?reconcile=9s&takes=1s", nil)
 	for i := 0; i < 12; i++ {
 		clk.advance(time.Second)
-		if got := syncOf(t, c, "app-00000", ""); got == SyncSyncing {
+		if got := phaseOf(t, c, "app-00000", ""); got == PhaseRunning {
 			t.Fatalf("observed %q running at step %d; the reconcile lag outlasts the work", got, i)
 		}
 	}
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSynced {
-		t.Errorf("final = %q, want %q — it should still have landed", got, SyncSynced)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseSucceeded {
+		t.Errorf("final = %q, want %q — it should still have landed", got, PhaseSucceeded)
 	}
 }
 
@@ -110,20 +111,20 @@ func TestReconcileLongerThanTheWorkIsNeverSeenRunning(t *testing.T) {
 func TestStaleReadsServeThePreviousValue(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
-	before := syncOf(t, c, "app-00000", "")
+	before := phaseOf(t, c, "app-00000", "")
 	post(t, c, "/apps/app-00000/sync", nil)
 
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSyncing {
-		t.Fatalf("fresh read = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseRunning {
+		t.Fatalf("fresh read = %q, want %q", got, PhaseRunning)
 	}
-	if got := syncOf(t, c, "app-00000", "&stale=2s"); got != before {
+	if got := phaseOf(t, c, "app-00000", "&stale=2s"); got != before {
 		t.Errorf("stale read = %q, want the pre-launch %q", got, before)
 	}
 
 	// Once the change is older than the lag, even a lagging reader has it.
 	clk.advance(3 * time.Second)
-	if got := syncOf(t, c, "app-00000", "&stale=2s"); got != SyncSyncing {
-		t.Errorf("stale read past the lag = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", "&stale=2s"); got != PhaseRunning {
+		t.Errorf("stale read past the lag = %q, want %q", got, PhaseRunning)
 	}
 }
 
@@ -133,15 +134,15 @@ func TestStaleReadsServeThePreviousValue(t *testing.T) {
 func TestAlternatingStaleReadsGoBackwards(t *testing.T) {
 	c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
-	before := syncOf(t, c, "app-00000", "")
+	before := phaseOf(t, c, "app-00000", "")
 	post(t, c, "/apps/app-00000/sync", nil)
 
 	got := []string{
-		syncOf(t, c, "app-00000", ""),
-		syncOf(t, c, "app-00000", "&stale=2s"),
-		syncOf(t, c, "app-00000", ""),
+		phaseOf(t, c, "app-00000", ""),
+		phaseOf(t, c, "app-00000", "&stale=2s"),
+		phaseOf(t, c, "app-00000", ""),
 	}
-	want := []string{SyncSyncing, before, SyncSyncing}
+	want := []string{PhaseRunning, before, PhaseRunning}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("read %d = %q, want %q (sequence %v)", i, got[i], want[i], got)
@@ -155,22 +156,22 @@ func TestAlternatingStaleReadsGoBackwards(t *testing.T) {
 func TestStaleIsOneTransitionDeep(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
-	before := syncOf(t, c, "app-00000", "")
+	before := phaseOf(t, c, "app-00000", "")
 	post(t, c, "/apps/app-00000/sync?phases=one,two&takes=10s", nil)
-	if got := syncOf(t, c, "app-00000", ""); got != "one" {
+	if got := phaseOf(t, c, "app-00000", ""); got != "one" {
 		t.Fatalf("first phase = %q, want %q", got, "one")
 	}
-	if got := syncOf(t, c, "app-00000", "&stale=1h"); got != before {
+	if got := phaseOf(t, c, "app-00000", "&stale=1h"); got != before {
 		t.Fatalf("one change back = %q, want the pre-launch %q", got, before)
 	}
 
 	// Second transition. The pre-launch value is now two changes back and is
 	// no longer recoverable at any lag.
 	clk.advance(6 * time.Second)
-	if got := syncOf(t, c, "app-00000", ""); got != "two" {
+	if got := phaseOf(t, c, "app-00000", ""); got != "two" {
 		t.Fatalf("second phase = %q, want %q", got, "two")
 	}
-	if got := syncOf(t, c, "app-00000", "&stale=1h"); got != "one" {
+	if got := phaseOf(t, c, "app-00000", "&stale=1h"); got != "one" {
 		t.Errorf("two changes back = %q, want %q — the lag is one transition, not a history", got, "one")
 	}
 }
@@ -182,7 +183,7 @@ func TestStaleIsOneTransitionDeep(t *testing.T) {
 func TestBlackholeAcceptsAndDoesNothing(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
-	before := syncOf(t, c, "app-00000", "")
+	before := phaseOf(t, c, "app-00000", "")
 	var body struct {
 		Job string `json:"job"`
 	}
@@ -195,7 +196,7 @@ func TestBlackholeAcceptsAndDoesNothing(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		clk.advance(time.Second)
-		if got := syncOf(t, c, "app-00000", ""); got != before {
+		if got := phaseOf(t, c, "app-00000", ""); got != before {
 			t.Fatalf("status moved to %q at step %d; a blackholed request starts nothing", got, i)
 		}
 	}
@@ -253,16 +254,16 @@ func TestTheWorldAdvancesBehindAnOutage(t *testing.T) {
 	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 
 	post(t, c, "/apps/app-00000/sync", nil)
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSyncing {
-		t.Fatalf("sync = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseRunning {
+		t.Fatalf("sync = %q, want %q", got, PhaseRunning)
 	}
 
 	post(t, c, "/chaos/down?for=1h", nil)
 	clk.advance(10 * time.Second)
 	post(t, c, "/chaos/down?for=0", nil)
 
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSynced {
-		t.Errorf("after the outage = %q, want %q — the work finished while nobody could look", got, SyncSynced)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseSucceeded {
+		t.Errorf("after the outage = %q, want %q — the work finished while nobody could look", got, PhaseSucceeded)
 	}
 }
 
@@ -281,7 +282,7 @@ func TestSayOverridesTheReportedStatus(t *testing.T) {
 		t.Run(want, func(t *testing.T) {
 			c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
 			post(t, c, "/apps/app-00000/sync?say="+url.QueryEscape(want), nil)
-			if got := syncOf(t, c, "app-00000", ""); got != want {
+			if got := phaseOf(t, c, "app-00000", ""); got != want {
 				t.Errorf("sync = %q, want %q", got, want)
 			}
 		})
@@ -296,13 +297,13 @@ func TestPhasesWalkInOrder(t *testing.T) {
 	post(t, c, "/apps/app-00000/sync?takes=3s&phases=submitting,applying,verifying", nil)
 
 	for i, want := range []string{"submitting", "applying", "verifying"} {
-		if got := syncOf(t, c, "app-00000", ""); got != want {
+		if got := phaseOf(t, c, "app-00000", ""); got != want {
 			t.Errorf("phase at second %d = %q, want %q", i, got, want)
 		}
 		clk.advance(time.Second)
 	}
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSynced {
-		t.Errorf("after the last phase = %q, want %q", got, SyncSynced)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseSucceeded {
+		t.Errorf("after the last phase = %q, want %q", got, PhaseSucceeded)
 	}
 }
 
@@ -348,8 +349,8 @@ func TestSpawnCanArriveBusy(t *testing.T) {
 	if code := post(t, c, "/chaos/spawn?id=app-90001&busy=1", nil); code != http.StatusCreated {
 		t.Fatalf("spawn = %d, want 201", code)
 	}
-	if got := syncOf(t, c, "app-90001", ""); got != SyncSyncing {
-		t.Errorf("spawned busy = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-90001", ""); got != PhaseRunning {
+		t.Errorf("spawned busy = %q, want %q", got, PhaseRunning)
 	}
 }
 
@@ -366,8 +367,8 @@ func TestSpawnReusesADeletedID(t *testing.T) {
 	if code := post(t, c, "/chaos/spawn?id=app-00000&busy=1", nil); code != http.StatusCreated {
 		t.Fatalf("spawn onto the freed id = %d, want 201", code)
 	}
-	if got := syncOf(t, c, "app-00000", ""); got != SyncSyncing {
-		t.Errorf("reused id = %q, want %q", got, SyncSyncing)
+	if got := phaseOf(t, c, "app-00000", ""); got != PhaseRunning {
+		t.Errorf("reused id = %q, want %q", got, PhaseRunning)
 	}
 }
 
@@ -416,12 +417,149 @@ func TestScheduledWorkUsesTheConfiguredVocabulary(t *testing.T) {
 		var p page
 		getJSON(t, c, "/apps?limit=6", &p)
 		for _, a := range p.Rows {
-			if a.Sync == "Reconciling" {
+			if a.Phase == "Reconciling" {
 				seen = true
 			}
 		}
 	}
 	if !seen {
 		t.Error("no scheduled work ever reported the configured vocabulary")
+	}
+}
+
+// --- the Argo shape ------------------------------------------------------
+
+// Sync is a comparison, not an activity. A client that watches it for work in
+// progress sees nothing — the trap the first activity example taught.
+func TestSyncStatusNeverReportsWorkInProgress(t *testing.T) {
+	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+
+	var p page
+	getJSON(t, c, "/apps?limit=4", &p)
+	before := p.Rows[0].Sync
+
+	post(t, c, "/apps/app-00000/sync", nil)
+	getJSON(t, c, "/apps?limit=4", &p)
+	if p.Rows[0].Sync != before {
+		t.Errorf("sync moved to %q while running; it is a comparison, not an activity", p.Rows[0].Sync)
+	}
+	if p.Rows[0].Phase != PhaseRunning {
+		t.Errorf("phase = %q, want %q", p.Rows[0].Phase, PhaseRunning)
+	}
+	clk.advance(2 * syncDuration)
+	getJSON(t, c, "/apps?limit=4", &p)
+	if p.Rows[0].Sync != SyncSynced || p.Rows[0].Phase != PhaseSucceeded {
+		t.Errorf("after = %s/%s, want %s/%s", p.Rows[0].Sync, p.Rows[0].Phase, SyncSynced, PhaseSucceeded)
+	}
+}
+
+// A sync shorter than a poll interval, on an app already Synced, leaves no
+// trace a poll could see but the phase it ended in — the "nothing happened"
+// case activity.UnobservedMsg reports.
+func TestAQuickSyncOfASyncedAppIsInvisibleToAPoll(t *testing.T) {
+	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+
+	var p page
+	getJSON(t, c, "/apps?limit=4", &p)
+	a := p.Rows[0]
+	if a.Sync != SyncSynced {
+		t.Skipf("seed puts app-00000 at %s", a.Sync)
+	}
+	post(t, c, "/apps/app-00000/sync?takes=300ms", nil)
+	clk.advance(2 * time.Second) // one poll later
+	getJSON(t, c, "/apps?limit=4", &p)
+	if p.Rows[0].Sync != SyncSynced || p.Rows[0].Phase == PhaseRunning {
+		t.Errorf("after = %s/%s; the poll should have missed it entirely", p.Rows[0].Sync, p.Rows[0].Phase)
+	}
+}
+
+// Refresh holds the connection and shows nothing while it does. Every read
+// taken during it reads exactly as before; only the response says it ended.
+func TestRefreshBlocksAndLeavesNoTrace(t *testing.T) {
+	c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+
+	var before page
+	getJSON(t, c, "/apps?limit=4", &before)
+
+	done := make(chan App, 1)
+	go func() {
+		var a App
+		getJSON(t, c, "/apps/app-00001?refresh=normal&takes=150ms", &a)
+		done <- a
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	var mid page
+	getJSON(t, c, "/apps?limit=4", &mid)
+	if mid.Rows[1].Sync != before.Rows[1].Sync || mid.Rows[1].Phase != before.Rows[1].Phase {
+		t.Errorf("mid-refresh = %s/%s, want the app unchanged", mid.Rows[1].Sync, mid.Rows[1].Phase)
+	}
+	select {
+	case <-done:
+		t.Fatal("refresh answered before its hold")
+	default:
+	}
+
+	a := <-done
+	if a.ID != "app-00001" {
+		t.Fatalf("refresh returned %+v", a)
+	}
+	if !a.ReconciledAt.After(before.Rows[1].ReconciledAt) && !a.ReconciledAt.Equal(before.Rows[1].ReconciledAt) {
+		t.Errorf("reconciledAt went backwards")
+	}
+}
+
+// What a refresh is for: drift the server had not noticed. app-00001 starts
+// drifted by construction.
+func TestRefreshDiscoversDrift(t *testing.T) {
+	c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+
+	var p page
+	getJSON(t, c, "/apps?limit=4", &p)
+	if p.Rows[1].Sync != SyncSynced {
+		t.Skipf("seed puts app-00001 at %s", p.Rows[1].Sync)
+	}
+	var a App
+	if code := getJSON(t, c, "/apps/app-00001?refresh=normal&takes=0", &a); code != http.StatusOK {
+		t.Fatalf("refresh = %d", code)
+	}
+	if a.Sync != SyncOutOfSync {
+		t.Errorf("refreshed sync = %q, want %q", a.Sync, SyncOutOfSync)
+	}
+}
+
+// A client that gives up on a refresh is not answered.
+func TestRefreshHonoursCancellation(t *testing.T) {
+	c, _ := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+	c.Timeout = 50 * time.Millisecond
+	if _, err := c.Get("http://demo/apps/app-00000?refresh=normal&takes=5s"); err == nil {
+		t.Error("a refresh held past the client's timeout still answered")
+	}
+}
+
+// The job handle resolves, so a client can ask what became of the thing it
+// started rather than inferring it from the app.
+func TestJobHandleResolves(t *testing.T) {
+	c, clk := fixture(t, Options{Apps: 4, Schedule: time.Hour})
+
+	var body struct {
+		Job string `json:"job"`
+	}
+	post(t, c, "/apps/app-00000/sync", &body)
+	var j Job
+	if code := getJSON(t, c, "/jobs/"+body.Job, &j); code != http.StatusOK || j.Status != JobRunning {
+		t.Fatalf("job = %d %+v, want running", code, j)
+	}
+	clk.advance(2 * syncDuration)
+	getJSON(t, c, "/jobs/"+body.Job, &j)
+	if j.Status != JobSucceeded {
+		t.Errorf("job = %q, want %q", j.Status, JobSucceeded)
+	}
+
+	// A blackholed request's handle resolves to nothing, which is how a
+	// client tells it apart from instant success.
+	post(t, c, "/apps/app-00001/sync?blackhole=1", &body)
+	if code := getJSON(t, c, "/jobs/"+body.Job, nil); code != http.StatusNotFound {
+		t.Errorf("blackholed handle = %d, want 404", code)
 	}
 }
