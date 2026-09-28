@@ -49,6 +49,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -113,9 +114,10 @@ type Screen struct {
 	api   demoapi.Target
 	apps  []appRow
 
-	// ops maps a run's tag to the operation it dispatched, so the run's
-	// answer can close it.
-	ops map[string]activity.Op
+	// ops maps a run's tag to the operations it dispatched — one per row, so
+	// the server refusing one row stops that row alone — so the run's answer
+	// can close them.
+	ops map[string][]activity.Op
 }
 
 // New returns the activity demo screen.
@@ -126,7 +128,7 @@ func New(t theme.Theme) screen.Screen {
 		// while you are watching.
 		api:  demoapi.From(demoapi.Options{Seed: 11, Apps: appCount, Schedule: 3 * time.Second}),
 		poll: poll.New(poll.Options{Interval: pollInterval}),
-		ops:  map[string]activity.Op{},
+		ops:  map[string][]activity.Op{},
 	}
 	s.SetTheme(t)
 	return s
@@ -137,7 +139,15 @@ func (s *Screen) IsCapturingKeys() bool { return s.table.IsCapturingKeys() }
 func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
 func (s *Screen) Layout() layout.Node   { return layout.Sized(&s.table) }
 
-func (s *Screen) Init() tea.Cmd { return tea.Batch(s.poll.Init(), s.fetch()) }
+func (s *Screen) Init() tea.Cmd { return tea.Batch(s.poll.Init(), s.fetch(), titleTick()) }
+
+// titleTickMsg re-renders the title once a second, so "refreshed Ns ago"
+// counts between polls — and through an outage, when no poll lands.
+type titleTickMsg struct{}
+
+func titleTick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return titleTickMsg{} })
+}
 
 // fetchedMsg carries one poll's worth of rows and the token its fetch was
 // stamped with when issued.
@@ -155,40 +165,63 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	case poll.RefreshMsg:
 		cmds = append(cmds, s.fetch())
 
+	case titleTickMsg:
+		s.table.SetTitle(s.title())
+		cmds = append(cmds, titleTick())
+
 	case action.ChosenMsg:
 		v, ok := verbs[m.Action.Label]
 		if !ok || m.Action.Run == nil {
 			break
 		}
-		op, cmd := s.table.Dispatch(m.Targets, v.label, v.mode)
-		s.ops[action.RunKey(m.Action, m.Target)] = op
-		cmds = append(cmds, cmd)
+		// One operation per row, so one refusal stops one row.
+		var ops []activity.Op
+		for _, k := range m.Targets {
+			op, cmd := s.table.Dispatch([]string{k}, v.label, v.mode)
+			ops = append(ops, op)
+			cmds = append(cmds, cmd)
+		}
+		s.ops[action.RunKey(m.Action, m.Target)] = ops
 
 	case runner.Captured:
-		// Under the shell, an action's Run answering arrives as this.
-		op, ours := s.ops[m.Tag]
+		// Under the shell, an action's Run answering arrives as this. The
+		// shell has already posted the run's receipt or its error; what is
+		// left is closing each row's operation with that row's own result.
+		ops, ours := s.ops[m.Tag]
 		if !ours {
 			break
 		}
 		delete(s.ops, m.Tag)
-		s.table.Done(op, m.Err)
-		if op.Mode == activity.Held && m.Err == nil {
+		ended := false
+		for _, op := range ops {
+			if s.table.Done(op, errFor(m.Err, op.Keys[0])) == activity.Ended {
+				ended = true
+			}
+		}
+		if ended {
 			// The work is over and the rows do not know yet; ask now rather
-			// than leave the row settled on the pre-refresh value for a poll.
+			// than leave them settled on the pre-refresh value for a poll.
 			cmds = append(cmds, s.poll.Refresh())
 		}
 
 	case activity.UnobservedMsg:
+		// Every Observed verb here is a sync, so name it; m.Label is the
+		// claim's label, "Running", not the verb.
 		if m.Changed {
-			cmds = append(cmds, app.Info(m.Label+" finished between polls"))
+			cmds = append(cmds, app.Info("Sync finished between polls"))
 		} else {
-			cmds = append(cmds, app.Info(m.Label+" requested — no change observed"))
+			cmds = append(cmds, app.Info("Sync requested — no change observed"))
 		}
 
 	case fetchedMsg:
+		wasFailing := s.table.ReadsFailing()
 		if !s.table.ApplyRead(m.read, rowsOf(m.apps), m.err) {
 			if m.err != nil {
-				cmds = append(cmds, app.ErrorOf(m.err))
+				if !wasFailing {
+					// Once, when reads start failing; the title says it for as
+					// long as the outage lasts.
+					cmds = append(cmds, app.ErrorOf(m.err))
+				}
 				s.table.SetTitle(s.title())
 			}
 			break
@@ -264,8 +297,14 @@ func (s *Screen) title() string {
 	if n := s.table.ActivityCount(); n > 0 {
 		name += fmt.Sprintf(" · %d working", n)
 	}
+	// Both, never one instead of the other: "reads failing" says the rows
+	// can't be refreshed, and "refreshed Ns ago" says how stale they are —
+	// counted from the last read that landed, so it climbs through an outage.
 	if s.table.ReadsFailing() {
 		name += " · reads failing"
+	}
+	if last := s.poll.LastRefresh(); !last.IsZero() {
+		name += fmt.Sprintf(" · refreshed %ds ago", int(time.Since(last).Seconds()))
 	}
 	return name
 }
@@ -353,10 +392,13 @@ func (s *Screen) Actions() action.Set {
 				Run:      s.refresh(targets),
 			},
 			{
-				Label:     "Sync and follow",
-				Desc:      "stream the job to the end",
-				Disabled:  busy,
-				Multi:     true,
+				Label:    "Sync and follow",
+				Desc:     "stream the job to the end",
+				Disabled: busy,
+				// One row: it is Held, so each row's spinner ends only when the
+				// run returns, and a run that follows several jobs in turn
+				// would hold a finished row until the last one ended.
+				Multi:     false,
 				Exclusive: true,
 				Run:       s.syncAndFollow(targets),
 			},
@@ -401,15 +443,54 @@ func (s *Screen) busyTargets(targets []string) string {
 func (s *Screen) launchAll(ids []string, kind, query string) action.Func {
 	api := s.api
 	return func(ctx context.Context, out io.Writer) error {
+		var errs []error
 		for _, id := range ids {
 			job, err := launch(ctx, api, id, kind+query)
 			if err != nil {
-				return err
+				errs = append(errs, keyError{id, err})
+				continue
 			}
 			fmt.Fprintf(out, "%s: accepted as %s\n", id, job)
 		}
+		return errors.Join(errs...)
+	}
+}
+
+// keyError is one row's failure inside a run over several. The run keeps
+// going past it, and the screen closes each row's operation with its own
+// result (errFor) rather than failing every row on one refusal.
+type keyError struct {
+	key string
+	err error
+}
+
+func (e keyError) Error() string { return e.err.Error() }
+func (e keyError) Unwrap() error { return e.err }
+
+// errFor is the part of a run's error that belongs to key. An error not tied
+// to a row — the run was cancelled — belongs to every row.
+func errFor(err error, key string) error {
+	if err == nil {
 		return nil
 	}
+	errs := []error{err}
+	if j, ok := err.(interface{ Unwrap() []error }); ok {
+		errs = j.Unwrap()
+	}
+	tied := false
+	for _, e := range errs {
+		var ke keyError
+		if errors.As(e, &ke) {
+			tied = true
+			if ke.key == key {
+				return ke.err
+			}
+		}
+	}
+	if tied {
+		return nil
+	}
+	return err
 }
 
 // refresh is Argo's blocking refresh: the GET does not answer until the
@@ -417,24 +498,28 @@ func (s *Screen) launchAll(ids []string, kind, query string) action.Func {
 func (s *Screen) refresh(ids []string) action.Func {
 	api := s.api
 	return func(ctx context.Context, out io.Writer) error {
+		var errs []error
 		for _, id := range ids {
 			resp, err := get(ctx, api, api.URL("/apps/"+id+"?refresh=normal"))
 			if err != nil {
-				return err
+				errs = append(errs, keyError{id, err})
+				continue
 			}
 			if resp.StatusCode != http.StatusOK {
 				resp.Body.Close()
-				return fmt.Errorf("refresh %s: %s", id, resp.Status)
+				errs = append(errs, keyError{id, fmt.Errorf("refresh %s: %s", id, resp.Status)})
+				continue
 			}
 			var a appRow
 			err = json.NewDecoder(resp.Body).Decode(&a)
 			resp.Body.Close()
 			if err != nil {
-				return err
+				errs = append(errs, keyError{id, err})
+				continue
 			}
 			fmt.Fprintf(out, "%s: refreshed, %s\n", id, a.Sync)
 		}
-		return nil
+		return errors.Join(errs...)
 	}
 }
 
@@ -443,18 +528,19 @@ func (s *Screen) refresh(ids []string) action.Func {
 func (s *Screen) syncAndFollow(ids []string) action.Func {
 	api := s.api
 	return func(ctx context.Context, out io.Writer) error {
-		var failed error
+		var errs []error
 		for _, id := range ids {
 			job, err := launch(ctx, api, id, "sync")
 			if err != nil {
-				return err
+				errs = append(errs, keyError{id, err})
+				continue
 			}
 			fmt.Fprintf(out, "%s: accepted as %s\n", id, job)
 			if err := s.follow(ctx, out, id, job, len(ids) > 1); err != nil {
-				failed = err
+				errs = append(errs, keyError{id, err})
 			}
 		}
-		return failed
+		return errors.Join(errs...)
 	}
 }
 

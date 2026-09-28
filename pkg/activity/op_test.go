@@ -291,3 +291,24 @@ func TestAnOvertakenFailureIsIgnored(t *testing.T) {
 		t.Error("a failure older than the newest good read marked reads failing")
 	}
 }
+
+// Done says what the reply means, so a screen with both kinds of verb cannot
+// report an Observed request's 202 as the work being finished.
+func TestDoneReportsWhatTheReplyMeans(t *testing.T) {
+	for _, tc := range []struct {
+		mode Mode
+		err  error
+		want Outcome
+	}{
+		{Observed, nil, Acknowledged},
+		{Held, nil, Ended},
+		{Observed, errors.New("409"), Withdrawn},
+		{Held, errors.New("503"), Withdrawn},
+	} {
+		s := New(Options{})
+		op, _ := s.Dispatch([]string{"a"}, "Running", tc.mode)
+		if got := s.Done(op, tc.err); got != tc.want {
+			t.Errorf("Done(%v, %v) = %v, want %v", tc.mode, tc.err, got, tc.want)
+		}
+	}
+}

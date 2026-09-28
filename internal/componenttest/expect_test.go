@@ -106,7 +106,7 @@ func (d *tableClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefus
 // dispatcher is the operation surface all three components share.
 type dispatcher interface {
 	Dispatch(keys []string, label string, mode activity.Mode) (activity.Op, tea.Cmd)
-	Done(op activity.Op, err error)
+	Done(op activity.Op, err error) activity.Outcome
 }
 
 // dispatched is an acknowledged Observed claim on one key.

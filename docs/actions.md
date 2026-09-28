@@ -174,6 +174,12 @@ type Set struct {
 }
 ```
 
+*Later: `Targets` (the keys) was added beside `Count`, and the two could
+disagree. A Set with `Targets` but no `Count` read as one target, so the Multi
+gate never fired. The menu now gates on `Set.Arity()`, which is `len(Targets)`
+when there are any and `Count` otherwise, and `Validate` flags a `Count` that
+contradicts `Targets`.*
+
 The shell type-asserts the active screen. Every existing screen keeps
 compiling and simply has no actions, which is the honest state of affairs for
 a screen that hasn't declared any. `focus.Capturer` is the precedent: an

@@ -220,6 +220,19 @@ func TestMultiSelectionDisablesSingleTargetActions(t *testing.T) {
 	}
 }
 
+// Targets alone gate the same way: a set that names three keys and leaves
+// Count unset is three targets, not one. It used to read as one, so non-Multi
+// verbs ran on the whole selection.
+func TestTargetsAloneGateAMultiSelection(t *testing.T) {
+	s := threeActions()
+	s.Count, s.Target, s.Targets = 0, "3 items", []string{"a", "b", "c"}
+	m := testMenu(t, s)
+
+	if got := m.reasonAt(1); got != DefaultMultiReason {
+		t.Errorf("reason = %q, want %q — three Targets is a multi-selection", got, DefaultMultiReason)
+	}
+}
+
 func TestSingleTargetLeavesEverythingEnabled(t *testing.T) {
 	s := threeActions()
 	s.Count = 1

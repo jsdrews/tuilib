@@ -186,8 +186,10 @@ type Set struct {
 	// the last surface that can say which before it happens.
 	Target string
 
-	// Count is how many targets Actions will act on. 0 and 1 both mean a
-	// single target; above that, actions without Multi are disabled.
+	// Count is how many targets Actions will act on, for a Set that has no
+	// Targets. 0 and 1 both mean a single target; above that, actions without
+	// Multi are disabled. When Targets is set, its length is the count and
+	// Count can be left unset — see Arity.
 	Count int
 
 	// Targets are the keys the verbs will act on — what Selection() returned,
@@ -210,6 +212,20 @@ type Set struct {
 
 // Empty reports whether the set has no actions.
 func (s Set) Empty() bool { return len(s.Actions) == 0 }
+
+// Arity is how many targets the verbs will act on: len(Targets) when the set
+// has them, else Count. It is what the menu gates Multi on.
+//
+// Derived rather than read from Count because the two state one fact twice,
+// and a Set that filled in only Targets used to read as one target — so every
+// non-Multi verb ran on a multi-selection, and marking rows looked as if it
+// worked until the verb did something that only made sense once.
+func (s Set) Arity() int {
+	if len(s.Targets) > 0 {
+		return len(s.Targets)
+	}
+	return s.Count
+}
 
 // Provider is implemented by screens that have verbs.
 //
@@ -270,7 +286,7 @@ func retarget(e mouse.Msg) tea.Cmd {
 
 // Validate reports everything structurally wrong with a Set: a missing label,
 // neither or both of Run and Do, a duplicate shortcut, a duplicate identity,
-// and Targets filled in without Count.
+// and a Count that disagrees with Targets.
 //
 // It exists to be called from a test. These are all authoring mistakes whose
 // symptoms show up far from their cause — a duplicate shortcut silently
@@ -282,14 +298,13 @@ func Validate(s Set) []error {
 	idents := map[string]int{}
 	keys := map[string]int{}
 
-	// Targets without Count is a screen that filled in the newer field and
-	// forgot the older one — and Count == 0 means "one target", so every
-	// non-Multi action goes on working and the mistake stays invisible until
-	// someone marks a second row.
-	if len(s.Targets) > 1 && s.Count <= 1 {
+	// With Targets set, their length is the arity and Count is ignored; a
+	// Count that says something else is a screen computing the selection
+	// twice and getting two answers.
+	if len(s.Targets) > 0 && s.Count != 0 && s.Count != len(s.Targets) {
 		errs = append(errs, fmt.Errorf(
-			"set: %d Targets but Count is %d; the arity gate reads Count",
-			len(s.Targets), s.Count))
+			"set: Count is %d but there are %d Targets; leave Count unset when Targets is set",
+			s.Count, len(s.Targets)))
 	}
 
 	for i, a := range s.Actions {

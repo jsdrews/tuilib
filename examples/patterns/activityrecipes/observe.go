@@ -32,6 +32,7 @@ import (
 //   - The reply goes in with ApplyRead, which drops it if a newer one has
 //     already landed. If a fetch fails, rows the last good read called busy
 //     turn to a static "?" and ReadsFailing goes true until one succeeds.
+//     The title shows that and "refreshed Ns ago" side by side (titleText).
 //   - Revision (optional) names a value that moves when an operation
 //     finishes, so a sync that ends where it began still reads as done.
 
@@ -92,7 +93,32 @@ func (s *observe) SetTheme(t theme.Theme) {
 	_ = s.table.SetActivityState(act)
 }
 
-func (s *observe) Init() tea.Cmd { return tea.Batch(s.poll.Init(), s.fetch()) }
+func (s *observe) Init() tea.Cmd { return tea.Batch(s.poll.Init(), s.fetch(), s.tick()) }
+
+// titleTickMsg re-renders the title once a second so "refreshed Ns ago"
+// counts. It names its screen because a tab host delivers ticks to every tab,
+// and a body re-arming on another body's tick would double its chain.
+type titleTickMsg struct{ s *observe }
+
+func (s *observe) tick() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return titleTickMsg{s} })
+}
+
+// titleText says two different things, and an outage needs both: whether
+// reads are failing, and how stale the rows are. "refreshed Ns ago" counts
+// from the last read that landed (poll.LastRefresh), so it keeps climbing
+// through an outage — which is when it matters most. Don't swap one for the
+// other.
+func (s *observe) titleText() string {
+	title := s.title
+	if s.table.ReadsFailing() {
+		title += " · reads failing"
+	}
+	if last := s.poll.LastRefresh(); !last.IsZero() {
+		title += fmt.Sprintf(" · refreshed %ds ago", int(time.Since(last).Seconds()))
+	}
+	return title
+}
 
 func (s *observe) fetch() tea.Cmd {
 	api, rd := s.api, s.table.BeginRead()
@@ -124,14 +150,20 @@ func (s *observe) update(msg tea.Msg) tea.Cmd {
 		for i, a := range m.apps {
 			rows[i] = table.KeyedRow{Key: a.ID, Cells: []string{a.Name, a.Sync, a.Health}, Data: a}
 		}
-		if !s.table.ApplyRead(m.read, rows, m.err) && m.err != nil {
+		wasFailing := s.table.ReadsFailing()
+		if s.table.ApplyRead(m.read, rows, m.err) {
+			s.poll.MarkRefreshed()
+		} else if m.err != nil && !wasFailing {
+			// Once, when reads start failing — not on every poll into the
+			// outage. The title says it for as long as it lasts.
 			cmds = append(cmds, app.ErrorOf(m.err))
 		}
-		title := s.title
-		if s.table.ReadsFailing() {
-			title += " · reads failing"
+		s.table.SetTitle(s.titleText())
+	case titleTickMsg:
+		if m.s == s {
+			s.table.SetTitle(s.titleText())
+			cmds = append(cmds, s.tick())
 		}
-		s.table.SetTitle(title)
 	}
 	var cmd tea.Cmd
 	s.table, cmd = s.table.Update(msg)

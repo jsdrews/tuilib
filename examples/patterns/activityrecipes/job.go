@@ -39,23 +39,18 @@ func (s *jobRecipe) Actions() action.Set {
 	return action.Set{
 		Targets: keys,
 		Actions: []action.Action{
-			{Label: "Sync and wait", Do: func() tea.Cmd { return s.syncAndWait(keys, "") }},
-			{Label: "Sync (dropped)", Desc: "accepted, never run", Do: func() tea.Cmd { return s.syncAndWait(keys, "?blackhole=1") }},
+			{Label: "Sync and wait", Multi: true, Do: func() tea.Cmd { return s.syncAndWait(keys, "") }},
+			{Label: "Sync (dropped)", Desc: "accepted, never run", Multi: true, Do: func() tea.Cmd { return s.syncAndWait(keys, "?blackhole=1") }},
 		},
 	}
 }
 
 func (s *jobRecipe) syncAndWait(keys []string, query string) tea.Cmd {
-	op, spin := s.table.Dispatch(keys, demoapi.PhaseRunning, activity.Held)
 	api := s.api
-	return tea.Batch(spin, func() tea.Msg {
-		for _, k := range keys {
-			if err := runJob(api, k, query); err != nil {
-				return jobDoneMsg{op, err}
-			}
-		}
-		return jobDoneMsg{op, nil}
-	})
+	return s.table.DispatchEach(keys, demoapi.PhaseRunning, activity.Held,
+		func(op activity.Op, k string) tea.Cmd {
+			return func() tea.Msg { return jobDoneMsg{op, runJob(api, k, query)} }
+		})
 }
 
 // runJob starts a sync and waits on its handle until it finishes.
@@ -97,10 +92,11 @@ func runJob(api demoapi.Target, app, query string) error {
 func (s *jobRecipe) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmd tea.Cmd
 	if m, ok := msg.(jobDoneMsg); ok {
-		s.table.Done(m.op, m.err)
-		cmd = app.Info("Sync finished")
-		if m.err != nil {
+		switch s.table.Done(m.op, m.err) {
+		case activity.Withdrawn:
 			cmd = app.ErrorOf(m.err)
+		case activity.Ended:
+			cmd = app.Info("Sync finished")
 		}
 	}
 	return s, tea.Batch(cmd, s.update(msg))

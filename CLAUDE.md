@@ -863,10 +863,25 @@ example in `examples/`.
     }
 
     case fetchedMsg:
-        if !s.table.ApplyRead(m.read, rowsOf(m.apps), m.err) {
-            break // overtaken by a newer reply, or failed
+        wasFailing := s.table.ReadsFailing()
+        if s.table.ApplyRead(m.read, rowsOf(m.apps), m.err) {
+            s.poll.MarkRefreshed()           // rule 24: only on a read that landed
+        } else if m.err != nil && !wasFailing {
+            return s, app.ErrorOf(m.err)     // once, when reads start failing
         }
     ```
+
+    Report an outage once, on the transition into failing, and let
+    `ReadsFailing()` carry it on the title after that. Posting the error on
+    every failed poll puts a fresh error on the statusbar every interval for
+    as long as the server is down.
+
+    `ReadsFailing()` and `poll.LastRefresh()` answer different questions, so
+    a title that shows one should usually show both: "reads failing" says the
+    rows can't be refreshed, and "refreshed Ns ago" says how stale they are.
+    The second counts from the last read that landed, so it keeps climbing
+    through an outage, which is exactly when it matters. Don't swap one for
+    the other; re-render the title on a one-second tick so N moves.
 
     `ApplyRead` is `SetKeyedRows` with ordering: it drops a reply overtaken by
     a newer one, withdraws spinners that were waiting on a read when one fails
@@ -886,19 +901,44 @@ example in `examples/`.
     ```go
     Actions: []action.Action{{
         Label: "Sync",
+        Multi: true,                        // acts on every marked row
         Do: func() tea.Cmd {
-            op, spin := s.table.Dispatch(keys, "Running", activity.Observed)
-            return tea.Batch(spin, s.postSync(op, keys))   // replies answeredMsg{op, err}
+            // One operation per row; postSync replies answeredMsg{op, err}.
+            return s.table.DispatchEach(keys, "Running", activity.Observed, s.postSync)
         },
     }}
 
     case answeredMsg:
-        s.table.Done(m.op, m.err)       // err withdraws; nil acknowledges (Observed) or ends (Held)
-        if m.err != nil { return s, app.ErrorOf(m.err) }
-        return s, app.Info("Sync requested")
+        switch s.table.Done(m.op, m.err) {
+        case activity.Withdrawn:    // the request failed
+            return s, app.ErrorOf(m.err)
+        case activity.Acknowledged: // Observed: accepted, still running
+            return s, app.Info("Sync requested")
+        case activity.Ended:        // Held: the work is over
+            return s, app.Info("Refresh finished")
+        }
     case activity.UnobservedMsg:
-        return s, app.Info(m.Label + " finished between polls")
+        return s, app.Info("Sync finished between polls")
     ```
+
+    **Switch on what `Done` returns; don't assume.** After an `Observed`
+    request answers, the work has only been accepted (`Acknowledged`); after a
+    `Held` one it is over (`Ended`). A reply handler shared by both kinds of
+    verb that says "completed" on every reply is wrong for the Observed ones,
+    and nothing else will tell you.
+
+    **Dispatch one operation per row** — `DispatchEach(keys, label, mode,
+    request)` does it, calling `request(op, key)` for each row's command — and
+    call `Done` per row with that row's result. One operation over the whole
+    selection puts every row behind the first refusal: a 409 on one row would
+    stop all the others' spinners while their work is still running. A single
+    request that acts on the whole selection at once is the only case for
+    `Dispatch` over several keys. A verb that runs on a multi-selection also
+    needs `Multi: true`: the menu disables anything else once more than one
+    row is marked (`action.Set.Arity()`, which is `len(Targets)`).
+
+    **`UnobservedMsg.Label` is the claim's label**, usually `"Running"`, not the
+    verb. `m.Label + " finished"` reads "Running finished". Name the verb.
 
     An `Observed` spinner ends when a read taken after `Done` reports the work
     over, or after `Options.Activity.Settle` reads that repeat the pre-dispatch
@@ -940,9 +980,10 @@ example in `examples/`.
     the component re-arms a stalled spinner on the next message it receives.
 
     **`UnobservedMsg` and every other activity message arrive through the
-    component's `Update`**, not from `ApplyRead` or `Done`, which are setters
-    and return nothing. Forward every message to the component (rule 6) and
-    match `activity.UnobservedMsg` in your screen's `Update`.
+    component's `Update`**, on the turn after the read that ended the claim —
+    `ApplyRead` returns only whether it applied the read. Forward every
+    message to the component (rule 6) and match `activity.UnobservedMsg` in
+    your screen's `Update`.
 
     Rows must be keyed (`SetKeyedRows`); on anonymous rows and under
     `SetWindow` activity is inert.
@@ -953,6 +994,10 @@ example in `examples/`.
     it is the read path (a doubled poll chain, mixed `SetRows`/`SetKeyedRows`,
     a component rebuilt per fetch, or a replica that goes backwards — which no
     client repairs).
+
+    Code written against the first surface (`ActivityWhen`, `SetBusy`,
+    `Expect`, the screen-side generation counters) moves over call by call:
+    see "Migrating from the first API" in `docs/activity-guide.md`.
 
     See `examples/patterns/activityrecipes` (one shape per tab, each small
     enough to copy), `examples/patterns/activity` (all of it on one screen), and

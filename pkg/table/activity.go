@@ -189,11 +189,33 @@ func (m *Model) Dispatch(keys []string, label string, mode activity.Mode) (activ
 	return op, cmd
 }
 
-// Done reports that op's request answered. An error withdraws the claim; nil
-// ends a Held operation and acknowledges an Observed one.
-func (m *Model) Done(op activity.Op, err error) {
-	m.act.Done(op, err)
+// DispatchEach opens one operation per key and runs request for each, so the
+// server refusing one row stops that row alone. It is the per-row loop every
+// verb over a selection needs: Dispatch([]string{key}, …) per key, the
+// request's command per key, all batched with the spinner's first tick.
+//
+// request returns the command that performs the work for one key and replies
+// with a message carrying op, which the screen hands to Done. Use Dispatch
+// directly only when one request acts on several keys at once.
+func (m *Model) DispatchEach(keys []string, label string, mode activity.Mode,
+	request func(op activity.Op, key string) tea.Cmd) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 2*len(keys))
+	for _, k := range keys {
+		op, spin := m.Dispatch([]string{k}, label, mode)
+		cmds = append(cmds, spin, request(op, k))
+	}
+	return tea.Batch(cmds...)
+}
+
+// Done reports that op's request answered, and returns what that means:
+// activity.Acknowledged (an Observed request answered; the work is still
+// running, so say "requested"), activity.Ended (a Held request answered; the
+// work is over) or activity.Withdrawn (it failed; report the error). Switch on
+// it when writing the reply's message, rather than assuming the work is done.
+func (m *Model) Done(op activity.Op, err error) activity.Outcome {
+	out := m.act.Done(op, err)
 	m.refresh()
+	return out
 }
 
 // BeginRead stamps a fetch at the moment it is issued. Carry the token on the

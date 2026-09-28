@@ -1,7 +1,6 @@
 package activityrecipes
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
@@ -20,8 +19,9 @@ import (
 // Argo's sync POST answers at once, and then the controller does the work.
 // The server's phase says when the work ends, so the spinner does this:
 //
-//   - Dispatch starts it the moment the user asks.
-//   - Done marks the POST as answered.
+//   - Dispatch starts it the moment the user asks, one operation per row.
+//   - Done marks the POST as answered, and returns Acknowledged: accepted,
+//     still running.
 //   - After that, the polled phase takes over.
 //
 // A sync that finishes between two polls never shows as Running. The table
@@ -42,46 +42,47 @@ func (s *syncRecipe) Actions() action.Set {
 	return action.Set{
 		Targets: keys,
 		Actions: []action.Action{
-			{Label: "Sync", Do: func() tea.Cmd { return s.sync(keys, "") }},
-			{Label: "Quick sync", Desc: "done before the next poll", Do: func() tea.Cmd { return s.sync(keys, "?takes=300ms") }},
+			// Multi: the verbs act on every marked row, one operation each.
+			{Label: "Sync", Multi: true, Do: func() tea.Cmd { return s.sync(keys, "") }},
+			{Label: "Quick sync", Desc: "done before the next poll", Multi: true, Do: func() tea.Cmd { return s.sync(keys, "?takes=300ms") }},
 		},
 	}
 }
 
 func (s *syncRecipe) sync(keys []string, query string) tea.Cmd {
-	op, spin := s.table.Dispatch(keys, demoapi.PhaseRunning, activity.Observed)
 	api := s.api
-	// Every key is asked, even after one is refused: stopping at the first
-	// failure would withdraw the spinners of apps that were never tried.
-	return tea.Batch(spin, func() tea.Msg {
-		var errs []error
-		for _, k := range keys {
-			resp, err := api.Client.Post(api.URL("/apps/"+k+"/sync"+query), "", nil)
-			if err != nil {
-				errs = append(errs, err)
-				continue
+	// One operation per row: a 409 on one row stops that row alone.
+	return s.table.DispatchEach(keys, demoapi.PhaseRunning, activity.Observed,
+		func(op activity.Op, k string) tea.Cmd {
+			return func() tea.Msg {
+				resp, err := api.Client.Post(api.URL("/apps/"+k+"/sync"+query), "", nil)
+				if err != nil {
+					return answeredMsg{op, err}
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusAccepted {
+					return answeredMsg{op, fmt.Errorf("sync %s: %s", k, resp.Status)}
+				}
+				return answeredMsg{op, nil}
 			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusAccepted {
-				errs = append(errs, fmt.Errorf("sync %s: %s", k, resp.Status))
-			}
-		}
-		return answeredMsg{op, errors.Join(errs...)}
-	})
+		})
 }
 
 func (s *syncRecipe) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m := msg.(type) {
 	case answeredMsg:
-		s.table.Done(m.op, m.err)
-		// A Do verb gets no shell receipt (that is Run's), so say it here —
-		// "requested", because the 202 is not the work finishing.
-		cmd = app.Info("Sync requested")
-		if m.err != nil {
+		// Done says what the reply means. For an Observed verb it is
+		// Acknowledged: the server has the work and the row keeps spinning,
+		// so this says "requested", never "completed".
+		switch s.table.Done(m.op, m.err) {
+		case activity.Withdrawn:
 			cmd = app.ErrorOf(m.err)
+		case activity.Acknowledged:
+			cmd = app.Info("Sync requested")
 		}
 	case activity.UnobservedMsg:
+		// Name the verb here: m.Label is the claim's label, "Running".
 		cmd = app.Info("Sync done between polls")
 	}
 	return s, tea.Batch(cmd, s.update(msg))

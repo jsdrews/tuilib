@@ -52,6 +52,11 @@ var opSeq atomic.Uint64
 // UnobservedMsg reports an Observed operation's keys that ended without any
 // read ever reporting them busy.
 //
+// Label is the claim's label as passed to Dispatch — usually the server's
+// word for work in progress, "Running" — not the name of the verb, so
+// m.Label+" finished" reads "Running finished". Name the verb yourself, from
+// Op if the screen has several.
+//
 // The work finished between two reads, was a no-op, or never started — from
 // the rows alone these are the same, which is why this is a message and not
 // an indicator.
@@ -95,7 +100,43 @@ func (s *Set) Dispatch(keys []string, label string, mode Mode) (Op, tea.Cmd) {
 	return op, s.armTick()
 }
 
-// Done reports that op's request answered.
+// Outcome is what Done did to an operation — and so what the screen may tell
+// the user when the reply arrives.
+//
+// Done means different things by Mode, which is why it says which: after an
+// Observed request answers, the work has only been accepted and is still
+// running; after a Held one, it is over. A screen with both kinds of verb that
+// writes "completed" on every reply is wrong for half of them, and nothing
+// else would tell it so.
+type Outcome int
+
+const (
+	// Acknowledged: an Observed request answered. The server has the work and
+	// the row keeps spinning until reads say it finished. Say "requested",
+	// never "completed".
+	Acknowledged Outcome = iota
+
+	// Ended: a Held request answered, so the work is over. "Completed" is
+	// true now.
+	Ended
+
+	// Withdrawn: the request failed, so nothing is coming and the claim is
+	// gone. Report the error.
+	Withdrawn
+)
+
+func (o Outcome) String() string {
+	switch o {
+	case Acknowledged:
+		return "acknowledged"
+	case Ended:
+		return "ended"
+	default:
+		return "withdrawn"
+	}
+}
+
+// Done reports that op's request answered, and returns what that means.
 //
 // An error withdraws the claim: the server refused, so nothing is coming. A
 // Held operation ends here. An Observed one is acknowledged, and from now on
@@ -103,7 +144,7 @@ func (s *Set) Dispatch(keys []string, label string, mode Mode) (Op, tea.Cmd) {
 //
 // Only the claims op itself made are touched, so a key re-dispatched since is
 // left to its newer operation.
-func (s *Set) Done(op Op, err error) {
+func (s *Set) Done(op Op, err error) Outcome {
 	s.clock++
 	for _, k := range op.Keys {
 		c, ok := s.expected[k]
@@ -116,6 +157,14 @@ func (s *Set) Done(op Op, err error) {
 		}
 		c.acked, c.ackAt = true, s.clock
 		s.expected[k] = c
+	}
+	switch {
+	case err != nil:
+		return Withdrawn
+	case op.Mode == Held:
+		return Ended
+	default:
+		return Acknowledged
 	}
 }
 

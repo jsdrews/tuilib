@@ -74,12 +74,18 @@ case fetchedMsg:
     for i, a := range m.apps {
         rows[i] = table.KeyedRow{Key: a.ID, Cells: []string{a.Name, a.Sync, a.Health}, Data: a}
     }
-    if !s.table.ApplyRead(m.read, rows, m.err) && m.err != nil {
-        return s, app.ErrorOf(m.err)
+    wasFailing := s.table.ReadsFailing()
+    if s.table.ApplyRead(m.read, rows, m.err) {
+        s.poll.MarkRefreshed()           // only a read that landed counts
+    } else if m.err != nil && !wasFailing {
+        return s, app.ErrorOf(m.err)     // once, when reads start failing
     }
 ```
 
-Drive `fetch` from a `pkg/poll` tick (rule 24).
+Drive `fetch` from a `pkg/poll` tick (rule 24). Report an outage once, when
+reads start failing, and let `ReadsFailing()` carry it on the title after that.
+Posting the error on every failed poll puts a fresh error on the statusbar
+every interval for as long as the server is down.
 
 **Choosing the field for `BusyWhen`.** It has to be a field that says
 "working" *while the work runs*. It doesn't have to be a column: it's read from
@@ -116,7 +122,9 @@ when the request answers.
 func (s *Screen) Actions() action.Set {
     keys := s.table.Selection()
     return action.Set{Targets: keys, Actions: []action.Action{
-        {Label: "Sync", Do: func() tea.Cmd { return s.sync(keys) }},
+        // Multi: without it the menu disables the verb once a second row is
+        // marked (action.Set.Arity is len(Targets)).
+        {Label: "Sync", Multi: true, Do: func() tea.Cmd { return s.sync(keys) }},
     }}
 }
 
@@ -126,26 +134,45 @@ type answeredMsg struct {
 }
 
 func (s *Screen) sync(keys []string) tea.Cmd {
-    op, spin := s.table.Dispatch(keys, "Running", activity.Observed)
-    return tea.Batch(spin, func() tea.Msg {
-        return answeredMsg{op, s.client.Sync(keys)}   // 202 = nil error
-    })
+    // One operation per row: DispatchEach calls this once per key.
+    return s.table.DispatchEach(keys, "Running", activity.Observed,
+        func(op activity.Op, k string) tea.Cmd {
+            return func() tea.Msg { return answeredMsg{op, s.client.Sync(k)} }   // 202 = nil error
+        })
 }
 
 case answeredMsg:
-    s.table.Done(m.op, m.err)   // error: the spinner stops; nil: polls take over
-    if m.err != nil { return s, app.ErrorOf(m.err) }
-    return s, app.Info("Sync requested")   // not "completed": the work has only started
+    switch s.table.Done(m.op, m.err) {
+    case activity.Withdrawn:     // refused: this row stops
+        return s, app.ErrorOf(m.err)
+    case activity.Acknowledged:  // accepted: still running, polls take over
+        return s, app.Info("Sync requested")
+    }
 case activity.UnobservedMsg:
     return s, app.Info("Sync finished between polls")
 ```
+
+**`Done` tells you what the reply means.** It returns `activity.Acknowledged`
+for an Observed verb (the work has only started, so say "requested"),
+`activity.Ended` for a Held one (the work is over), and `activity.Withdrawn`
+when the request failed. Switch on it. A reply handler shared by a sync and a
+refresh that says "completed" on every reply is wrong for the sync, and nothing
+else will tell you.
+
+**One operation per row.** `DispatchEach` gives each row its own operation
+and its own request, so each gets its own `Done`. If one row's request is
+refused, only that row stops. One operation over the whole selection puts every
+row behind the first refusal; use `Dispatch` with several keys only when a
+single request acts on all of them.
 
 A `Do` verb gets no receipt from the shell (`Action.Receipt` applies only to
 `Run` verbs), so post "requested" yourself, as above.
 
 `UnobservedMsg` arrives through the table's `Update`, on the turn after the read
-that ended the claim. `ApplyRead` and `Done` are setters and return nothing.
-Forward every message to the table (rule 6) and match it in your `Update`.
+that ended the claim. Forward every message to the table (rule 6) and match it
+in your `Update`. Its `Label` is the claim's label (`"Running"`), not the
+verb, so name the verb yourself: `m.Label + " finished"` reads "Running
+finished".
 
 Claim with the server's own word (`"Running"`), so the row reads the same from
 the keypress to the poll that confirms it.
@@ -154,15 +181,19 @@ the keypress to the poll that confirms it.
 
 ```go
 func (s *Screen) refresh(keys []string) tea.Cmd {
-    op, spin := s.table.Dispatch(keys, "Refreshing", activity.Held)
-    return tea.Batch(spin, func() tea.Msg {
-        return refreshedMsg{op, s.client.Refresh(keys)}   // blocks ~2s
-    })
+    return s.table.DispatchEach(keys, "Refreshing", activity.Held,
+        func(op activity.Op, k string) tea.Cmd {
+            return func() tea.Msg { return refreshedMsg{op, s.client.Refresh(k)} }   // blocks ~2s
+        })
 }
 
 case refreshedMsg:
-    s.table.Done(m.op, m.err)   // the spinner ends here, not at a poll
-    return s, s.poll.Refresh()  // show what the refresh found now
+    switch s.table.Done(m.op, m.err) {   // the spinner ends here, not at a poll
+    case activity.Withdrawn:
+        return s, app.ErrorOf(m.err)
+    case activity.Ended:
+        return s, s.poll.Refresh()       // show what the refresh found now
+    }
 ```
 
 ### Held: a job handle
@@ -179,6 +210,29 @@ return tea.Batch(spin, func() tea.Msg {
     return jobDoneMsg{op, err}
 })
 ```
+
+## The title during an outage
+
+`ReadsFailing()` and `poll.LastRefresh()` answer different questions, so show
+both. "reads failing" says the rows can't be refreshed; "refreshed Ns ago" says
+how stale they are. The count comes from the last read that landed, so it keeps
+climbing through an outage, which is when the user needs it most.
+
+```go
+func (s *Screen) titleText() string {
+    title := "applications"
+    if s.table.ReadsFailing() {
+        title += " · reads failing"
+    }
+    if last := s.poll.LastRefresh(); !last.IsZero() {
+        title += fmt.Sprintf(" · refreshed %ds ago", int(time.Since(last).Seconds()))
+    }
+    return title
+}
+```
+
+Call `SetTitle(s.titleText())` after every read and on a one-second `tea.Tick`,
+so N moves between polls.
 
 ## Theme swaps
 
@@ -230,7 +284,8 @@ shows the row's own value, which already says `Failed` in your app's colours.
 | | |
 |---|---|
 | `table.Dispatch(keys, label, mode) (activity.Op, tea.Cmd)` | start a claim; batch the returned command (it's the spinner's first tick) |
-| `table.Done(op, err)` | the request answered |
+| `table.DispatchEach(keys, label, mode, request) tea.Cmd` | one operation per key; `request(op, key)` returns that key's command |
+| `table.Done(op, err) activity.Outcome` | the request answered; returns `Acknowledged` (Observed: still running), `Ended` (Held: over) or `Withdrawn` (failed) |
 | `table.BeginRead() activity.Read` | stamp a fetch when it is issued |
 | `table.ApplyRead(rd, rows, err) bool` | apply a reply; false means it was dropped (stale or failed) |
 | `table.SetKeyedRows(rows)` | apply a *stream* event (watch/SSE); no token needed |
@@ -274,6 +329,12 @@ You don't need to write any of this:
 | A quick sync looks ignored | handle `activity.UnobservedMsg`; set `Revision` if the status ends where it began |
 | The spinner shows `⣾` with no word | the activity column is too narrow for the label; give it a `Width` |
 | The table blanks during an outage | the fetch decoded an error body as an empty list; check the HTTP status and return an error |
+| The statusbar says "completed" while the row still spins | the reply handler ignores what `Done` returns; switch on it (`Acknowledged` is not finished) |
+| One refused row stops every marked row's spinner | the selection was dispatched as one operation; dispatch one per row |
+| An outage posts an error every poll | post only when `ReadsFailing()` goes from false to true |
+| The menu says "one item at a time" with rows marked | the verb lacks `Multi: true`; a set with several `Targets` is a multi-selection |
+| "refreshed Ns ago" vanishes during an outage | the title shows "reads failing" *instead of* the freshness count; show both |
+| "Running finished between polls" | `UnobservedMsg.Label` is the claim's label; name the verb yourself |
 
 ## List and tree
 
@@ -304,6 +365,100 @@ o.BusyWhen = func(n tree.Node) (string, bool) {
 
 A tree evaluates every node, collapsed ones included, so expanding a branch
 reveals a spinner that is already turning.
+
+## Migrating from the first API
+
+The first version of this feature had the screen keep the read ordering itself
+(generation counters, a count of outstanding writes, `RetractAll` on a failed
+read) and offered two entrances (`ActivityWhen` or `SetBusy`). All of that is
+gone. Screens written against it will not compile until they move over. Most
+moves are mechanical.
+
+### Call by call
+
+| Before | Now | Notes |
+|---|---|---|
+| `Options.ActivityWhen func(Row) (label, busy)` (table) | `Options.BusyWhen func(KeyedRow) (status, busy)` | Reads the whole keyed row, `Data` included, so the field that means "working" needn't be a column. Return the status for **every** row, not only busy ones. |
+| `Options.ActivityWhen func(string) (label, busy)` (list) | `Options.BusyWhen func(KeyedItem) (status, busy)` | `KeyedItem` gained `Data`. |
+| `Options.ActivityWhen func(Node) (label, busy)` (tree) | `Options.BusyWhen func(Node) (status, busy)` | Same argument; the status now also ends claims when it changes. |
+| `SetBusy(map[key]label)` | put the busy-ness in each row's `Data` and read it in `BusyWhen` | One entrance. The screen keeps the map (e.g. from `GET /jobs?status=running`) and folds it into the rows it pushes. |
+| `Expect(keys, label)` | `DispatchEach(keys, label, mode, request)`, or `Dispatch(keys, label, mode)` | Choose `activity.Observed` (the server's status says when the work ends) or `activity.Held` (the request, or a job it returned, does). One operation per row unless a single request acts on all the keys. |
+| `Retract(keys...)` after a refused write | `Done(op, err)` with the error | Returns `activity.Withdrawn`. |
+| a successful write's reply (nothing to call before) | `Done(op, nil)` | **Required now.** Without it an Observed claim is never acknowledged and a Held one never ends. It returns `Acknowledged` (Observed: accepted, still running) or `Ended` (Held: over), so switch on it when writing the reply's message. |
+| `RetractAll()` after a failed read | `ApplyRead(rd, nil, err)` | Withdraws the claims waiting on a read and marks observed work `Unknown`. |
+| `s.gen++` / `if m.gen < s.seen \|\| s.writing > 0 { drop }` / `SetKeyedRows(rows)` | `rd := BeginRead()` when the fetch is issued, `ApplyRead(rd, rows, err)` when it lands | Delete the `gen`, `seen` and `writing` fields and the `claimed` map. A watch/SSE stream still uses plain `SetKeyedRows`. |
+| `Options.Activity.Settle` compared the `ActivityColumn` cell | `Settle` compares `BusyWhen`'s status (plus `Revision`) | Behaviour only. Set `Options.Revision` if a quick operation can end at the status it started from. |
+| `activity.Busy` / `Settled` returned `""` for a non-busy value | they return the value either way | Only matters if you compared the returned label to `""`. |
+| `action.Set{Targets: keys}` with verbs lacking `Multi` | add `Multi: true` to verbs that act on several rows | The menu now counts `len(Targets)` (`Set.Arity`). A set with several `Targets` used to read as one target, so non-Multi verbs ran on every marked row. They are now disabled with "one item at a time". |
+| `action.Set.Count` | optional when `Targets` is set | `Validate` now flags a `Count` that disagrees with `Targets`, not a missing one. |
+| `activity.Set.Derive` / `Observe` / `Expect` / `Retract` / `RetractAll` / `Scope` / `Expecting` | removed | Only code that drove a `Set` directly is affected; screens go through their component. `Set.Dispatch` no longer takes an `at` map. |
+
+New, with nothing to replace: `Options.Revision`, `ReadsFailing()`,
+`activity.UnobservedMsg`, `KeyedRows()` / `KeyedItems()` / `Root()`, and the
+`Unknown` state rows take on while reads fail.
+
+### Before and after
+
+A polled table with one Sync verb. Before:
+
+```go
+o.ActivityColumn = "Sync"
+settled := activity.Settled("Synced", "OutOfSync")
+o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
+
+case action.ChosenMsg:
+    s.gen++; s.writing++
+    s.claimed[action.RunKey(m.Action, m.Target)] = m.Targets
+    cmds = append(cmds, s.table.Expect(m.Targets, "Syncing"))
+case runner.Captured:
+    s.writing--; s.gen++
+    if m.Err != nil { s.table.Retract(s.claimed[m.Tag]...) }
+case fetchedMsg:
+    if m.gen < s.seen || s.writing > 0 { break }
+    s.seen = m.gen
+    if m.err != nil { s.table.RetractAll(); break }
+    s.table.SetKeyedRows(rowsOf(m.apps))
+```
+
+After:
+
+```go
+o.ActivityColumn = "Sync"
+o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+    phase := r.Data.(argoApp).Phase           // what is busy while work runs
+    return phase, phase == "Running"
+}
+o.Revision = func(r table.KeyedRow) string { return r.Data.(argoApp).FinishedAt }
+
+// the verb: {Label: "Sync", Multi: true, Do: func() tea.Cmd { return s.sync(keys) }}
+func (s *Screen) sync(keys []string) tea.Cmd {
+    return s.table.DispatchEach(keys, "Running", activity.Observed,
+        func(op activity.Op, k string) tea.Cmd {
+            return func() tea.Msg { return answeredMsg{op, s.client.Sync(k)} }
+        })
+}
+
+case answeredMsg:
+    switch s.table.Done(m.op, m.err) {
+    case activity.Withdrawn:    return s, app.ErrorOf(m.err)
+    case activity.Acknowledged: return s, app.Info("Sync requested")
+    }
+case activity.UnobservedMsg:
+    return s, app.Info("Sync finished between polls")
+case fetchedMsg:
+    wasFailing := s.table.ReadsFailing()
+    if s.table.ApplyRead(m.read, rowsOf(m.apps), m.err) {
+        s.poll.MarkRefreshed()
+    } else if m.err != nil && !wasFailing {
+        return s, app.ErrorOf(m.err)
+    }
+```
+
+**Check the predicate, not just the calls.** If the old `ActivityWhen` watched
+a status that never says "working" while the work runs, such as Argo's
+`sync.status`, a mechanical port keeps the bug: no row will ever spin. Point
+`BusyWhen` at the field that is busy during the work
+(`status.operationState.phase` for Argo). See Step 1.
 
 ## Examples
 

@@ -33,35 +33,38 @@ func (s *refreshRecipe) Actions() action.Set {
 	keys := s.selection()
 	return action.Set{
 		Targets: keys,
-		Actions: []action.Action{{Label: "Refresh", Do: func() tea.Cmd { return s.refresh(keys) }}},
+		Actions: []action.Action{{Label: "Refresh", Multi: true, Do: func() tea.Cmd { return s.refresh(keys) }}},
 	}
 }
 
 func (s *refreshRecipe) refresh(keys []string) tea.Cmd {
-	op, spin := s.table.Dispatch(keys, "Refreshing", activity.Held)
 	api := s.api
-	return tea.Batch(spin, func() tea.Msg {
-		for _, k := range keys {
-			resp, err := api.Client.Get(api.URL("/apps/" + k + "?refresh=normal"))
-			if err != nil {
-				return refreshedMsg{op, err}
+	return s.table.DispatchEach(keys, "Refreshing", activity.Held,
+		func(op activity.Op, k string) tea.Cmd {
+			return func() tea.Msg {
+				resp, err := api.Client.Get(api.URL("/apps/" + k + "?refresh=normal"))
+				if err != nil {
+					return refreshedMsg{op, err}
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					return refreshedMsg{op, fmt.Errorf("refresh %s: %s", k, resp.Status)}
+				}
+				return refreshedMsg{op, nil}
 			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				return refreshedMsg{op, fmt.Errorf("refresh %s: %s", k, resp.Status)}
-			}
-		}
-		return refreshedMsg{op, nil}
-	})
+		})
 }
 
 func (s *refreshRecipe) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	var cmd tea.Cmd
 	if m, ok := msg.(refreshedMsg); ok {
-		s.table.Done(m.op, m.err)
-		cmd = s.poll.Refresh() // show what the refresh found now, not in a poll
-		if m.err != nil {
+		// For a Held verb Done returns Ended: the request answering is the
+		// work finishing, so "finished" is true here — unlike a sync's reply.
+		switch s.table.Done(m.op, m.err) {
+		case activity.Withdrawn:
 			cmd = app.ErrorOf(m.err)
+		case activity.Ended:
+			cmd = s.poll.Refresh() // show what the refresh found now, not in a poll
 		}
 	}
 	return s, tea.Batch(cmd, s.update(msg))
