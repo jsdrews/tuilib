@@ -10,8 +10,11 @@
 package componenttest
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -34,57 +37,99 @@ type claimable interface {
 
 // --- the three components, configured with an allowance ------------------
 
-type listClaim struct{ listDerive }
+// Every component speaks the operation API. An acknowledged Observed
+// dispatch is the claim this contract is about — ended by the observations
+// that follow — and one operation per key lets a single key be refused on its
+// own.
+type listClaim struct {
+	listDerive
+	ops map[string]activity.Op
+}
 
 func newListClaim(settle int) claimable {
 	o := theme.Dark().List()
-	o.ActivityWhen = lastField("running", "pending")
+	o.BusyWhen = listBusyWhen
 	o.Activity.Settle = settle
-	d := &listClaim{}
+	d := &listClaim{ops: map[string]activity.Op{}}
 	d.m = list.New(o)
 	d.observe(statusOf(nil))
 	return d
 }
 
-func (d *listClaim) expect(keys []string, label string) { d.m.Expect(keys, label) }
-func (d *listClaim) retract(keys ...string)             { d.m.Retract(keys...) }
-func (d *listClaim) retractAll()                        { d.m.RetractAll() }
-
-type tableClaim struct{ tableDerive }
+func (d *listClaim) expect(keys []string, label string) {
+	for _, k := range keys {
+		d.ops[k] = dispatched(&d.m, k, label)
+	}
+}
+func (d *listClaim) retract(keys ...string) {
+	for _, k := range keys {
+		d.m.Done(d.ops[k], errRefused)
+	}
+}
+func (d *listClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefused) }
 
 func newTableClaim(settle int) claimable {
 	o := theme.Dark().Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
 	o.Activity.Settle = settle
-	o.ActivityWhen = func(c table.Row) (string, bool) {
-		return activity.Busy("running", "pending")(c[1])
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		return activity.Busy("running", "pending")(r.Cells[1])
 	}
-	d := &tableClaim{}
+	d := &tableClaim{ops: map[string]activity.Op{}}
 	d.m = table.New(o)
 	d.observe(statusOf(nil))
 	return d
 }
 
-func (d *tableClaim) expect(keys []string, label string) { d.m.Expect(keys, label) }
-func (d *tableClaim) retract(keys ...string)             { d.m.Retract(keys...) }
-func (d *tableClaim) retractAll()                        { d.m.RetractAll() }
+// The table speaks the operation API, which has no Expect. An acknowledged
+// Observed dispatch is the same claim — ended by the observations that follow
+// — so the contract applies unchanged. One operation per key, so a single key
+// can be refused on its own the way Retract did it.
+type tableClaim struct {
+	tableDerive
+	ops map[string]activity.Op
+}
 
-type treeClaim struct{ treeDerive }
+func (d *tableClaim) expect(keys []string, label string) {
+	for _, k := range keys {
+		d.ops[k] = dispatched(&d.m, k, label)
+	}
+}
+func (d *tableClaim) retract(keys ...string) {
+	for _, k := range keys {
+		d.m.Done(d.ops[k], errRefused)
+	}
+}
+func (d *tableClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefused) }
+
+// dispatcher is the operation surface all three components share.
+type dispatcher interface {
+	Dispatch(keys []string, label string, mode activity.Mode) (activity.Op, tea.Cmd)
+	Done(op activity.Op, err error) activity.Outcome
+}
+
+// dispatched is an acknowledged Observed claim on one key.
+func dispatched(m dispatcher, key, label string) activity.Op {
+	op, _ := m.Dispatch([]string{key}, label, activity.Observed)
+	m.Done(op, nil)
+	return op
+}
+
+var errRefused = errors.New("refused")
+
+type treeClaim struct {
+	treeDerive
+	ops map[string]activity.Op
+}
 
 func newTreeClaim(settle int) claimable {
 	o := theme.Dark().Tree()
 	o.InitialDepth = 2
 	o.Root = derivedTree(statusOf(nil))
 	o.Activity.Settle = settle
-	o.ActivityWhen = func(n tree.Node) (string, bool) {
-		sn, ok := n.(statusNode)
-		if !ok {
-			return "", false
-		}
-		return activity.Busy("running", "pending")(sn.status)
-	}
-	d := &treeClaim{}
+	o.BusyWhen = treeBusyWhen
+	d := &treeClaim{ops: map[string]activity.Op{}}
 	d.m = tree.New(o)
 	d.setRect(placed())
 	return d
@@ -93,10 +138,16 @@ func newTreeClaim(settle int) claimable {
 // A tree addresses nodes by path; translate at the boundary the way treeDerive
 // does for reads.
 func (d *treeClaim) expect(keys []string, label string) {
-	d.m.Expect(d.paths(keys), label)
+	for _, k := range keys {
+		d.ops[k] = dispatched(&d.m, d.path(k), label)
+	}
 }
-func (d *treeClaim) retract(keys ...string) { d.m.Retract(d.paths(keys)...) }
-func (d *treeClaim) retractAll()            { d.m.RetractAll() }
+func (d *treeClaim) retract(keys ...string) {
+	for _, k := range keys {
+		d.m.Done(d.ops[k], errRefused)
+	}
+}
+func (d *treeClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefused) }
 func (d *treeClaim) paths(keys []string) []string {
 	out := make([]string, len(keys))
 	for i, k := range keys {
@@ -206,13 +257,13 @@ func TestAnUnconfirmedClaimAlwaysEnds(t *testing.T) {
 // is settled at a value it did not hold when the claim was made, so the server
 // demonstrably acted and there is nothing left to wait for.
 //
-// List and table only. A tree has no value to compare — a node's label is its
-// identity, so a label that changed is a different node rather than the same
-// one reporting something new. See the tree case below.
+// All three, the tree included: the value compared is the status BusyWhen
+// reports, not the node's label, so a tree can see it change too.
 func TestAChangedSettledValueRetiresAClaimWhateverTheAllowance(t *testing.T) {
 	for name, mk := range map[string]func(int) claimable{
 		"list":  newListClaim,
 		"table": newTableClaim,
+		"tree":  newTreeClaim,
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := mk(9)
@@ -223,19 +274,6 @@ func TestAChangedSettledValueRetiresAClaimWhateverTheAllowance(t *testing.T) {
 				t.Error("claim held past an observation proving the server had acted")
 			}
 		})
-	}
-}
-
-// The tree's exception, asserted rather than assumed — a reader finding two
-// components with a third ending and one without should find out here that it
-// is a consequence of identity rather than an omission.
-func TestATreeClaimEndsOnlyByConfirmationOrAllowance(t *testing.T) {
-	c := newTreeClaim(9)
-	c.expect([]string{"web"}, "Syncing")
-	c.observe(statusOf(map[string]string{"web": "failed"}))
-
-	if _, ok := c.state("web"); !ok {
-		t.Error("a tree retired a claim on a value change it cannot actually observe")
 	}
 }
 
@@ -313,11 +351,11 @@ func claim(t *testing.T, d derivable, key string) {
 	t.Helper()
 	switch c := d.(type) {
 	case *listDerive:
-		c.m.Expect([]string{key}, "Syncing")
+		dispatched(&c.m, key, "Syncing")
 	case *tableDerive:
-		c.m.Expect([]string{key}, "Syncing")
+		dispatched(&c.m, key, "Syncing")
 	case *treeDerive:
-		c.m.Expect([]string{c.path(key)}, "Syncing")
+		dispatched(&c.m, c.path(key), "Syncing")
 	default:
 		t.Fatalf("no Expect for %T", d)
 	}

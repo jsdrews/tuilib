@@ -1,9 +1,11 @@
-// The second entrance, asserted once across list, table and tree.
+// Busy-ness that is not a field on the row, asserted once across list, table
+// and tree.
 //
-// SetBusy is for busy-ness that is not a field on the row — an operations API,
-// a job status resource, GET /jobs?status=running. The contract that matters is
-// that it is still one map with one writer, and that a key naming a row the
-// component does not hold is kept without being drawn, counted or animated.
+// An operations API, a job status resource, GET /jobs?status=running: the
+// screen folds it into each row's data and the predicate reads it, so there is
+// still one entrance and one map. The contract that matters is that a key the
+// component does not hold is neither drawn nor counted, and lights up when its
+// row arrives.
 package componenttest
 
 import (
@@ -25,81 +27,120 @@ type busyable interface {
 	count() int
 }
 
-type listBusy struct{ m list.Model }
+// Busy-ness from another endpoint rides in each row's data and the predicate
+// reads it: one entrance on every component. The screen holds the map — as
+// these adapters do — which is what keeps a key for a row not yet held.
+type listBusy struct {
+	m    list.Model
+	keys []string
+	busy map[string]string
+}
 
 func newListBusy() busyable {
 	o := theme.Dark().List()
+	o.BusyWhen = func(it list.KeyedItem) (string, bool) {
+		label, _ := it.Data.(string)
+		return label, label != ""
+	}
 	b := &listBusy{m: list.New(o)}
 	b.hold(derivedKeys)
 	return b
 }
 
 func (b *listBusy) hold(keys []string) {
-	items := make([]list.KeyedItem, 0, len(keys))
-	for _, k := range keys {
-		items = append(items, list.KeyedItem{Key: k, Display: k})
+	b.keys = keys
+	b.push()
+}
+func (b *listBusy) setBusy(busy map[string]string) {
+	b.busy = busy
+	b.push()
+}
+func (b *listBusy) push() {
+	items := make([]list.KeyedItem, 0, len(b.keys))
+	for _, k := range b.keys {
+		items = append(items, list.KeyedItem{Key: k, Display: k, Data: b.busy[k]})
 	}
 	b.m.SetKeyedItems(items)
 	b.m.SetRect(placed())
 }
-func (b *listBusy) setBusy(busy map[string]string)        { b.m.SetBusy(busy) }
 func (b *listBusy) state(k string) (activity.State, bool) { return b.m.ActivityState().State(k) }
 func (b *listBusy) count() int                            { return b.m.ActivityCount() }
 
-type tableBusy struct{ m table.Model }
+// The table's version of the same adapter: Data on each row, BusyWhen reading it. The screen holds the map — as
+// this adapter does — which is what keeps a key for a row not yet held.
+type tableBusy struct {
+	m    table.Model
+	keys []string
+	busy map[string]string
+}
 
 func newTableBusy() busyable {
 	o := theme.Dark().Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
+	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+		label, _ := r.Data.(string)
+		return label, label != ""
+	}
 	b := &tableBusy{m: table.New(o)}
 	b.hold(derivedKeys)
 	return b
 }
 
 func (b *tableBusy) hold(keys []string) {
-	rows := make([]table.KeyedRow, 0, len(keys))
-	for _, k := range keys {
-		rows = append(rows, table.KeyedRow{Key: k, Cells: []string{k, "successful"}})
+	b.keys = keys
+	b.push()
+}
+func (b *tableBusy) setBusy(busy map[string]string) {
+	b.busy = busy
+	b.push()
+}
+func (b *tableBusy) push() {
+	rows := make([]table.KeyedRow, 0, len(b.keys))
+	for _, k := range b.keys {
+		rows = append(rows, table.KeyedRow{Key: k, Cells: []string{k, "successful"}, Data: b.busy[k]})
 	}
 	b.m.SetKeyedRows(rows)
 	b.m.SetRect(placed())
 }
-func (b *tableBusy) setBusy(busy map[string]string)        { b.m.SetBusy(busy) }
 func (b *tableBusy) state(k string) (activity.State, bool) { return b.m.ActivityState().State(k) }
 func (b *tableBusy) count() int                            { return b.m.ActivityCount() }
 
-type treeBusy struct{ m tree.Model }
+type treeBusy struct {
+	m    tree.Model
+	keys []string
+	busy map[string]string
+}
 
 func newTreeBusy() busyable {
 	o := theme.Dark().Tree()
 	o.InitialDepth = 2
-	o.Root = busyTree(derivedKeys)
-	b := &treeBusy{m: tree.New(o)}
+	o.Root = busyTree(derivedKeys, nil)
+	o.BusyWhen = func(n tree.Node) (string, bool) {
+		sn, _ := n.(statusNode)
+		return sn.status, sn.status != ""
+	}
+	b := &treeBusy{m: tree.New(o), keys: derivedKeys}
 	b.m.SetRect(placed())
 	return b
 }
 
-func busyTree(keys []string) tree.Node {
+func busyTree(keys []string, busy map[string]string) tree.Node {
 	kids := make([]tree.Node, 0, len(keys))
 	for _, k := range keys {
-		kids = append(kids, statusNode{label: k})
+		kids = append(kids, statusNode{label: k, status: busy[k]})
 	}
 	return statusNode{label: "cluster", children: kids}
 }
 
 func (b *treeBusy) hold(keys []string) {
-	b.m.SetRoot(busyTree(keys))
+	b.keys = keys
+	b.m.SetRoot(busyTree(b.keys, b.busy))
 	b.m.SetRect(placed())
 }
-
-// A tree's keys are paths; translate at the boundary, as treeDerive does.
 func (b *treeBusy) setBusy(busy map[string]string) {
-	paths := make(map[string]string, len(busy))
-	for k, label := range busy {
-		paths["cluster/"+k] = label
-	}
-	b.m.SetBusy(paths)
+	b.busy = busy
+	b.hold(b.keys)
 }
 func (b *treeBusy) state(k string) (activity.State, bool) {
 	return b.m.ActivityState().State("cluster/" + k)
@@ -118,7 +159,7 @@ func eachBusyable(t *testing.T, fn func(t *testing.T, b busyable)) {
 }
 
 // The entrance itself: no predicate anywhere, and the rows still spin.
-func TestSetBusyDrivesTheIndicator(t *testing.T) {
+func TestBusyFromElsewhereDrivesTheIndicator(t *testing.T) {
 	eachBusyable(t, func(t *testing.T, b busyable) {
 		b.setBusy(map[string]string{"web": "Syncing"})
 
@@ -137,7 +178,7 @@ func TestSetBusyDrivesTheIndicator(t *testing.T) {
 
 // One map, one writer — the same property the predicate path has. An
 // observation is the whole truth as of that moment, so the previous one goes.
-func TestSetBusyReplacesTheMapWholesale(t *testing.T) {
+func TestBusyFromElsewhereReplacesTheMapWholesale(t *testing.T) {
 	eachBusyable(t, func(t *testing.T, b busyable) {
 		b.setBusy(map[string]string{"web": "Syncing", "api": "Syncing"})
 		b.setBusy(map[string]string{"api": "Syncing"})
@@ -154,7 +195,7 @@ func TestSetBusyReplacesTheMapWholesale(t *testing.T) {
 // The invariant the predicate held for free: every entry names a row on
 // screen. A map from somewhere else need not, and an entry nothing can see
 // must not animate a spinner or inflate a count a screen might put in a title.
-func TestSetBusyKeysTheComponentDoesNotHoldAreNotCounted(t *testing.T) {
+func TestBusyFromElsewhereKeysTheComponentDoesNotHoldAreNotCounted(t *testing.T) {
 	eachBusyable(t, func(t *testing.T, b busyable) {
 		b.setBusy(map[string]string{"web": "Syncing", "elsewhere": "Syncing"})
 
@@ -182,25 +223,4 @@ func TestABusyKeyOutsideTheDataSurvivesUntilItsRowArrives(t *testing.T) {
 			t.Error("the key was discarded on arrival, so the row is inert now it is here")
 		}
 	})
-}
-
-// Two writers for one map is the property that makes this feature unable to
-// contradict itself, so the mistake is refused rather than raced. Loudly: a
-// silent no-op produces a component whose indicators never appear, which is
-// the worst of the three outcomes to debug.
-func TestSetBusyRefusesAComponentThatHasAPredicate(t *testing.T) {
-	for name, call := range map[string]func(){
-		"list":  func() { c := newListClaim(0).(*listClaim); c.m.SetBusy(nil) },
-		"table": func() { c := newTableClaim(0).(*tableClaim); c.m.SetBusy(nil) },
-		"tree":  func() { c := newTreeClaim(0).(*treeClaim); c.m.SetBusy(nil) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				if recover() == nil {
-					t.Error("SetBusy on a component built with ActivityWhen was allowed")
-				}
-			}()
-			call()
-		})
-	}
 }

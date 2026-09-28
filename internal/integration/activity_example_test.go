@@ -1,3 +1,5 @@
+//go:build integration
+
 // The example, driven the way a person drives it.
 //
 // Every other test here builds a screen for the occasion, which is what let
@@ -44,7 +46,7 @@ func TestTheExampleClaimsTheRowOnDispatch(t *testing.T) {
 	}) {
 		t.Fatal("no rows arrived, so there is nothing to dispatch against")
 	}
-	if strings.Contains(h.render(), demoapi.SyncSyncing) {
+	if strings.Contains(h.render(), demoapi.PhaseRunning) {
 		t.Skip("a scheduled sync is already running; this test measures the claim alone")
 	}
 
@@ -61,7 +63,7 @@ func TestTheExampleClaimsTheRowOnDispatch(t *testing.T) {
 	// observation of one.
 	h.pumpFor(150 * time.Millisecond)
 
-	if !strings.Contains(h.render(), demoapi.SyncSyncing) {
+	if !strings.Contains(h.render(), demoapi.PhaseRunning) {
 		t.Error("the row says nothing after the verb was dispatched; Expect never reached it")
 	}
 }

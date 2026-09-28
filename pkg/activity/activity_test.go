@@ -25,7 +25,7 @@ func runCmd(cmd tea.Cmd) tea.Msg {
 
 func TestDeriveMakesAKeyBusy(t *testing.T) {
 	s := newSet()
-	if cmd := s.Derive(map[string]string{"a": "running"}); cmd == nil {
+	if cmd := s.derive(map[string]string{"a": "running"}); cmd == nil {
 		t.Fatal("Derive armed no tick, so the spinner would never animate")
 	}
 	st, ok := s.State("a")
@@ -42,8 +42,8 @@ func TestDeriveMakesAKeyBusy(t *testing.T) {
 // row stopped.
 func TestDeriveIsWholesale(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running", "b": "pending"})
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running", "b": "pending"})
+	s.derive(map[string]string{"a": "running"})
 
 	if _, ok := s.State("b"); ok {
 		t.Error("a key absent from the new observation survived it")
@@ -55,8 +55,8 @@ func TestDeriveIsWholesale(t *testing.T) {
 
 func TestAnEmptyObservationClearsEverything(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
-	s.Derive(map[string]string{})
+	s.derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{})
 
 	if s.Active() || s.Count() != 0 {
 		t.Errorf("Active=%v Count=%d after an empty observation", s.Active(), s.Count())
@@ -69,10 +69,10 @@ func TestAnEmptyObservationClearsEverything(t *testing.T) {
 // Elapsed time should measure the work, not the poll that last saw it.
 func TestSincePersistsAcrossObservations(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	first, _ := s.State("a")
 
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	second, _ := s.State("a")
 
 	if !second.Since.Equal(first.Since) {
@@ -83,11 +83,11 @@ func TestSincePersistsAcrossObservations(t *testing.T) {
 // A row that goes busy, settles, and goes busy again is new work.
 func TestSinceRestartsAfterAGap(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	first, _ := s.State("a")
-	s.Derive(map[string]string{})
+	s.derive(map[string]string{})
 	time.Sleep(2 * time.Millisecond)
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 
 	if second, _ := s.State("a"); !second.Since.After(first.Since) {
 		t.Error("Since survived a settled observation; that is a second piece of work")
@@ -96,8 +96,8 @@ func TestSinceRestartsAfterAGap(t *testing.T) {
 
 func TestRelabellingFollowsTheData(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "Pending"})
-	s.Derive(map[string]string{"a": "Syncing"})
+	s.derive(map[string]string{"a": "Pending"})
+	s.derive(map[string]string{"a": "Syncing"})
 
 	if st, _ := s.State("a"); st.Label != "Syncing" {
 		t.Errorf("Label = %q, want the newest observation's word", st.Label)
@@ -108,7 +108,7 @@ func TestRelabellingFollowsTheData(t *testing.T) {
 
 func TestRenderIsGlyphThenLabel(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "syncing"})
+	s.derive(map[string]string{"a": "syncing"})
 
 	got, ok := s.Render("a", 20)
 	if !ok {
@@ -129,7 +129,7 @@ func TestRenderUnknownKey(t *testing.T) {
 // A cell of eight showing "⣾ syncin" is worse than one showing "⣾".
 func TestNarrowRenderDropsTheLabelNotTheGlyph(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "syncing"})
+	s.derive(map[string]string{"a": "syncing"})
 
 	got, _ := s.Render("a", 8)
 	if strings.Contains(got, "sync") {
@@ -145,7 +145,7 @@ func TestNarrowRenderDropsTheLabelNotTheGlyph(t *testing.T) {
 
 func TestRenderNeverExceedsItsWidth(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "a-very-long-status-indeed"})
+	s.derive(map[string]string{"a": "a-very-long-status-indeed"})
 	for w := 1; w <= 40; w++ {
 		got, ok := s.Render("a", w)
 		if !ok {
@@ -159,7 +159,7 @@ func TestRenderNeverExceedsItsWidth(t *testing.T) {
 
 func TestZeroWidthRendersNothing(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	if _, ok := s.Render("a", 0); ok {
 		t.Error("a zero-width cell still rendered an indicator")
 	}
@@ -169,7 +169,7 @@ func TestZeroWidthRendersNothing(t *testing.T) {
 // double the gap between glyph and label.
 func TestSpinnerFramePaddingIsTrimmed(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "x"})
+	s.derive(map[string]string{"a": "x"})
 	got, _ := s.Render("a", 20)
 	if strings.Contains(got, "  x") {
 		t.Errorf("Render = %q, want a single space before the label", got)
@@ -178,7 +178,7 @@ func TestSpinnerFramePaddingIsTrimmed(t *testing.T) {
 
 func TestStyleIsAppliedAndOptional(t *testing.T) {
 	plain := newSet()
-	plain.Derive(map[string]string{"a": "running"})
+	plain.derive(map[string]string{"a": "running"})
 	bare, _ := plain.Render("a", 20)
 	if strings.Contains(bare, "\x1b") {
 		t.Errorf("a nil Style emitted escapes: %q", bare)
@@ -187,7 +187,7 @@ func TestStyleIsAppliedAndOptional(t *testing.T) {
 	styled := New(Options{Style: func(st State, text string) string {
 		return "<" + st.Label + ">" + text
 	}})
-	styled.Derive(map[string]string{"a": "running"})
+	styled.derive(map[string]string{"a": "running"})
 	got, _ := styled.Render("a", 20)
 	if !strings.HasPrefix(got, "<running>") {
 		t.Errorf("Render = %q, want Style applied with the state", got)
@@ -198,7 +198,7 @@ func TestStyleIsAppliedAndOptional(t *testing.T) {
 
 func TestBadgeRightAligns(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 
 	got := s.Badge("a", "worker", 30)
 	if xansi.StringWidth(got) != 30 {
@@ -212,7 +212,7 @@ func TestBadgeRightAligns(t *testing.T) {
 // The badge is the news; the row is what gives way.
 func TestBadgeTruncatesTheRowNotTheBadge(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 
 	got := s.Badge("a", strings.Repeat("x", 60), 24)
 	if !strings.Contains(got, "running") {
@@ -234,7 +234,7 @@ func TestBadgeLeavesSettledRowsAlone(t *testing.T) {
 
 func TestAnIdleSetSchedulesNothing(t *testing.T) {
 	s := newSet()
-	if cmd := s.Derive(map[string]string{}); cmd != nil {
+	if cmd := s.derive(map[string]string{}); cmd != nil {
 		t.Error("an observation with nothing busy armed a tick")
 	}
 	if cmd := s.Handle(struct{}{}); cmd != nil {
@@ -244,17 +244,17 @@ func TestAnIdleSetSchedulesNothing(t *testing.T) {
 
 func TestASecondObservationDoesNotStartASecondChain(t *testing.T) {
 	s := newSet()
-	if cmd := s.Derive(map[string]string{"a": "running"}); cmd == nil {
+	if cmd := s.derive(map[string]string{"a": "running"}); cmd == nil {
 		t.Fatal("the first observation armed nothing")
 	}
-	if cmd := s.Derive(map[string]string{"a": "running", "b": "running"}); cmd != nil {
+	if cmd := s.derive(map[string]string{"a": "running", "b": "running"}); cmd != nil {
 		t.Error("a second observation armed a second chain")
 	}
 }
 
 func TestTheChainStopsWhenTheLastRowSettles(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	tick, ok := runCmd(s.spin.Tick).(spinner.TickMsg)
 	if !ok {
 		t.Fatal("no tick")
@@ -263,7 +263,7 @@ func TestTheChainStopsWhenTheLastRowSettles(t *testing.T) {
 		t.Error("the chain stopped while a row was still busy")
 	}
 
-	s.Derive(map[string]string{})
+	s.derive(map[string]string{})
 	if cmd := s.Handle(tick); cmd != nil {
 		t.Error("the chain kept going after the last row settled")
 	}
@@ -275,7 +275,7 @@ func TestTheChainStopsWhenTheLastRowSettles(t *testing.T) {
 // is the symptom, and it does not recover on its own.
 func TestAStarvedChainIsRevived(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 
 	// Pretend the last tick was long enough ago that the chain must be dead.
 	s.lastTick = time.Now().Add(-time.Second)
@@ -287,7 +287,7 @@ func TestAStarvedChainIsRevived(t *testing.T) {
 
 func TestRecentTicksAreNotRevived(t *testing.T) {
 	s := newSet()
-	s.Derive(map[string]string{"a": "running"})
+	s.derive(map[string]string{"a": "running"})
 	if cmd := s.Handle(struct{}{}); cmd != nil {
 		t.Error("a healthy chain was duplicated by an unrelated message")
 	}
@@ -297,7 +297,7 @@ func TestRecentTicksAreNotRevived(t *testing.T) {
 
 func TestAdoptCarriesTheObservationAndRearms(t *testing.T) {
 	old := newSet()
-	old.Derive(map[string]string{"a": "running"})
+	old.derive(map[string]string{"a": "running"})
 
 	fresh := newSet()
 	cmd := fresh.Adopt(old)
@@ -312,7 +312,7 @@ func TestAdoptCarriesTheObservationAndRearms(t *testing.T) {
 
 func TestAdoptKeepsTheNewSetsOwnStyle(t *testing.T) {
 	old := New(Options{Style: func(State, string) string { return "OLD" }})
-	old.Derive(map[string]string{"a": "running"})
+	old.derive(map[string]string{"a": "running"})
 
 	fresh := New(Options{Style: func(State, string) string { return "NEW" }})
 	fresh.Adopt(old)
@@ -334,7 +334,7 @@ func TestBusyMatchesAndLabels(t *testing.T) {
 		{"running", "running", true},
 		{"RUNNING", "RUNNING", true}, // matched case-insensitively, labelled as it appeared
 		{"  pending  ", "pending", true},
-		{"succeeded", "", false},
+		{"succeeded", "succeeded", false}, // the status either way: it is what a claim compares against
 		{"", "", false},
 	} {
 		label, busy := pred(tc.in)
@@ -364,8 +364,8 @@ func TestSettledTreatsTheUnknownAsWork(t *testing.T) {
 		label string
 		busy  bool
 	}{
-		{"succeeded", "", false},
-		{"failed", "", false},
+		{"succeeded", "succeeded", false},
+		{"failed", "failed", false},
 		{"", "", false}, // a blank cell is not work in progress
 		{"running", "running", true},
 		{"some-new-status", "some-new-status", true},
@@ -381,11 +381,11 @@ func TestSettledTreatsTheUnknownAsWork(t *testing.T) {
 // into the live one afterwards through a shared map.
 func TestAdoptDoesNotAliasTheOtherSet(t *testing.T) {
 	old := newSet()
-	old.Derive(map[string]string{"a": "running"})
+	old.derive(map[string]string{"a": "running"})
 
 	fresh := newSet()
 	fresh.Adopt(old)
-	old.Derive(map[string]string{"a": "running", "b": "running"})
+	old.derive(map[string]string{"a": "running", "b": "running"})
 
 	if fresh.Count() != 1 {
 		t.Errorf("the adopted Set sees %d entries; it shares a map with the old one", fresh.Count())

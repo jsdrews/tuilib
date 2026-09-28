@@ -24,10 +24,10 @@ import (
 // until something is running, so it costs an app that never uses it exactly
 // nothing.
 //
-// Entries are held by key, so this works on SetKeyedItems and is naturally
-// inert on anonymous items — an entry whose key matches no row is unreachable
-// rather than approximate, which is marking's rule (rule 32) arrived at from
-// the other direction.
+// The surface is the table's: BusyWhen (and Revision) for what the server
+// reports, Dispatch / Done for work the user starts, BeginRead / ApplyRead for
+// fetches. Entries are held by key, so it works on SetKeyedItems and is inert
+// on anonymous items.
 
 // observe recomputes the indicator set from the items the list now holds.
 //
@@ -35,90 +35,88 @@ import (
 // setter has no return value), so it queues for the next Update, exactly as a
 // pending SelectedChangedMsg does.
 func (m *Model) observe() {
-	// Scoping happens on every swap, predicate or not: it is what keeps a
-	// SetBusy map — which comes from somewhere other than these items — from
-	// animating a key this list does not hold.
-	m.act.Scope(m.itemKeys)
-	if m.actWhen == nil {
-		return
-	}
-	busy := map[string]string{}
-	for i, key := range m.itemKeys {
-		if key == "" || i >= len(m.items) {
-			continue
+	var eval func(int) (string, bool, string)
+	if m.busyWhen != nil {
+		eval = func(i int) (string, bool, string) {
+			if i >= len(m.items) {
+				return "", false, ""
+			}
+			var data any
+			if i < len(m.itemData) {
+				data = m.itemData[i]
+			}
+			it := KeyedItem{Key: m.itemKeys[i], Display: m.items[i], Data: data}
+			label, busy := m.busyWhen(it)
+			rev := ""
+			if m.revision != nil {
+				rev = m.revision(it)
+			}
+			return label, busy, rev
 		}
-		if label, ok := m.actWhen(m.items[i]); ok {
-			busy[key] = label
-		}
 	}
-	// Unconditionally, including when nothing matches: an empty observation is
-	// a real one, and the only thing that can stop the last spinner.
-	m.actCmd = tea.Batch(m.act.Observe(busy, m.actValues(m.act.Expecting())), m.actCmd)
+	m.actCmd = tea.Batch(m.act.ObserveRows(m.itemKeys, eval), m.actCmd)
 }
 
-// actValues is the current text of every key in keys, which is how an
-// observation notices the server acted (activity.Options.Settle).
+// Dispatch opens a claim on keys for work the screen is about to request, and
+// returns the operation to carry to Done. mode says who knows when the work
+// ends: activity.Observed (the server's status) or activity.Held (the request,
+// or a job it returned).
+func (m *Model) Dispatch(keys []string, label string, mode activity.Mode) (activity.Op, tea.Cmd) {
+	op, cmd := m.act.Dispatch(keys, label, mode)
+	m.refresh()
+	return op, cmd
+}
+
+// DispatchEach opens one operation per key and runs request for each, so the
+// server refusing one row stops that row alone. It is the per-row loop every
+// verb over a selection needs: Dispatch([]string{key}, …) per key, the
+// request's command per key, all batched with the spinner's first tick.
 //
-// Only meaningful on the predicate path — the predicate reads this text, so a
-// change in it is evidence about the work — and nil off it, where busy-ness
-// comes from elsewhere and the row's text may have nothing to do with it.
-func (m Model) actValues(keys []string) map[string]string {
-	if m.actWhen == nil || len(keys) == 0 {
-		return nil
-	}
-	wanted := make(map[string]bool, len(keys))
+// request returns the command that performs the work for one key and replies
+// with a message carrying op, which the screen hands to Done. Use Dispatch
+// directly only when one request acts on several keys at once.
+func (m *Model) DispatchEach(keys []string, label string, mode activity.Mode,
+	request func(op activity.Op, key string) tea.Cmd) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 2*len(keys))
 	for _, k := range keys {
-		wanted[k] = true
+		op, spin := m.Dispatch([]string{k}, label, mode)
+		cmds = append(cmds, spin, request(op, k))
 	}
-	values := make(map[string]string, len(keys))
-	for i, key := range m.itemKeys {
-		if wanted[key] && i < len(m.items) {
-			values[key] = m.items[i]
-		}
+	return tea.Batch(cmds...)
+}
+
+// Done reports that op's request answered, and returns what that means:
+// activity.Acknowledged (an Observed request answered; the work is still
+// running, so say "requested"), activity.Ended (a Held request answered; the
+// work is over) or activity.Withdrawn (it failed; report the error). Switch on
+// it when writing the reply's message, rather than assuming the work is done.
+func (m *Model) Done(op activity.Op, err error) activity.Outcome {
+	out := m.act.Done(op, err)
+	m.refresh()
+	return out
+}
+
+// BeginRead stamps a fetch at the moment it is issued; hand the token to
+// ApplyRead with the reply. A stream needs none: push events with
+// SetKeyedItems.
+func (m *Model) BeginRead() activity.Read { return m.act.BeginRead() }
+
+// ApplyRead is SetKeyedItems for a fetched reply, and reports whether it
+// applied it. False means dropped: overtaken by a newer reply, or failed —
+// in which case operations waiting on a read are withdrawn and items busy on
+// the last good read turn Unknown until one succeeds.
+func (m *Model) ApplyRead(rd activity.Read, items []KeyedItem, err error) bool {
+	if !m.act.Accept(rd, err) {
+		m.refresh()
+		return false
 	}
-	return values
+	m.SetKeyedItems(items)
+	return true
 }
 
-// SetBusy is the second entrance: the screen says which items are working
-// instead of a predicate reading it off their text.
-//
-// For busy-ness that is not a property of the row — an operations API, a job
-// status resource. The map replaces the previous one outright, exactly as a
-// predicate's observation does, so there is still one map and one writer.
-// Keys the list does not hold are kept but not drawn.
-//
-// Panics if the list was built with Options.ActivityWhen: a component uses one
-// entrance or the other, and a screen needing both merges them itself.
-func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
-	if m.actWhen != nil {
-		panic("list.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
-	}
-	cmd := m.act.Observe(busy, nil)
-	m.refresh()
-	return cmd
-}
-
-// Expect marks keys as working because the screen has just asked the server to
-// work on them, before any observation can say so. The claim is retired by the
-// observations that follow — see activity.Options.Settle.
-func (m *Model) Expect(keys []string, label string) tea.Cmd {
-	cmd := m.act.Expect(keys, label, m.actValues(keys))
-	m.refresh()
-	return cmd
-}
-
-// Retract drops the claims on keys, for a write the server refused.
-func (m *Model) Retract(keys ...string) {
-	m.act.Retract(keys...)
-	m.refresh()
-}
-
-// RetractAll drops every claim, for a read that failed — an outage is the case
-// where no observation is coming to retire them.
-func (m *Model) RetractAll() {
-	m.act.RetractAll()
-	m.refresh()
-}
+// ReadsFailing reports whether the newest fetch handed to ApplyRead failed and
+// none has succeeded since.
+func (m Model) ReadsFailing() bool { return m.act.ReadsFailing() }
 
 // flushActivity hands over any command observe queued.
 func (m *Model) flushActivity() tea.Cmd {
@@ -132,6 +130,10 @@ func (m Model) ActivityState() activity.Set { return m.act }
 
 // SetActivityState adopts the entries of a previous instance's ActivityState,
 // keeping this list's own palette — the rule-4 pair for row activity.
+//
+// The returned command is the spinner's first tick. SetTheme has nowhere to
+// return it, and dropping it is safe: the list re-arms a stalled spinner on
+// the next message it receives.
 func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 	cmd := m.act.Adopt(s)
 	m.refresh()
@@ -139,7 +141,7 @@ func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 }
 
 // ActivityCount is how many of this list's items are working — reported by the
-// last observation, or claimed by Expect and not yet spoken to.
+// last observation, or dispatched and not yet spoken to.
 func (m Model) ActivityCount() int { return m.act.Count() }
 
 // withBadge appends the indicator to a rendered row, if its key is busy.

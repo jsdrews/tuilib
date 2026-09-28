@@ -1,5 +1,11 @@
 # Row activity — design
 
+> **Superseded by [activity-v2.md](activity-v2.md).** This is the design
+> history of the first surface (`ActivityWhen`, `Expect`, `SetBusy`, the
+> screen-side generation counters), which has been removed from every
+> component. For how to use the feature today, read
+> [activity-guide.md](activity-guide.md).
+
 Status: **implemented.** `pkg/activity` (a leaf, under 300 lines of code),
 `theme.Activity()`, the three components, rule 33 in CLAUDE.md, and the shared
 contract in `internal/componenttest`.

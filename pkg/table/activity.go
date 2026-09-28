@@ -8,31 +8,28 @@ import (
 )
 
 // Row activity: a spinner and status label on the rows the data says are
-// working. See pkg/activity for the state itself.
+// working, plus the operations the screen starts on them. See pkg/activity for
+// the state itself.
 //
-// The whole feature is two options. ActivityWhen says which rows are busy;
-// ActivityColumn says where to draw. Neither set, the table carries no gutter
-// and pays nothing.
+// Three things, and a screen uses as many as its API needs:
 //
-// Where it draws:
+//   - BusyWhen (an option) reads each row and says which are working. A
+//     read-only dashboard needs nothing else.
+//   - Dispatch / Done cover work the user starts: Dispatch puts the row in
+//     motion at once, Done reports that the request answered. The mode passed
+//     to Dispatch — activity.Observed or activity.Held — says who knows when
+//     the work ends.
+//   - BeginRead / ApplyRead put every fetch on one clock with those answers,
+//     so a reply that predates the user's write cannot end their spinner.
 //
-//   - The named column's cell is replaced while its row is busy. This is the
-//     shape the feature exists for: Synced → ⣾ Syncing → Synced reads as one
-//     cell changing its mind rather than decoration appearing beside it.
-//   - A name that resolves to no column — or no name at all, with a predicate
-//     set — falls back to a two-cell gutter after the mark gutter. A typo, or
-//     an omission, should degrade to something visible rather than to a
-//     spinner nobody can see that animates anyway.
+// Where it draws: the ActivityColumn cell is replaced while its row is busy;
+// a name that resolves to no column, or none with a predicate set, falls back
+// to a two-cell gutter so a typo degrades to something visible. Widths come
+// from the rows and never from the indicator, so give that column a Width
+// wide enough for the longest label it will carry.
 //
-// Column widths are computed from the rows the table holds, never from the
-// indicator, so activity cannot reflow the table under the user. The cost of
-// that is the opposite hazard: an auto-sized column fitted to "Synced" has
-// room for the glyph and not the word. Give a column that will carry activity
-// a Width wide enough for the longest label it will show.
-//
-// Marking's rules apply unchanged. Entries are held by key, so a polled
-// refresh that reorders rows keeps each spinner on its own row; a windowed
-// table (SetWindow) carries rows without keys and is inert.
+// Entries are held by key, so a refresh that reorders rows keeps each spinner
+// on its own row; a windowed table (SetWindow) carries no keys and is inert.
 
 // actGutterW is the width the fallback gutter takes when activity is on and
 // its column name resolves to nothing.
@@ -118,142 +115,26 @@ func (m Model) withActivity(i int, cells Row) Row {
 // returned (a setter has no return value), so it queues for the next Update,
 // exactly as a pending ViewportChangedMsg does.
 func (m *Model) observe() {
-	// Scoping happens on every swap, predicate or not: it is what keeps a
-	// SetBusy map — which comes from somewhere other than these rows — from
-	// animating a key this table does not hold.
-	m.act.Scope(m.rowKeys)
-	if m.actWhen == nil {
-		return
-	}
-	busy := map[string]string{}
-	for i, key := range m.rowKeys {
-		if key == "" || i >= len(m.rows) {
-			continue
+	var eval func(int) (string, bool, string)
+	if m.busyWhen != nil {
+		eval = func(i int) (string, bool, string) {
+			if i >= len(m.rows) {
+				return "", false, ""
+			}
+			var data any
+			if i < len(m.rowData) {
+				data = m.rowData[i]
+			}
+			row := KeyedRow{Key: m.rowKeys[i], Cells: m.rows[i], Data: data}
+			label, busy := m.busyWhen(row)
+			rev := ""
+			if m.revision != nil {
+				rev = m.revision(row)
+			}
+			return label, busy, rev
 		}
-		if label, ok := m.actWhen(m.rows[i]); ok {
-			busy[key] = label
-		}
 	}
-	// Unconditionally, including when nothing matches: an empty observation is
-	// a real one, and the only thing that can stop the last spinner.
-	m.actCmd = tea.Batch(m.act.Observe(busy, m.actValues()), m.actCmd)
-}
-
-// actValues is the current activity-column cell for every key carrying a
-// claim, which is how an observation notices the server acted (Options.Settle).
-//
-// Only on the predicate path, and that restriction is the point rather than a
-// limitation. Under ActivityWhen the column is the status by construction — the
-// predicate reads it — so a change in it is evidence about the work. Under
-// SetBusy the busy-ness comes from elsewhere and this column may have nothing
-// to do with it, where a cell moving for unrelated reasons would retire a claim
-// that is still perfectly live.
-//
-// Empty whenever nothing has been dispatched, which is almost always.
-func (m Model) actValues() map[string]string {
-	want := m.act.Expecting()
-	if len(want) == 0 {
-		return nil
-	}
-	col := m.activityCol()
-	wanted := make(map[string]bool, len(want))
-	for _, k := range want {
-		wanted[k] = true
-	}
-	values := make(map[string]string, len(want))
-	for i, key := range m.rowKeys {
-		if !wanted[key] || i >= len(m.rows) {
-			continue
-		}
-		if col >= 0 && col < len(m.rows[i]) {
-			values[key] = m.rows[i][col]
-			continue
-		}
-		values[key] = ""
-	}
-	return values
-}
-
-// SetBusy is the second entrance: the screen says which rows are working
-// instead of a predicate reading it off their cells.
-//
-// For busy-ness that is not a field on the row — an operations API, a job
-// status resource, GET /jobs?status=running. The map is the whole truth as of
-// that moment and replaces the previous one outright, exactly as a predicate's
-// observation does; there is still one map and one writer.
-//
-// Keys the table does not hold are kept but not drawn, so a paged table can be
-// handed the busy set for rows it has not reached yet.
-//
-// Panics if the table was built with Options.ActivityWhen. Two writers for one
-// map is the property that makes this feature unable to contradict itself, and
-// a component uses one entrance or the other. A screen that needs both merges
-// them itself and calls this — activity.Settled is available for the half that
-// reads off the row.
-func (m *Model) SetBusy(busy map[string]string) tea.Cmd {
-	if m.actWhen != nil {
-		panic("table.SetBusy: built with Options.ActivityWhen; use one entrance or the other")
-	}
-	m.actEnabled = true
-	cmd := m.act.Observe(busy, nil)
-	m.refresh()
-	return cmd
-}
-
-// Expect marks keys as working because the screen has just asked the server to
-// work on them, before any observation can say so.
-//
-// The claim is retired by the observations that follow — see Options.Settle for
-// the three ways that happens. It is not a second source of truth and cannot
-// outlive the data's ability to speak to it.
-//
-// The screen must not apply a read taken across its own write, or the claim is
-// cleared by a reply that predates it. See the activity example.
-func (m *Model) Expect(keys []string, label string) tea.Cmd {
-	m.actEnabled = true
-	cmd := m.act.Expect(keys, label, m.claimValues(keys))
-	m.refresh()
-	return cmd
-}
-
-// claimValues is each key's activity-column cell at the moment of the claim.
-func (m Model) claimValues(keys []string) map[string]string {
-	if m.actWhen == nil || len(keys) == 0 {
-		return nil
-	}
-	col := m.activityCol()
-	wanted := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		wanted[k] = true
-	}
-	at := make(map[string]string, len(keys))
-	for i, key := range m.rowKeys {
-		if !wanted[key] || i >= len(m.rows) {
-			continue
-		}
-		if col >= 0 && col < len(m.rows[i]) {
-			at[key] = m.rows[i][col]
-			continue
-		}
-		at[key] = ""
-	}
-	return at
-}
-
-// Retract drops the claims on keys, for a write the server refused.
-func (m *Model) Retract(keys ...string) {
-	m.act.Retract(keys...)
-	m.refresh()
-}
-
-// RetractAll drops every claim, for a read that failed.
-//
-// Required rather than polite: a claim is a promise that the next observation
-// will explain it, and an outage is exactly the case where no observation is
-// coming to keep it.
-func (m *Model) RetractAll() {
-	m.act.RetractAll()
-	m.refresh()
+	m.actCmd = tea.Batch(m.act.ObserveRows(m.rowKeys, eval), m.actCmd)
 }
 
 // flushActivity hands over any command observe queued.
@@ -270,8 +151,10 @@ func (m Model) ActivityState() activity.Set { return m.act }
 // SetActivityState adopts the entries of a previous instance's ActivityState,
 // keeping this table's own palette — the rule-4 pair for row activity.
 //
-// The returned command re-arms the spinner; dropping it strands a frozen glyph
-// until the next observation.
+// Call it after SetKeyedRows, so the adopted claims land on rows that exist.
+// The returned command is the spinner's first tick. SetTheme has nowhere to
+// return it, and dropping it is safe: the table re-arms a stalled spinner on
+// the next message it receives.
 func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 	if !m.actEnabled {
 		return nil
@@ -282,5 +165,77 @@ func (m *Model) SetActivityState(s activity.Set) tea.Cmd {
 }
 
 // ActivityCount is how many of this table's rows are working — reported by the
-// last observation, or claimed by Expect and not yet spoken to.
+// last observation, or dispatched and not yet spoken to.
 func (m Model) ActivityCount() int { return m.act.Count() }
+
+// ReadsFailing reports whether the newest fetch handed to ApplyRead failed and
+// none has succeeded since. Rows busy only because an earlier read said so are
+// drawn Unknown — static, with "?" — meanwhile; say so on the title too.
+func (m Model) ReadsFailing() bool { return m.act.ReadsFailing() }
+
+// --- BusyWhen, Dispatch / Done, BeginRead / ApplyRead -----------------------
+
+// Dispatch opens a claim on keys for work the screen is about to request, and
+// returns the operation to carry to Done.
+//
+// mode is the one decision: activity.Observed when the server's status says
+// when the work ends (a sync POST that answers at once), activity.Held when
+// the request or a job handle does (a refresh GET that holds the connection).
+// See pkg/activity.
+func (m *Model) Dispatch(keys []string, label string, mode activity.Mode) (activity.Op, tea.Cmd) {
+	m.actEnabled = true
+	op, cmd := m.act.Dispatch(keys, label, mode)
+	m.refresh()
+	return op, cmd
+}
+
+// DispatchEach opens one operation per key and runs request for each, so the
+// server refusing one row stops that row alone. It is the per-row loop every
+// verb over a selection needs: Dispatch([]string{key}, …) per key, the
+// request's command per key, all batched with the spinner's first tick.
+//
+// request returns the command that performs the work for one key and replies
+// with a message carrying op, which the screen hands to Done. Use Dispatch
+// directly only when one request acts on several keys at once.
+func (m *Model) DispatchEach(keys []string, label string, mode activity.Mode,
+	request func(op activity.Op, key string) tea.Cmd) tea.Cmd {
+	cmds := make([]tea.Cmd, 0, 2*len(keys))
+	for _, k := range keys {
+		op, spin := m.Dispatch([]string{k}, label, mode)
+		cmds = append(cmds, spin, request(op, k))
+	}
+	return tea.Batch(cmds...)
+}
+
+// Done reports that op's request answered, and returns what that means:
+// activity.Acknowledged (an Observed request answered; the work is still
+// running, so say "requested"), activity.Ended (a Held request answered; the
+// work is over) or activity.Withdrawn (it failed; report the error). Switch on
+// it when writing the reply's message, rather than assuming the work is done.
+func (m *Model) Done(op activity.Op, err error) activity.Outcome {
+	out := m.act.Done(op, err)
+	m.refresh()
+	return out
+}
+
+// BeginRead stamps a fetch at the moment it is issued. Carry the token on the
+// fetch's reply and hand it to ApplyRead. A stream needs none: push its events
+// with SetKeyedRows as they arrive.
+func (m *Model) BeginRead() activity.Read { return m.act.BeginRead() }
+
+// ApplyRead is SetKeyedRows for a fetched reply: it applies rows if the read
+// may be applied, and reports whether it did.
+//
+// False means the reply was dropped — overtaken by a newer one already
+// applied, or failed (err != nil), in which case the operations that were
+// waiting on a read to end them are withdrawn, since none is coming. A read
+// issued before one of the user's requests answered is applied, but cannot end
+// that request's spinner.
+func (m *Model) ApplyRead(rd activity.Read, rows []KeyedRow, err error) bool {
+	if !m.act.Accept(rd, err) {
+		m.refresh()
+		return false
+	}
+	m.SetKeyedRows(rows)
+	return true
+}

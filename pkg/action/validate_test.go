@@ -98,17 +98,46 @@ func TestRunKeySeparatesTargets(t *testing.T) {
 	}
 }
 
-func TestValidateTargetsWithoutCount(t *testing.T) {
+// Targets alone is enough: their length is the arity.
+func TestValidateTargetsWithoutCountIsClean(t *testing.T) {
 	errs := Validate(Set{
 		Target:  "3 items",
 		Targets: []string{"a", "b", "c"},
+		Actions: []Action{{Label: "Sync", Multi: true, Run: noop}},
+	})
+	if len(errs) != 0 {
+		t.Errorf("errs = %v, want none", errs)
+	}
+}
+
+// A Count that disagrees with Targets is the selection computed twice.
+func TestValidateCountDisagreeingWithTargets(t *testing.T) {
+	errs := Validate(Set{
+		Target:  "3 items",
+		Targets: []string{"a", "b", "c"},
+		Count:   1,
 		Actions: []Action{{Label: "Sync", Run: noop}},
 	})
-	if len(errs) != 1 {
-		t.Fatalf("errs = %v, want one complaint about Count", errs)
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "Count") {
+		t.Fatalf("errs = %v, want one complaint naming Count", errs)
 	}
-	if !strings.Contains(errs[0].Error(), "Count") {
-		t.Errorf("error = %q, want it to name Count", errs[0])
+}
+
+// The arity comes from Targets when there are any, so a set that fills in
+// only Targets is gated like one that also sets Count.
+func TestArityPrefersTargets(t *testing.T) {
+	for _, tc := range []struct {
+		set  Set
+		want int
+	}{
+		{Set{Targets: []string{"a", "b"}}, 2},
+		{Set{Targets: []string{"a", "b"}, Count: 2}, 2},
+		{Set{Count: 3}, 3},
+		{Set{}, 0},
+	} {
+		if got := tc.set.Arity(); got != tc.want {
+			t.Errorf("Arity(%+v) = %d, want %d", tc.set, got, tc.want)
+		}
 	}
 }
 

@@ -82,11 +82,19 @@ type Options struct {
 	// running.
 	Activity activity.Options
 
-	// ActivityWhen derives in-flight state from an item's own text, for work
-	// that changes without anyone in this session doing anything. Evaluated on
-	// every SetKeyedItems; an item that matches spins, one that stops matching
-	// stops. A locally-started indicator wins over a derived one.
-	ActivityWhen func(item string) (label string, busy bool)
+	// BusyWhen says which items are working. It reads the whole keyed item,
+	// Data included, and reports the item's status and whether that status
+	// means work is in progress. Evaluated on every SetKeyedItems /
+	// ApplyRead; an item that matches spins, one that stops matching stops.
+	// The status is reported for every item, busy or not: it is the badge's
+	// label while busy, and what a dispatched operation compares against. See
+	// CLAUDE.md rule 33 and docs/activity-guide.md.
+	BusyWhen func(it KeyedItem) (status string, busy bool)
+
+	// Revision is optional: a value that moves when an operation on the item
+	// finishes, so a sync that ends where it began still reads as done. See
+	// table.Options.Revision.
+	Revision func(it KeyedItem) string
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the list
 	// is in its loading state (see SetLoading). Pass via theme.List() for
@@ -201,6 +209,10 @@ func (k *Keys) fillDefaults() {
 type KeyedItem struct {
 	Key     string
 	Display string
+
+	// Data is the screen's own record for this item, carried for
+	// Options.BusyWhen. The list never reads it otherwise.
+	Data any
 }
 
 // SelectedChangedMsg is emitted by the list when the cursor lands on a
@@ -258,8 +270,10 @@ type Model struct {
 	markStyle  lipgloss.Style
 
 	// act is per-row in-flight state, keyed like the marks beside it.
-	act     activity.Set
-	actWhen func(string) (string, bool)
+	act      activity.Set
+	busyWhen func(KeyedItem) (string, bool)
+	revision func(KeyedItem) string
+	itemData []any
 
 	// actCmd carries a tick that observe produced inside a setter with no
 	// return value, flushed on the next Update.
@@ -298,7 +312,8 @@ func New(opts Options) Model {
 	opts.Keys.fillDefaults()
 	m := Model{
 		act:                activity.New(opts.Activity),
-		actWhen:            opts.ActivityWhen,
+		busyWhen:           opts.BusyWhen,
+		revision:           opts.Revision,
 		glyphs:             opts.Glyphs.Resolve(),
 		token:              focus.NewToken(),
 		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
@@ -750,6 +765,23 @@ func (m Model) Visible() []string { return m.visible }
 // Items returns the full unfiltered item set.
 func (m Model) Items() []string { return m.items }
 
+// KeyedItems is the keyed item set as last handed to SetKeyedItems or
+// ApplyRead, Data included, in source order — what a SetTheme rebuild passes
+// back to the new list (rule 4). Nil when the items are anonymous.
+func (m Model) KeyedItems() []KeyedItem {
+	if m.itemKeys == nil {
+		return nil
+	}
+	out := make([]KeyedItem, len(m.items))
+	for i := range m.items {
+		out[i] = KeyedItem{Key: m.itemKeys[i], Display: m.items[i]}
+		if i < len(m.itemData) {
+			out[i].Data = m.itemData[i]
+		}
+	}
+	return out
+}
+
 // Filtering reports whether the embedded filter currently has focus —
 // callers use this to decide whether to intercept global keys like "q".
 func (m Model) Filtering() bool { return m.filterable && m.filter.Focused() }
@@ -845,6 +877,7 @@ func (m Model) filterHeader() string {
 func (m *Model) SetItems(items []string) {
 	m.items = append([]string(nil), items...)
 	m.itemKeys = nil
+	m.itemData = nil
 	m.applyFilter()
 	m.refresh()
 }
@@ -859,9 +892,11 @@ func (m *Model) SetKeyedItems(items []KeyedItem) {
 	prevCursor := m.cursor
 	m.items = make([]string, len(items))
 	m.itemKeys = make([]string, len(items))
+	m.itemData = make([]any, len(items))
 	for i, it := range items {
 		m.items[i] = it.Display
 		m.itemKeys[i] = it.Key
+		m.itemData[i] = it.Data
 	}
 	m.applyFilter()
 	// Before the cursor work, so refresh draws the observation this swap

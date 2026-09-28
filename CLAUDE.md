@@ -815,175 +815,193 @@ example in `examples/`.
     31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
     key table, both shipped but not yet written up here.)
 
-33. **For per-row in-flight state, use `pkg/activity`, and derive it from
-    the data.** When something is working on one row rather than on the
-    whole component, that row shows a spinner and a status label. This is
-    the row-scale counterpart to `SetLoading` (rule 17), which means "no
-    data yet" and replaces the entire body; activity says "two of these
-    forty rows are busy and the other thirty-eight are still true", which
-    the pane has no way to express.
+33. **For per-row in-flight state, use `pkg/activity`.** The model is two
+    sentences. **The server is the source of truth.** When the user starts
+    work locally, the row is told at once, and that claim lasts until the
+    truth can take over. It is the row-scale counterpart to `SetLoading`
+    (rule 17), which replaces a whole body; activity says "two of these forty
+    rows are busy".
 
-    **One predicate is the whole feature.** The component runs it over its
-    own rows on every keyed swap, and the rows it reports spin:
+    It is three pieces, and a screen uses as many as its API needs. The
+    examples use `pkg/table`; `pkg/list` and `pkg/tree` have the same surface.
+    A list's `BusyWhen` reads a `list.KeyedItem` (with `Data`) and its reads
+    go through `ApplyRead(rd, items, err)`. A tree's reads a `tree.Node` —
+    your node type carries the data — and `ApplyRead(rd, root, err)`; its keys
+    are node paths. The spinner draws as a right-aligned badge on list and tree
+    rows, so there is no `ActivityColumn` to set.
+
+    **1. Observation: `BusyWhen`, over the row's own data.** Put the record in
+    `KeyedRow.Data` and say which field means "working". It does not have to
+    be a column:
 
     ```go
-    o.Columns = []table.Column{
-        {Title: "Name", Width: 22},
-        {Title: "Sync", Width: 14},    // explicit — see the width note below
-        {Title: "Health", Width: 13},
+    o.ActivityColumn = "Sync"              // where the spinner draws
+    o.BusyWhen = func(r table.KeyedRow) (string, bool) {
+        phase := r.Data.(argoApp).Phase    // operationState.phase, not sync status
+        return phase, phase == "Running"
     }
-    o.ActivityColumn = "Sync"          // table only: which cell to replace
-    settled := activity.Settled("Synced", "OutOfSync")
-    o.ActivityWhen = func(c table.Row) (string, bool) { return settled(c[colSync]) }
     ```
 
-    `list` and `tree` need only the predicate — a right-aligned badge costs
-    nothing until something is running, so there is no column to name and
-    nothing to switch on. A `pkg/poll` refresh underneath is the rest of the
-    mechanism, and a read-only dashboard needs nothing else at all.
+    Return the status for every row, busy or not: it is what the row shows
+    while busy and what a dispatched operation compares against to notice the
+    server acted. `activity.Busy(values...)` / `activity.Settled(values...)`
+    build the common predicates (ANSI and space stripped). Busy-ness from a
+    separate endpoint (`GET /jobs?status=running`) goes into `Data` too —
+    there is no second entrance.
 
-    Entries are held by key — `SetKeyedItems` / `SetKeyedRows` / a tree
-    path — for rule 32's reason and more sharply, since the premise of
-    showing a spinner is that something is changing the data underneath. On
-    anonymous rows and under `SetWindow` it is inert. Carry it across a
-    `SetTheme` rebuild with `ActivityState()` / `SetActivityState()` the way
-    you carry the cursor (rule 4); both it and `Derive` return a `tea.Cmd`
-    you must batch, exactly as `SetLoading` does.
+    Pick the field that is busy **while the work runs**. In Argo CD that is
+    `status.operationState.phase`; `sync.status` is a comparison (Synced /
+    OutOfSync) and never says Syncing, so a predicate on it never fires. Give
+    the `ActivityColumn` an explicit `Width` wide enough for the longest label.
 
-    **The data is the source, and there is one map.** No action broadcast,
-    no shell involvement, nothing accumulating: every observation replaces
-    the collection outright, so the component holds no second opinion to
-    reconcile. The remaining thing it cannot do is worth knowing before you
-    reach for it — work somebody else began and ended between two
-    observations is never seen, which is a design choice recorded in
-    `docs/activity.md`, not an oversight.
-
-    **When the busy-ness is not a field on the row, use `SetBusy`.** An
-    operations API, a job-status resource, `GET /jobs?status=running`: the
-    screen hands over the same `map[key]label` the predicate would have
-    computed. It is the second *entrance*, not a second map — a component
-    uses the predicate or it is told, never both, and `SetBusy` on a
-    component built with `ActivityWhen` panics. A screen needing both merges
-    them itself, with `activity.Settled` for its half. Keys the component
-    does not hold are kept but not drawn, so a paged table can be handed the
-    busy set for rows it has not reached; `ActivityCount()` answers over the
-    rows it holds.
-
-    **For work the user starts, `Expect` — and then three lines in the
-    screen that make it safe.** A POST returns in milliseconds and the next
-    poll is seconds away, so without a claim the row the verb was about says
-    nothing for a whole interval. `Expect(keys, label)` covers that window,
-    and every observation retires claims, so it cannot outlive what the data
-    can speak to.
+    **2. Fetches: `BeginRead` when issued, `ApplyRead` when landed.**
 
     ```go
-    case action.ChosenMsg:
-        s.gen++                      // reads in flight predate the keypress
-        s.writing++                  // reads issued until the ack predate the write
-        s.claimed[action.RunKey(m.Action, m.Target)] = keys
-        cmds = append(cmds, s.table.Expect(keys, "Syncing"))
-
-    case runner.Captured:            // under the shell, this is the ack
-        s.writing--
-        s.gen++
-        if m.Err != nil { s.table.Retract(keys...) }
+    func (s *Screen) fetch() tea.Cmd {
+        rd := s.table.BeginRead()
+        return func() tea.Msg { apps, err := s.api.List(); return fetchedMsg{rd, apps, err} }
+    }
 
     case fetchedMsg:
-        if m.gen < s.seen || s.writing > 0 { break }
-        if m.err != nil { s.table.RetractAll() }
+        wasFailing := s.table.ReadsFailing()
+        if s.table.ApplyRead(m.read, rowsOf(m.apps), m.err) {
+            s.poll.MarkRefreshed()           // rule 24: only on a read that landed
+        } else if m.err != nil && !wasFailing {
+            return s, app.ErrorOf(m.err)     // once, when reads start failing
+        }
     ```
 
-    **Don't apply a read taken across your own write.** This is the rule with
-    no compiler behind it, and the `writing` count is the half people skip:
-    bumping only at the keypress drops reads already in flight and leaves the
-    POST's own latency wide open, so a poll fired 50ms later comes back with
-    a newer generation carrying an older truth and the row blinks off and on.
-    `internal/integration/activity_claim_test.go` asserts both halves.
-    `RetractAll` on a failed read is not politeness either: an outage is
-    exactly the case where no observation is coming to retire anything.
+    Report an outage once, on the transition into failing, and let
+    `ReadsFailing()` carry it on the title after that. Posting the error on
+    every failed poll puts a fresh error on the statusbar every interval for
+    as long as the server is down.
 
-    It all assumes a **monotonic read path**. A replica or watch cache can
-    report busy, settled and busy again from three replies that were each
-    true when made, and no client-side counter repairs that.
+    `ReadsFailing()` and `poll.LastRefresh()` answer different questions, so
+    a title that shows one should usually show both: "reads failing" says the
+    rows can't be refreshed, and "refreshed Ns ago" says how stale they are.
+    The second counts from the last read that landed, so it keeps climbing
+    through an outage, which is exactly when it matters. Don't swap one for
+    the other; re-render the title on a one-second tick so N moves.
 
-    **`Options.Settle` is an allowance of observations, not a duration.** It
-    is how many reads that *repeat the pre-dispatch value* a claim survives;
-    a read reporting the key busy confirms it instead, and one reporting a
-    different settled value retires it outright. Zero — the default — retires
-    on the next observation and is right for any API whose handler sets the
-    status inline. A reconciler wants one or two. It is a ceiling, so a claim
-    nothing ever confirms still ends, and it is the one sanctioned exception
-    to the anti-pattern below about holding an indicator open: it declines to
-    treat a read that said nothing as having said something. `pkg/tree` has
-    no third ending — a node's label is its identity, not a field on it — so
-    give a tree a slightly larger allowance than the same data in a table.
+    `ApplyRead` is `SetKeyedRows` with ordering: it drops a reply overtaken by
+    a newer one, withdraws spinners that were waiting on a read when one fails
+    (an outage would otherwise hold them for its length), and applies a read
+    taken across one of your own writes without letting it end that write's
+    spinner. A watch/SSE stream needs none of this — its events arrive in
+    order; push them with `SetKeyedRows`.
 
-    **Stamp per stream, not per screen.** A screen fetching rows from one
-    endpoint and busy-ness from another has two generations, not one:
-    sharing a counter means a reply from whichever endpoint landed second is
-    dropped as stale forever. A write bumps every stream.
+    **3. Work the user starts: `Dispatch` and `Done`.** One decision per verb:
+    *who knows when the work ends?*
 
-    **`activity.Settled(values...)` is usually the better predicate.** It names
-    the statuses that mean nothing is happening and treats everything else as
-    work, which is how these APIs document themselves and which keeps working
-    when a server learns a new in-progress status — `activity.Busy` would
-    quietly treat that one as done and stop spinning. The mirror risk is a new
-    *settled* status spinning forever, so pick the list the server is less
-    likely to extend. Both take the whole row rather than one cell, because
-    the status worth watching is not always the status worth showing.
+    | Mode | When | Example |
+    |---|---|---|
+    | `activity.Observed` | the server's status says when it ends; the request only acknowledges | Argo sync `POST` → 202 at once |
+    | `activity.Held` | the request, or a job it hands back, says when it ends | Argo refresh `GET` that blocks; a job id polled to completion |
 
-    **The row says the server's own word.** The label is the value the
-    predicate matched, with the server's own casing, so there is nothing to
-    map and no way for `syncing` to become `Syncing` mid-flight. Both
-    helpers strip ANSI and surrounding space before comparing, so a status
-    column the screen has already coloured still matches.
+    ```go
+    Actions: []action.Action{{
+        Label: "Sync",
+        Multi: true,                        // acts on every marked row
+        Do: func() tea.Cmd {
+            // One operation per row; postSync replies answeredMsg{op, err}.
+            return s.table.DispatchEach(keys, "Running", activity.Observed, s.postSync)
+        },
+    }}
 
-    **No outcome glyph, and no terminal state at all.** A row that stops
-    matching simply stops: the cell goes back to rendering its own value,
-    which already says `failed` in the app's own colours, and a `✗` held
-    over the top restates it less precisely. A key's whole life is absent →
-    busy → absent.
+    case answeredMsg:
+        switch s.table.Done(m.op, m.err) {
+        case activity.Withdrawn:    // the request failed
+            return s, app.ErrorOf(m.err)
+        case activity.Acknowledged: // Observed: accepted, still running
+            return s, app.Info("Sync requested")
+        case activity.Ended:        // Held: the work is over
+            return s, app.Info("Refresh finished")
+        }
+    case activity.UnobservedMsg:
+        return s, app.Info("Sync finished between polls")
+    ```
 
-    **Say what an action's return actually means.** The shell reports
-    "<Label> completed" when a `Run` returns, which is true of an action that
-    *performs* the work and false of one that dispatches it — a POST returns
-    when the request is accepted, and the server will keep working for
-    seconds afterwards. Set `Action.Receipt` ("Sync requested") wherever the
-    verb hands work to something else, or the receipt claims something the
-    next poll will contradict.
+    **Switch on what `Done` returns; don't assume.** After an `Observed`
+    request answers, the work has only been accepted (`Acknowledged`); after a
+    `Held` one it is over (`Ended`). A reply handler shared by both kinds of
+    verb that says "completed" on every reply is wrong for the Observed ones,
+    and nothing else will tell you.
 
-    **A polled screen must drop out-of-order replies itself.** `pkg/source`
-    carries a generation so an overtaken page cannot paint stale rows under a
-    newer one; a screen that polls and calls `SetKeyedRows` has no equivalent,
-    and over a real network replies do arrive out of order. Stamp each fetch and
-    ignore anything older than the newest applied — see
-    `examples/patterns/activity`.
+    **Dispatch one operation per row** — `DispatchEach(keys, label, mode,
+    request)` does it, calling `request(op, key)` for each row's command — and
+    call `Done` per row with that row's result. One operation over the whole
+    selection puts every row behind the first refusal: a 409 on one row would
+    stop all the others' spinners while their work is still running. A single
+    request that acts on the whole selection at once is the only case for
+    `Dispatch` over several keys. A verb that runs on a multi-selection also
+    needs `Multi: true`: the menu disables anything else once more than one
+    row is marked (`action.Set.Arity()`, which is `len(Targets)`).
 
-    **When an indicator flaps, it is the read path.** Activity is a pure
-    function of the rows the component holds, recomputed only on a keyed
-    swap, and the indicator is an overlay that never writes back — so
-    nothing here *can* oscillate on its own. A status alternating faster
-    than the poll interval is a doubled poll chain (`pkg/poll` tags each
-    tick and honours only the newest, so it is closed off there — but a
-    screen driving its own `tea.Tick` has the same hazard), several reads in
-    flight landing out of order, `SetRows` on one path and `SetKeyedRows` on
-    another — which nils the keys and makes activity inert on alternate
-    frames — or a component rebuilt per fetch instead of updated. Fix the
-    cause. There is deliberately no damper in the component: shipping one
-    made it the first thing reached for and the last thing that would help.
+    **`UnobservedMsg.Label` is the claim's label**, usually `"Running"`, not the
+    verb. `m.Label + " finished"` reads "Running finished". Name the verb.
 
-    **A read trues the row up.** The set is replaced wholesale by every
-    observation, so it is never anything but the last read. Nothing
-    accumulates, and the row converges on the server within a poll interval.
-    The corollary is worth keeping in mind when a row looks stuck: the
-    client is usually right about what it was told, so check what the server
-    is actually reporting before looking here.
+    An `Observed` spinner ends when a read taken after `Done` reports the work
+    over, or after `Options.Activity.Settle` reads that repeat the pre-dispatch
+    status (0 for an API that sets status inline; 1–2 for a reconciler). A
+    `Held` spinner ignores reads and ends at `Done`. If a read reports the key
+    busy, the server's own label replaces the claim's in either mode.
 
-    Give a column that carries an indicator an explicit `Width`. Widths come
-    from the rows the table holds, so activity can never reflow anything —
-    but a column auto-sized to `Synced` has room for the glyph and not the
-    word, so the row spins without ever saying what it is doing. See
-    `examples/patterns/activity` and `docs/activity.md`.
+    **`UnobservedMsg` is the answer to "it looked like nothing happened".**
+    Work that starts and ends between two polls cannot appear on the row; an
+    `Observed` operation that ends without any read seeing it busy is reported
+    so the screen can say so. `Changed` is true when the status moved.
+    Set `Options.Revision` to a value that moves when an operation finishes
+    (Argo's `operationState.finishedAt`, a job counter): a sync that ends
+    where it began — Succeeded, then Succeeded — then ends on the first read
+    after it, reported as `Changed`, instead of waiting out `Settle`. Choose
+    something that moves when work *finishes*, not on every update.
+
+    **A failed read makes observed work `Unknown`, not idle.** Rows busy only
+    because the last good read said so stay, drawn static with a `?` in the
+    theme's `Muted` colour: clearing them would invent a read nobody took, and
+    animating them would claim someone is still watching. A request still
+    open keeps spinning. `table.ReadsFailing()` says the same for the title;
+    the next good read restores everything.
+
+    Claim with the server's own word (`"Running"`) so the row reads the same
+    from the keypress to the confirming poll. Tell the user the request was
+    accepted with "Sync requested", never "Sync completed": the request
+    returning is not the work finishing. On a `Do` verb, as in the samples
+    here, post it yourself with `app.Info` when the reply arrives;
+    `Action.Receipt` applies only to `Run` verbs, whose return the shell
+    reports.
+
+    **Across `SetTheme` (rule 4)**, carry the rows and the activity state:
+    `rows := s.table.KeyedRows()` (list: `KeyedItems()`, tree: `Root()`) and
+    `act := s.table.ActivityState()` before the rebuild, then `SetKeyedRows(rows)`
+    followed by `SetActivityState(act)` after it — rows first, so the adopted
+    claims land on rows that exist. `SetActivityState` returns the spinner's
+    first tick; `SetTheme` has nowhere to return it, and dropping it is safe:
+    the component re-arms a stalled spinner on the next message it receives.
+
+    **`UnobservedMsg` and every other activity message arrive through the
+    component's `Update`**, on the turn after the read that ended the claim —
+    `ApplyRead` returns only whether it applied the read. Forward every
+    message to the component (rule 6) and match `activity.UnobservedMsg` in
+    your screen's `Update`.
+
+    Rows must be keyed (`SetKeyedRows`); on anonymous rows and under
+    `SetWindow` activity is inert.
+
+    **No outcome glyph, no hold timers.** A row stops spinning when the data
+    says so and goes back to rendering its own cell, which already says
+    `Failed` in the app's colours. There is no damper: when an indicator flaps
+    it is the read path (a doubled poll chain, mixed `SetRows`/`SetKeyedRows`,
+    a component rebuilt per fetch, or a replica that goes backwards — which no
+    client repairs).
+
+    Code written against the first surface (`ActivityWhen`, `SetBusy`,
+    `Expect`, the screen-side generation counters) moves over call by call:
+    see "Migrating from the first API" in `docs/activity-guide.md`.
+
+    See `examples/patterns/activityrecipes` (one shape per tab, each small
+    enough to copy), `examples/patterns/activity` (all of it on one screen), and
+    `docs/activity-v2.md`.
 
 ## Anti-patterns
 
@@ -1213,12 +1231,10 @@ example in `examples/`.
   Without a TTY lipgloss falls back to the Ascii profile and strips every
   style, so a render comparison silently passes no matter what the code
   does. `lipgloss.SetColorProfile(termenv.TrueColor)` in TestMain.
-- **Don't let a claim outlive the reads that would retire it.** `Expect` is
-  safe because every observation retires claims — which is a promise the screen
-  has to keep. A read applied across your own write clears the claim with a
-  pre-write value (the row blinks), and a read that *failed* retires nothing at
-  all, so a claim held through an outage spins for the length of it. Both halves
-  live in the screen: the `writing` count and `RetractAll`. See rule 33.
+- **Don't pick the wrong mode for a verb.** A blocking request dispatched as
+  `activity.Observed` stops spinning at the first poll, which still reads the
+  pre-request status; a fire-and-forget POST dispatched as `activity.Held`
+  stops the instant the 202 lands. Ask who knows when the work ends (rule 33).
 - **Don't animate a row by re-pushing the rows.** A screen that owns a
   `spinner.Model` and calls `SetKeyedRows` on every tick is fighting whatever
   else writes those rows — usually a `pkg/poll` refresh two seconds away — and
@@ -1624,23 +1640,17 @@ path.
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
   `examples/components/metrics` and rule 24 (auto-refresh).
-- **Row activity:** `pkg/activity` is the per-row spinner and status label,
-  and it is deliberately small — `State` (a label and a `Since`), `Set`,
-  `Observe` / `Derive` for one observation of the data, `Expect` / `Retract` /
-  `RetractAll` for work the user started, `Scope` for the keys the component
-  holds, `Busy` / `Settled` for the predicate, `Render` and `Badge` for the two
-  placements, and `Adopt` for the rule-4 carry. There is one map of observed
-  state: `Observe` replaces it wholesale, so it is never anything but the last
-  read, and there is nothing to reconcile or damp. A claim from `Expect` sits
-  beside it and is retired by every observation (`Options.Settle`), never
-  written back into. No messages, no timers but the spinner's. It is a true
-  leaf — `bubbletea`, `bubbles/spinner`, `x/ansi`, and nothing from tuilib —
-  and it emits no escapes of its own: `Render` hands back text the component
-  colours through `Options.Style`, because a table cell needs a foreground-only
-  escape (rule 19) and a list row does not, and only the component knows which.
-  What it deliberately does not cover is work somebody *else* started and
-  finished between two polls. See rule 33, `docs/activity.md`, and
-  `examples/patterns/activity`.
+- **Row activity:** `pkg/activity` is the per-row spinner and status label.
+  A `Set` holds one map of observed state, replaced wholesale by each
+  observation, plus the claims operations make (`Dispatch` / `Done`, with a
+  `Mode`), and a read clock (`BeginRead` / `Accept`) that orders reads against
+  acknowledgements. `Busy` / `Settled` build predicates; `Render` / `Badge`
+  draw; `Adopt` carries state across a rebuild; `UnobservedMsg` reports work
+  no read saw. A leaf package — nothing from tuilib — that emits no escapes of
+  its own. `pkg/table`, `pkg/list` and `pkg/tree` wrap it with one surface
+  (`BusyWhen`, `Revision`, `Dispatch`, `Done`, `BeginRead`, `ApplyRead`,
+  `ReadsFailing`); a screen rarely touches a `Set` directly. See rule 33 and
+  `docs/activity-v2.md`.
 - **Poll component:** `pkg/poll` is a thin interval ticker for screens
   that auto-refresh remote state. Construct with `poll.New(poll.Options
   {Interval: d})`, batch `m.poll.Init()` into the screen's Init, and

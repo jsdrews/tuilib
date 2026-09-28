@@ -57,8 +57,10 @@ func describe(a App, jobs []Job) map[string]any {
 			},
 		},
 		"status": map[string]any{
-			"sync":   map[string]any{"status": a.Sync, "revision": strconv.FormatInt(a.Rev, 10)},
-			"health": map[string]any{"status": a.Health},
+			"sync":           map[string]any{"status": a.Sync, "revision": strconv.FormatInt(a.Rev, 10)},
+			"health":         map[string]any{"status": a.Health},
+			"operationState": map[string]any{"phase": a.Phase},
+			"reconciledAt":   a.ReconciledAt.UTC().Format(time.RFC3339),
 			"resources": []any{
 				map[string]any{"kind": "Deployment", "name": a.Name, "status": a.Sync},
 				map[string]any{"kind": "Service", "name": a.Name, "status": SyncSynced},

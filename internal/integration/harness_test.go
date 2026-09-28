@@ -1,4 +1,11 @@
+//go:build integration
+
 // Package integration drives whole screens against demoapi.
+//
+// Behind the integration build tag, because these run on real timers and take
+// a minute or more: `go test ./...` skips them, and `task test:integration` (or
+// `go test -tags integration ./internal/integration/...`) runs them. `task
+// check` and CI run both.
 //
 // The distinction from internal/componenttest is the one docs/demoapi.md
 // decision 14 draws: if an assertion can be written by calling a setter, it

@@ -415,7 +415,7 @@ func (m Menu) reason(a Action) string {
 	if a.Disabled != "" {
 		return a.Disabled
 	}
-	if m.set.Count > 1 && !a.Multi {
+	if m.set.Arity() > 1 && !a.Multi {
 		return m.multiRsn
 	}
 	if a.Exclusive && m.running[RunKey(a, m.set.Target)] {

@@ -262,8 +262,8 @@ func TestJobTransitionsOnThePinnedClock(t *testing.T) {
 	}
 	var mid page
 	getJSON(t, c, "/apps?limit=1", &mid)
-	if mid.Rows[0].Sync != SyncSyncing {
-		t.Errorf("sync = %q, want %q", mid.Rows[0].Sync, SyncSyncing)
+	if mid.Rows[0].Phase != PhaseRunning {
+		t.Errorf("phase = %q, want %q", mid.Rows[0].Phase, PhaseRunning)
 	}
 
 	// Still running one second in.
@@ -287,31 +287,6 @@ func TestJobTransitionsOnThePinnedClock(t *testing.T) {
 	}
 	if after.Rows[0].Rev <= app.Rev {
 		t.Errorf("rev did not change: %d then %d", app.Rev, after.Rows[0].Rev)
-	}
-}
-
-// Refresh is instant server-side. A poll never observes it running, which is
-// the case docs/activity.md decision 19 exists for — so the fixture has to be
-// able to produce it.
-func TestRefreshFinishesBeforeAnyPollCouldSeeIt(t *testing.T) {
-	c, clk := fixture(t, Options{Apps: 20})
-
-	var p page
-	getJSON(t, c, "/apps?limit=1", &p)
-	id := p.Rows[0].ID
-
-	post(t, c, "/apps/"+id+"/refresh", nil)
-	clk.advance(2 * time.Second) // one poll interval later
-
-	var jobs []Job
-	getJSON(t, c, "/jobs?app="+id, &jobs)
-	if len(jobs) != 1 || jobs[0].Status == JobRunning {
-		t.Fatalf("jobs = %+v, want it already finished", jobs)
-	}
-	var after page
-	getJSON(t, c, "/apps?limit=1", &after)
-	if after.Rows[0].Sync == SyncRefresh {
-		t.Error("the first observation still saw it refreshing")
 	}
 }
 
@@ -497,7 +472,7 @@ func TestLogUnknownJob(t *testing.T) {
 }
 
 // A failed job must still land the app somewhere restful. It used to skip the
-// assignment entirely, leaving the Syncing that starting it had set with
+// assignment entirely, leaving the Running that starting it had set with
 // nothing to clear it — so the app reported itself working forever and every
 // client faithfully spun a row for it.
 func TestFailedJobLandsInARestingState(t *testing.T) {
@@ -511,8 +486,8 @@ func TestFailedJobLandsInARestingState(t *testing.T) {
 
 	var mid page
 	getJSON(t, c, "/apps?limit=1", &mid)
-	if mid.Rows[0].Sync != SyncSyncing {
-		t.Fatalf("sync = %q while the job runs, want %q", mid.Rows[0].Sync, SyncSyncing)
+	if mid.Rows[0].Phase != PhaseRunning {
+		t.Fatalf("phase = %q while the job runs, want %q", mid.Rows[0].Phase, PhaseRunning)
 	}
 
 	clk.advance(10 * time.Second)
@@ -525,8 +500,8 @@ func TestFailedJobLandsInARestingState(t *testing.T) {
 
 	var after page
 	getJSON(t, c, "/apps?limit=1", &after)
-	if after.Rows[0].Sync == SyncSyncing {
-		t.Error("a failed job left the app reporting Syncing with nothing to clear it")
+	if after.Rows[0].Phase != PhaseFailed {
+		t.Errorf("phase = %q, want %q — a failed job must land somewhere restful", after.Rows[0].Phase, PhaseFailed)
 	}
 	if after.Rows[0].Sync != SyncOutOfSync {
 		t.Errorf("sync = %q, want %q — a sync that failed did not reconcile",

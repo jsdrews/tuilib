@@ -27,21 +27,27 @@ tasks:
       - go build ./...
 
   vet:
-    desc: Run go vet
+    desc: Run go vet, integration tests included
     cmds:
-      - go vet ./...
+      - go vet -tags integration ./...
 
   test:
-    desc: Run tests
+    desc: Run unit and component tests (fast; excludes integration)
     cmds:
       - go test ./...
 
+  test:integration:
+    desc: Run the integration tests against demoapi (slow; real timers)
+    cmds:
+      - go test -tags integration ./internal/integration/...
+
   check:
-    desc: build + vet + test
+    desc: build + vet + test + integration tests
     cmds:
       - task: build
       - task: vet
       - task: test
+      - task: test:integration
 
   tidy:
     desc: go mod tidy

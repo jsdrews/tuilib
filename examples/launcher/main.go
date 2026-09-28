@@ -41,6 +41,7 @@ import (
 	comptree "github.com/jsdrews/tuilib/examples/components/tree"
 	patactions "github.com/jsdrews/tuilib/examples/patterns/actions"
 	patactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
+	patactivityrecipes "github.com/jsdrews/tuilib/examples/patterns/activityrecipes"
 	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
 	patdrilldown "github.com/jsdrews/tuilib/examples/patterns/drilldown"
 	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
@@ -164,8 +165,11 @@ var entries = []entry{
 		"The verb menu. Press a or right-click a row to open action.Menu: it sizes itself to its widest row and anchors where you asked. This screen is single-target on purpose — Multi-select is the one that marks rows. Start a Restart and reopen the menu to see the Exclusive gate. Single click commits, click-away dismisses, Delete confirms first.",
 		patactions.New},
 	{groupPatterns, "Activity", "patterns/activity",
-		"Per-row in-flight state, from all three directions at once, against demoapi over HTTP. Press a and pick Sync: the row spins before any request is answered, because the screen put its Selection() into action.Set.Targets and the shell broadcast the verb's Busy label against it — then hands over to the server's own status as the poll catches up. Mark several rows with x (or A for all) and one run drives every one of them: one log event, one receipt, every marked row spinning, all finishing together. Meanwhile scheduled syncs fire with nobody pressing anything and spin because ActivityWhen recognises the status in the polled data. Refresh is the case worth watching: it finishes server-side long before the next poll, and the row keeps moving until that poll lands, because the indicator covers the gap between asking and being told rather than the work. Operations that begin and end between two polls flash • instead, off a hidden revision column.",
+		"Per-row in-flight state against an Argo-shaped demoapi over HTTP. Rows spin when the server's operation phase says Running — scheduled syncs fire with nobody pressing anything, and BusyWhen reads the phase from each row's Data, not the Sync column. Press a for one verb per API shape: Sync (a POST that answers at once; the phase says when it ends), Refresh (a GET that blocks until reconciled and shows nothing on the app, so only the request knows), Sync and follow (a job handle streamed to the end), Quick sync (finishes between polls, so the statusbar says so rather than the row looking ignored), and Fail a sync. Mark rows with x and one verb drives them all.",
 		patactivity.New},
+	{groupPatterns, "Activity recipes", "patterns/activityrecipes",
+		"The row-activity API one shape per tab, each small enough to copy. Observe: BusyWhen + BeginRead/ApplyRead, and nothing else. Sync: Dispatch(activity.Observed) and Done, plus UnobservedMsg for a sync nobody saw. Refresh: a blocking GET, Dispatch(activity.Held). Job handle: a 202 with a job id polled to the end — also Held — including one the server accepted and dropped. Press a on any row.",
+		patactivityrecipes.New},
 	{groupPatterns, "Multi-select", "patterns/multiselect",
 		"table.Model with Options.Markable: x marks the cursor row, X (or shift+click) extends the selection between the anchor and the cursor in either direction, A marks everything the filter shows, D drops the selection, and clicking the ✓ gutter toggles without opening the row. Marks are held by Key (SetKeyedRows), so they survive filtering — mark a row, filter it away, and the count on the border does not move — and survive a theme swap via SetMarks. Press a or right-click for the menu: it is titled with what it will act on (\"3 items\"), and Describe, which did not declare Multi, dims itself with a reason as soon as a second row is marked.",
 		patmultiselect.New},

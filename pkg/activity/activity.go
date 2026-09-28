@@ -7,32 +7,23 @@
 // means "two of these forty rows are busy and the other thirty-eight are still
 // true", which the pane has no way to say.
 //
-// # The data is the source, and there is one map
+// # The model
+//
+// The server is the source of truth. When the user starts work locally, the
+// row is told at once, and that claim lasts until the truth can take over.
 //
 // A component observes its own rows on every keyed swap, a predicate says
-// which of them are working, and those rows spin. When the busy-ness is not a
-// field on the row — an operations API, a job status resource — the screen
-// hands the same map over with SetBusy instead. Two entrances, one map, one
-// writer: a component uses the predicate or it is told, never both, which is
-// what makes this feature unable to contradict itself. No action broadcast, no
-// app shell involvement, and nothing accumulates: every observation replaces
-// the collection outright.
+// which of them are working, and those rows spin. Every observation replaces
+// the collection outright; nothing accumulates.
 //
-// # Work the user just started
-//
-// One thing is not in the data yet. A POST returns in milliseconds and the
-// next poll is seconds away, so between the keypress and the observation that
-// reports it the row reads exactly as it did before — the thing the verb was
-// about says nothing. Expect covers that window with a claim, and every
-// observation retires claims (Options.Settle). A claim is not a second opinion
-// about the same question: nothing writes back into it, and it survives only
-// until the data can speak to it.
-//
-// Two rules live in the screen rather than here, because this package has no
-// idea a fetch exists. It must not apply a read taken across its own write, or
-// a reply that predates the keypress clears the claim. And it must retract
-// when a read fails, because an outage is exactly the case where no
-// observation is coming to retire anything.
+// Work the user starts is an operation (op.go): Dispatch opens a claim, Done
+// reports that the request answered, and the Mode says who knows when the
+// work ends — the server's status (Observed) or the request itself (Held).
+// BeginRead and Accept order reads against those answers, so a read taken
+// across a write cannot end its claim and a failed read withdraws what was
+// waiting on one. Screens reach all of this through their component —
+// table.Dispatch, table.ApplyRead, and the same on list and tree — and rarely
+// touch a Set.
 //
 // What remains outside all of this, as a design choice rather than an
 // oversight: work that somebody else began and ended between two observations
@@ -64,6 +55,7 @@
 package activity
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +75,13 @@ type State struct {
 	// observed. Elapsed time therefore measures the work rather than the poll
 	// that last saw it.
 	Since time.Time
+
+	// Unknown is true while reads are failing and this key is busy only
+	// because the last successful read said so. The work may have finished
+	// since; nobody can see. Render draws it static, with a "?" where the
+	// spinner would be — neither cleared, which would invent a read nobody
+	// took, nor animated, which would claim someone is still watching.
+	Unknown bool
 }
 
 // claim is one expected entry: what the screen said it asked for, the value
@@ -92,6 +91,16 @@ type claim struct {
 	st    State
 	at    string
 	spare int
+
+	// The v2 fields. op is the Dispatch that made this claim, zero for a v1
+	// Expect. mode decides what ends it. acked is whether the dispatching
+	// request has answered, and ackAt is the read clock when it did: an
+	// observation taken before that cannot speak to the claim, because it
+	// cannot know about the write.
+	op    uint64
+	mode  Mode
+	acked bool
+	ackAt uint64
 }
 
 // Options configures a Set.
@@ -108,7 +117,7 @@ type Options struct {
 	Style func(st State, text string) string
 
 	// Settle is how many observations that say nothing new an unconfirmed
-	// expected claim survives — see Expect.
+	// claim survives — an Observed Dispatch, or an Expect.
 	//
 	// Counted in observations rather than seconds, because no duration the
 	// client can measure is the right length of that wait: it is set by the
@@ -127,7 +136,7 @@ type Options struct {
 // Set is the keyed collection of busy rows plus the spinner that animates
 // them. Components embed one.
 //
-// It is a value, and every mutating method takes a pointer: Derive replaces
+// It is a value, and every mutating method takes a pointer: ObserveRows replaces
 // the collection outright rather than editing it, so a copy taken beforehand
 // keeps the observation it was made with. A component therefore has to keep
 // the Set it mutated — which is what bubbletea's value-receiver Update already
@@ -162,6 +171,23 @@ type Set struct {
 	spin  spinner.Model
 	style func(State, string) string
 
+	// clock orders reads against acknowledgements; see BeginRead. applied is
+	// the clock value of the newest read accepted, and obsAt is the one the
+	// next observation was taken at — set by Accept, and otherwise "now",
+	// which is right for a stream whose events arrive in order.
+	clock   uint64
+	applied uint64
+	obsAt   uint64
+	fromRd  bool
+
+	// failing is whether the newest read settled was a failure. Set by
+	// Accept, cleared by any observation.
+	failing bool
+
+	// statuses is each key's status as of the last observation — label plus
+	// revision — which is what Dispatch records a claim against.
+	statuses map[string]string
+
 	// ticking is a claim that a tick chain is in flight, and lastTick is when
 	// that claim was last true. Both, because the claim can become false
 	// without this Set hearing about it — see revive.
@@ -184,35 +210,61 @@ func New(opts Options) Set {
 	}
 }
 
-// Derive replaces the whole collection from one observation of the data.
+// ObserveRows is one observation of the rows a component holds: it runs eval
+// over each and replaces the whole collection with what it reports.
 //
-// busy maps the keys that are working to what they should say; every key
-// absent from it is not working. Wholesale rather than incremental because an
-// observation *is* the whole truth as of that moment — an incremental API
-// would make "this row stopped being busy" something the caller has to notice
-// and report, which is the bookkeeping this exists to remove.
+// keys are the rows' keys in order; eval(i) reports row i's label, whether it
+// is busy, and an optional revision. The label and revision together are the
+// row's status — what a dispatched claim compares against to notice the server
+// acted — and the label alone is what a busy row shows. A nil eval means the
+// component has no predicate: nothing is observed busy, but the read still
+// counts down Observed claims, or a screen that dispatches without one would
+// spin forever.
 //
-// A key's Since survives across observations, so a row that stays busy keeps
-// measuring from when the work was first seen.
+// Wholesale rather than incremental because an observation *is* the whole
+// truth as of that moment. A key's Since survives across observations, so a
+// row that stays busy keeps measuring from when the work was first seen.
 //
-// The returned command is the animation's first tick; batch it into your
-// screen's command stream the way SetLoading's is batched.
-func (s *Set) Derive(busy map[string]string) tea.Cmd { return s.Observe(busy, nil) }
+// The returned command is the animation's first tick; a component batches it
+// into its own command stream.
+func (s *Set) ObserveRows(keys []string, eval func(i int) (label string, busy bool, rev string)) tea.Cmd {
+	s.setScope(keys)
+	if eval == nil {
+		if len(s.expected) == 0 {
+			return nil
+		}
+		return s.observe(nil, nil)
+	}
+	busy := map[string]string{}
+	statuses := make(map[string]string, len(keys))
+	for i, k := range keys {
+		if k == "" {
+			continue
+		}
+		label, b, rev := eval(i)
+		if b {
+			busy[k] = label
+		}
+		if rev != "" {
+			label += "\x1f" + rev
+		}
+		statuses[k] = label
+	}
+	s.statuses = statuses
+	// Unconditionally, including when nothing matches: an empty observation
+	// is a real one, and the only thing that can stop the last spinner.
+	return s.observe(busy, statuses)
+}
 
-// Observe is Derive with the values an expected claim is judged against.
+// observe applies one observation: busy is every working key and its label,
+// values each key's status for judging claims.
 //
-// values carries the current value of each key the caller is watching — for a
-// table the activity column's cell, for a list the item's text. Only keys with
-// a claim against them are ever consulted, so a caller builds it from
-// Expecting and it is empty in the ordinary case. Passing nil makes every
-// observation an uninformative one, which is the right reading when the values
-// are not available: a screen on the SetBusy entrance holds them itself and
-// hands over busy keys alone.
+// Nil values makes every observation an uninformative one for claims.
 //
 // The three ways a claim ends are documented on Options.Settle. They are all
 // here because they are all the same decision — how much this observation is
 // entitled to say about a row the user just acted on.
-func (s *Set) Observe(busy, values map[string]string) tea.Cmd {
+func (s *Set) observe(busy, values map[string]string) tea.Cmd {
 	if s.busy == nil {
 		s.busy = map[string]State{}
 	}
@@ -235,115 +287,95 @@ func (s *Set) Observe(busy, values map[string]string) tea.Cmd {
 		next[k] = st
 	}
 	s.busy = next
-	s.retire(busy, values)
-	return s.armTick()
+	s.failing = false
+	at := s.clock
+	if s.fromRd {
+		at, s.fromRd = s.obsAt, false
+	}
+	report := s.retire(busy, values, at)
+	return tea.Batch(s.armTick(), report)
 }
 
-// retire applies one observation to the expected map.
-func (s *Set) retire(busy, values map[string]string) {
+// retire applies one observation, taken at read clock at, to the claims.
+//
+// A key reported busy confirms its claim at any time: that is the server's own
+// word, whenever the read was taken. Everything else depends on the claim's
+// mode. A Held claim is ended by Done and nothing an observation says reaches
+// it. An Observed claim is judged only by reads taken after its request
+// answered — a read from before then cannot know about the write — and those
+// end it by a changed status, or by running out of allowance.
+//
+// An Observed claim from Dispatch that ends without ever being confirmed is
+// reported, grouped by operation, so the screen can say something rather
+// than let the row look ignored.
+func (s *Set) retire(busy, values map[string]string, at uint64) tea.Cmd {
+	type ended struct {
+		msg UnobservedMsg
+	}
+	var reports map[uint64]*ended
+	unobserved := func(k string, c claim, changed bool) {
+		if c.op == 0 {
+			return
+		}
+		if reports == nil {
+			reports = map[uint64]*ended{}
+		}
+		e, ok := reports[c.op]
+		if !ok {
+			e = &ended{msg: UnobservedMsg{Op: c.op, Label: c.st.Label}}
+			reports[c.op] = e
+		}
+		e.msg.Keys = append(e.msg.Keys, k)
+		e.msg.Changed = e.msg.Changed || changed
+	}
+
 	for k, c := range s.expected {
 		if _, confirmed := busy[k]; confirmed {
+			if c.mode == Held {
+				continue // the observed label shows; Done still ends it
+			}
 			delete(s.expected, k)
 			continue
+		}
+		if c.mode == Held {
+			continue
+		}
+		if c.op != 0 && (!c.acked || at < c.ackAt) {
+			continue // taken across the write: says nothing about it
 		}
 		if v, seen := values[k]; seen && v != c.at {
 			// The server acted: the key is settled at a value it did not hold
 			// when the claim was made, so the work is over rather than pending.
 			delete(s.expected, k)
+			unobserved(k, c, true)
 			continue
 		}
 		if c.spare <= 0 {
 			delete(s.expected, k)
+			unobserved(k, c, false)
 			continue
 		}
 		c.spare--
 		s.expected[k] = c
 	}
-}
 
-// Expect records that the screen has asked the server to work on keys, before
-// any observation can say so.
-//
-// It is a claim, not a second source of truth: every observation retires
-// entries from it (see Options.Settle) and nothing ever writes back into it, so
-// it cannot outlive the data's ability to speak to it. at carries each key's
-// current value, which is what lets a later observation notice the server
-// acted; a caller without values passes nil.
-//
-// label is the guess — "Syncing" — and it is what the row says until an
-// observation replaces it with the server's own word.
-//
-// The returned command is the animation's first tick, exactly as Derive's is.
-func (s *Set) Expect(keys []string, label string, at map[string]string) tea.Cmd {
-	if len(keys) == 0 {
+	if len(reports) == 0 {
 		return nil
 	}
-	if s.expected == nil {
-		s.expected = map[string]claim{}
+	cmds := make([]tea.Cmd, 0, len(reports))
+	for _, e := range reports {
+		sort.Strings(e.msg.Keys)
+		msg := e.msg
+		cmds = append(cmds, func() tea.Msg { return msg })
 	}
-	now := time.Now()
-	for _, k := range keys {
-		if k == "" {
-			continue
-		}
-		s.expected[k] = claim{
-			st:    State{Label: label, Since: now},
-			at:    at[k],
-			spare: s.settle,
-		}
-	}
-	return s.armTick()
+	return tea.Batch(cmds...)
 }
 
-// Expecting is the keys currently carrying a claim.
-//
-// A component calls it to find out which values are worth collecting for the
-// next Observe. It is empty whenever nobody has dispatched anything, which is
-// almost always, so the collection costs nothing in the ordinary case.
-func (s Set) Expecting() []string {
-	if len(s.expected) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(s.expected))
-	for k := range s.expected {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-// Retract drops the claims on keys, for a request that failed.
-//
-// Politeness on a write that was refused — the next observation would retire
-// the claim anyway — and the honest thing on a key the screen has stopped
-// acting on.
-func (s *Set) Retract(keys ...string) {
-	for _, k := range keys {
-		delete(s.expected, k)
-	}
-}
-
-// RetractAll drops every claim, for a read that failed.
-//
-// This one is not politeness. A claim is a promise that the next observation
-// will explain it, and when observations have stopped arriving — an outage, a
-// fetch that errored, a poll the user paused — there is nothing left to keep
-// that promise. Holding the claim then asserts something the screen has no way
-// to support, for as long as the interruption lasts rather than for one poll.
-func (s *Set) RetractAll() { clear(s.expected) }
-
-// Scope tells the Set which keys the component currently holds.
-//
-// Entries outside it are kept but neither rendered, counted nor animated. That
-// matters only on the SetBusy entrance, where the map comes from somewhere
-// other than the rows and can name one the component does not hold — on another
-// page of a paged table, or gone since the last read. A predicate's map is a
-// subset of the rows by construction, so scoping is the identity there.
-//
-// Keys are kept rather than discarded because rows and busy-ness arrive on
-// separate cadences: a key the component does not hold yet is the ordinary case
-// on a paged table, and dropping it on arrival would leave that row inert when
-// it scrolls into view.
-func (s *Set) Scope(keys []string) {
+// setScope records the keys the component currently holds. Entries outside it
+// — a claim on a row a refresh removed, or dispatched before its row arrived —
+// are kept but neither rendered, counted nor animated, so the row lights up if
+// it comes back.
+func (s *Set) setScope(keys []string) {
 	scope := make(map[string]bool, len(keys))
 	for _, k := range keys {
 		if k != "" {
@@ -365,12 +397,20 @@ func (s Set) stateOf(key string) (State, bool) {
 	// Observed beats claimed. The label is then the server's own word rather
 	// than the screen's guess, which is the whole reason the claim is allowed
 	// to be superseded silently.
+	c, claimed := s.expected[key]
 	if st, ok := s.busy[key]; ok {
+		// A claim still standing here is a request still open, so the key is
+		// live whatever the reads are doing.
+		st.Unknown = s.failing && !claimed
 		return st, true
 	}
-	c, ok := s.expected[key]
-	return c.st, ok
+	return c.st, claimed
 }
+
+// ReadsFailing reports whether the newest read failed and no observation has
+// arrived since. Rows busy only on the strength of an earlier read are drawn
+// Unknown meanwhile; a screen typically says so on its title as well.
+func (s Set) ReadsFailing() bool { return s.failing }
 
 // Handle advances the animation. Components call it from Update and return the
 // command; every message that is not a spinner tick is a no-op beyond the
@@ -404,6 +444,11 @@ func (s *Set) Adopt(other Set) tea.Cmd {
 		claims[k] = c
 	}
 	s.expected = claims
+	s.clock, s.applied, s.failing = other.clock, other.applied, other.failing
+	s.statuses = make(map[string]string, len(other.statuses))
+	for k, v := range other.statuses {
+		s.statuses[k] = v
+	}
 	if other.held {
 		scope := make(map[string]bool, len(other.scope))
 		for k, v := range other.scope {
@@ -424,8 +469,8 @@ func (s Set) Active() bool { return s.Count() > 0 }
 // Count is how many of the component's keys are working — observed or claimed.
 //
 // Scoped, so it answers "how many of my rows" rather than "how many entries do
-// I hold": a SetBusy map naming rows on another page would otherwise animate a
-// spinner nothing can see and inflate a counter a screen might put in a title.
+// I hold": a claim on a row a refresh removed would otherwise animate a spinner
+// nothing can see and inflate a counter a screen might put in a title.
 func (s Set) Count() int {
 	n := 0
 	for k := range s.busy {
@@ -461,6 +506,9 @@ func (s Set) Render(key string, width int) (string, bool) {
 	// spinner.Dot's frames carry a trailing space, which would put two between
 	// the glyph and the label.
 	text := strings.TrimRight(s.spin.View(), " ")
+	if st.Unknown {
+		text = "?"
+	}
 	if st.Label != "" && xansi.StringWidth(text)+1+xansi.StringWidth(st.Label) <= width {
 		text += " " + st.Label
 	}
@@ -561,14 +609,15 @@ func (s *Set) revive() tea.Cmd {
 //
 // Values are compared with surrounding space and any ANSI styling stripped, so
 // a cell coloured by the screen still matches.
+//
+// The value comes back plain whether or not it matched: under a component's
+// BusyWhen it is the row's status, which an operation compares against to
+// notice the server acted, so a settled row has to say what it settled at.
 func Busy(values ...string) func(value string) (label string, busy bool) {
 	set := lowered(values)
 	return func(value string) (string, bool) {
 		plain := strings.TrimSpace(xansi.Strip(value))
-		if set[strings.ToLower(plain)] {
-			return plain, true
-		}
-		return "", false
+		return plain, set[strings.ToLower(plain)]
 	}
 }
 
@@ -590,10 +639,7 @@ func Settled(values ...string) func(value string) (label string, busy bool) {
 	set := lowered(values)
 	return func(value string) (string, bool) {
 		plain := strings.TrimSpace(xansi.Strip(value))
-		if plain == "" || set[strings.ToLower(plain)] {
-			return "", false
-		}
-		return plain, true
+		return plain, plain != "" && !set[strings.ToLower(plain)]
 	}
 }
 
