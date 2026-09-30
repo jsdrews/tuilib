@@ -54,3 +54,29 @@ A whole component having no data yet; its body is replaced. Activity is per-row 
 **Mark**:
 The user's selection of rows. Activity is the system's state about rows. Both are held by key, so marking rows and then acting on them makes exactly those rows active.
 _Avoid_: select (as a noun for the set)
+
+### Remote queries
+
+**Committed query**:
+The filter and sort the user last committed for a remote source to answer. Filter text commits on enter, esc or blur; a sort commits once sort input goes quiet.
+_Avoid_: pending query, current query, in-flight query
+
+**Answered query**:
+The query the rows on screen are the source's answer to. It trails the committed query while the source is still answering.
+_Avoid_: showing query, displayed query
+
+**Staged sort**:
+A sort the user has moved to but not yet committed. It is the only way the sort a table shows can differ from its committed query.
+_Avoid_: pending sort, draft sort
+
+**Stale**:
+Rows whose answered query differs from the committed query. They stay on screen, drawn dimmed, until the committed query's answer arrives. A state of the rows, not of the component.
+_Avoid_: loading (which replaces the body), reloading, outdated
+
+**Failed query**:
+A committed query whose fetch failed. The rows stay stale, still answering the previous query, and the user's input is kept so the same query can be retried or edited.
+_Avoid_: error state, reverted query
+
+**Query history**:
+The console's record of what happened to each committed query: answered (with how long it took), failed, or cancelled. Routine page fetches are left out; failed ones are not.
+_Avoid_: request log, fetch log

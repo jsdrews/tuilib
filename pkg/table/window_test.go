@@ -52,7 +52,7 @@ func bodyText(m Model) string { return ansi.Strip(m.View()) }
 
 func TestWindowRowCountIsLogicalTotal(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	if got := m.rowCount(); got != 1000 {
 		t.Errorf("rowCount = %d, want the logical total 1000, not the 20 resident", got)
 	}
@@ -60,7 +60,7 @@ func TestWindowRowCountIsLogicalTotal(t *testing.T) {
 
 func TestWindowCursorReachesBeyondResident(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'G'}})
 	if m.Cursor() != 999 {
 		t.Errorf("cursor after G = %d, want 999 — the window must not cap the cursor", m.Cursor())
@@ -70,7 +70,7 @@ func TestWindowCursorReachesBeyondResident(t *testing.T) {
 func TestWindowUnresidentRowsRenderPlaceholder(t *testing.T) {
 	m := newWindowed(t)
 	// Window covers 0..19; scroll far past it.
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetCursor(500)
 	out := bodyText(m)
 	if strings.Contains(out, "row-500") {
@@ -83,7 +83,7 @@ func TestWindowUnresidentRowsRenderPlaceholder(t *testing.T) {
 
 func TestWindowResidentRowsRenderData(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	m.SetCursor(500)
 	out := bodyText(m)
 	if !strings.Contains(out, "row-500") {
@@ -96,7 +96,7 @@ func TestWindowResidentRowsRenderData(t *testing.T) {
 
 func TestWindowSelectedRejectsUnresident(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetCursor(500)
 	if row, ok := m.Selected(); ok {
 		t.Errorf("Selected() = %v, ok — a screen must not act on a row it hasn't received", row)
@@ -110,12 +110,12 @@ func TestWindowSelectedRejectsUnresident(t *testing.T) {
 
 func TestWindowCursorSurvivesWindowArrival(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetCursor(500)
 	if _, ok := m.Selected(); ok {
 		t.Fatal("precondition: row 500 should not be resident yet")
 	}
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	if m.Cursor() != 500 {
 		t.Fatalf("cursor moved to %d when the window landed, want 500", m.Cursor())
 	}
@@ -127,11 +127,11 @@ func TestWindowCursorSurvivesWindowArrival(t *testing.T) {
 
 func TestWindowUnknownTotalGrowsWithLoad(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, -1)
+	m.SetWindow(windowRows(0, 20), 0, -1, Answer{})
 	if got := m.rowCount(); got != 20 {
 		t.Errorf("rowCount = %d, want 20 — the end of what has loaded", got)
 	}
-	m.SetWindow(windowRows(20, 20), 20, -1)
+	m.SetWindow(windowRows(20, 20), 20, -1, Answer{})
 	if got := m.rowCount(); got != 40 {
 		t.Errorf("rowCount = %d, want 40 after a second page", got)
 	}
@@ -139,11 +139,11 @@ func TestWindowUnknownTotalGrowsWithLoad(t *testing.T) {
 
 func TestWindowUnknownTotalCounterMarkedApproximate(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, -1)
+	m.SetWindow(windowRows(0, 20), 0, -1, Answer{})
 	if got := m.totalLabel(); got != "20+" {
 		t.Errorf("totalLabel = %q, want %q — an unknown total is a floor", got, "20+")
 	}
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	if got := m.totalLabel(); got != "1000" {
 		t.Errorf("totalLabel = %q, want %q", got, "1000")
 	}
@@ -151,7 +151,7 @@ func TestWindowUnknownTotalCounterMarkedApproximate(t *testing.T) {
 
 func TestWindowCounterShowsLogicalTotal(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	m.SetCursor(500)
 	if out := bodyText(m); !strings.Contains(out, "501 / 1000") {
 		t.Errorf("counter should read against the logical total:\n%s", out)
@@ -160,7 +160,7 @@ func TestWindowCounterShowsLogicalTotal(t *testing.T) {
 
 func TestWindowAccessor(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(100, 25), 100, 1000)
+	m.SetWindow(windowRows(100, 25), 100, 1000, Answer{})
 	off, count, total := m.Window()
 	if off != 100 || count != 25 || total != 1000 {
 		t.Errorf("Window() = (%d, %d, %d), want (100, 25, 1000)", off, count, total)
@@ -178,7 +178,7 @@ func TestWindowAccessorOnPlainTable(t *testing.T) {
 
 func TestSetRowsClearsWindow(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	m.SetRows(windowRows(0, 3))
 	if m.rowCount() != 3 {
 		t.Errorf("rowCount = %d after SetRows, want 3 — the window offset must not survive", m.rowCount())
@@ -190,7 +190,7 @@ func TestSetRowsClearsWindow(t *testing.T) {
 
 func TestSetKeyedRowsClearsWindow(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	m.SetKeyedRows([]KeyedRow{{Key: "a", Cells: []string{"A", "x"}}})
 	if m.rowCount() != 1 {
 		t.Errorf("rowCount = %d, want 1", m.rowCount())
@@ -199,7 +199,7 @@ func TestSetKeyedRowsClearsWindow(t *testing.T) {
 
 func TestWindowViewportReportsLogicalTotal(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	_, _, total, valid := m.viewport()
 	if !valid {
 		t.Fatal("viewport should be valid")
@@ -211,7 +211,7 @@ func TestWindowViewportReportsLogicalTotal(t *testing.T) {
 
 func TestWindowNeverFiltersLocally(t *testing.T) {
 	m := newWindowed(t, func(o *Options) { o.Filterable = true })
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetValue("row-3")
 	if m.rowCount() != 1000 {
 		t.Errorf("rowCount = %d — filtering one page of a larger set is not filtering", m.rowCount())
@@ -223,7 +223,7 @@ func TestWindowNeverFiltersLocally(t *testing.T) {
 
 func TestWindowNeverSortsLocally(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow([]Row{{"charlie", "x"}, {"alpha", "x"}, {"bravo", "x"}}, 0, 3)
+	m.SetWindow([]Row{{"charlie", "x"}, {"alpha", "x"}, {"bravo", "x"}}, 0, 3, Answer{})
 	m.SetSort(0, false)
 	row, _ := m.Selected()
 	if row[0] != "charlie" {
@@ -236,7 +236,7 @@ func TestWindowNeverSortsLocally(t *testing.T) {
 
 func TestWindowSelectedIndexIsAbsolute(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(490, 20), 490, 1000)
+	m.SetWindow(windowRows(490, 20), 490, 1000, Answer{})
 	m.SetCursor(500)
 	idx, ok := m.SelectedIndex()
 	if !ok || idx != 500 {
@@ -246,7 +246,7 @@ func TestWindowSelectedIndexIsAbsolute(t *testing.T) {
 
 func TestWindowDoubleClickOnUnresidentDoesNotActivate(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 2), 0, 1000)
+	m.SetWindow(windowRows(0, 2), 0, 1000, Answer{})
 	// Row 3 is inside the logical range but outside the window.
 	m, cmd := m.Update(press(2, 1+m.headerRows()+3, 2))
 	if m.Cursor() != 3 {
@@ -259,7 +259,7 @@ func TestWindowDoubleClickOnUnresidentDoesNotActivate(t *testing.T) {
 
 func TestWindowDoubleClickOnResidentActivates(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m, cmd := m.Update(press(2, 1+m.headerRows()+3, 2))
 	a := drainActivatedMsg(cmd)
 	if a == nil {
@@ -272,7 +272,7 @@ func TestWindowDoubleClickOnResidentActivates(t *testing.T) {
 
 func TestWindowFocusMsgEmptyOnUnresident(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetCursor(5)
 	// Emit the first focus, so the Empty transition below is a real
 	// transition rather than the initial-state suppression.
@@ -290,7 +290,7 @@ func TestWindowFocusMsgEmptyOnUnresident(t *testing.T) {
 
 func TestWindowPlaceholderGlyphConfigurable(t *testing.T) {
 	m := newWindowed(t, func(o *Options) { o.Placeholder = "~" })
-	m.SetWindow(windowRows(0, 2), 0, 1000)
+	m.SetWindow(windowRows(0, 2), 0, 1000, Answer{})
 	m.SetCursor(500)
 	if out := bodyText(m); !strings.Contains(out, "~") {
 		t.Errorf("custom placeholder not rendered:\n%s", out)
@@ -299,9 +299,9 @@ func TestWindowPlaceholderGlyphConfigurable(t *testing.T) {
 
 func TestWindowCursorClampsWhenTotalShrinks(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 20), 0, 1000)
+	m.SetWindow(windowRows(0, 20), 0, 1000, Answer{})
 	m.SetCursor(900)
-	m.SetWindow(windowRows(0, 5), 0, 5)
+	m.SetWindow(windowRows(0, 5), 0, 5, Answer{})
 	if m.Cursor() != 4 {
 		t.Errorf("cursor = %d after the set shrank to 5, want 4", m.Cursor())
 	}
@@ -309,7 +309,7 @@ func TestWindowCursorClampsWhenTotalShrinks(t *testing.T) {
 
 func TestSetColumnsRebuildsPlaceholder(t *testing.T) {
 	m := newWindowed(t)
-	m.SetWindow(windowRows(0, 2), 0, 100)
+	m.SetWindow(windowRows(0, 2), 0, 100, Answer{})
 	m.SetColumns([]Column{
 		{Title: "A", Width: 6}, {Title: "B", Width: 6}, {Title: "C", Width: 6},
 	})

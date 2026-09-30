@@ -697,36 +697,47 @@ example in `examples/`.
     - **`pkg/table`** reports and displays. `FilterMode: FilterRemote`
       and `SortMode: SortRemote` stop it answering the filter and sort
       itself; it emits `QueryChangedMsg` instead. `SetWindow(rows,
-      offset, total)` makes it sparse — it holds one window, draws
-      `Placeholder` elsewhere, and runs the cursor, scrollbar and
-      counters against `total`.
+      offset, total, answered)` makes it sparse — it holds one window,
+      draws `Placeholder` elsewhere, and runs the cursor, scrollbar and
+      counters against `total`. It also owns how a slow source *looks*
+      (below).
     - **`pkg/source`** decides *what to ask for*. It owns offset/limit
-      (or the cursor token), the held window, the logical total, and a
-      generation per request. It does no I/O, exactly as `pkg/poll`
-      touches no data.
+      (or the cursor token), the held window, the logical total, a
+      generation and a context per request, and the query history. It
+      does no I/O, exactly as `pkg/poll` touches no data.
     - **Your screen** does the fetch. That is the whole reason the
       coordinator is a separate package: every component here is
       synchronous, and a component owning a context, a retry policy and
       an in-flight request would drag all three into a value-receiver
       `Update`.
 
-    The loop is five lines of routing:
+    The loop is a few lines of routing:
 
     ```go
     func (s *Screen) Init() tea.Cmd { return s.src.Init() }
 
     case table.ViewportChangedMsg:
-        return s, s.src.Viewport(m.FirstVisible, m.LastVisible)
+        cmds = append(cmds, s.src.Viewport(m.FirstVisible, m.LastVisible))
     case table.QueryChangedMsg:
-        return s, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc)
+        cmds = append(cmds, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc))
     case source.RequestMsg:
-        return s, s.fetch(m.Query)          // your HTTP call
-    case fetchedMsg:
-        if !s.src.Deliver(m.page) {
-            return s, nil                   // stale; drop the rows
+        return s, s.fetch(m.Query)          // your HTTP call, under m.Query.Ctx
+    case fetchedMsg:                        // carries the query, and page.Err on failure
+        ok, cmd := s.src.Deliver(m.page)
+        switch {
+        case !ok:                           // superseded; drop it
+        case m.page.Err != nil:
+            s.tab.SetFailed(answered(m.query))
+        default:
+            s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total, answered(m.query))
         }
-        s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total)
+        return s, cmd
+    }
+    cmds = append(cmds, s.src.Update(msg)) // every message, like pkg/poll
     ```
+
+    where `answered(q)` is `table.Answer{Raw: q.Raw, Sort: q.Sort, Desc:
+    q.Desc}` — the query this page answers, in the table's terms.
 
     `SetWindow` makes the table emit a fresh `ViewportChangedMsg`, which
     is what closes the loop — a short page that still doesn't cover the
@@ -734,11 +745,54 @@ example in `examples/`.
     nothing. `Init` exists because an empty component reports no
     viewport, so nothing else would ever request the first page.
 
-    **Check what `Deliver` returns.** Every request carries its own
-    generation and only the newest is accepted, which is what stops a
-    slow reply to the previous filter painting itself under the current
-    one, and stops out-of-order window replies fighting. A screen that
-    ignores the bool re-introduces both races.
+    **Check what `Deliver` returns, and return its command.** Every
+    request carries its own generation and only the newest is accepted,
+    which is what stops a slow reply to the previous filter painting
+    itself under the current one, and stops out-of-order window replies
+    fighting. A screen that ignores the bool re-introduces both races.
+    The command carries the query history (below) and, after a query's
+    first answer, the request for whatever of the screen it left
+    uncovered. Failures go through `Deliver` too, as `Page.Err`: it
+    decides whether anyone is still waiting for them.
+
+    **A slow source is the library's problem, not the screen's.** With
+    replies taking seconds:
+
+    - A committed query leaves the rows on screen, **stale**: dimmed,
+      with the border naming the query they answer and the one loading.
+      The body spinner (Loading) shows only before the first answer ever.
+      The table does this by comparing its committed query with the
+      `answered` each window brings, so the screen never calls
+      `SetLoading` and never moves the cursor. The cursor stays on the
+      stale rows, which can be read and scrolled, and goes to the top when
+      the committed query's answer lands. `Stale()` lets a verb check.
+    - A remote sort is **staged** until sort input has been quiet for
+      `Options.SortDebounce` (400ms), so `]` `]` `s` is one request. A
+      filter commit carries a staged sort with it.
+    - Scrolling asks only once the viewport has been still for
+      `source.Options.ViewportDelay` (150ms), and not at all while the
+      committed query is unanswered — the stale rows' positions mean
+      nothing in the next query. While rows on screen are `·`
+      placeholders the border reads `⠙ loading rows 201–300`; a page that
+      failed reads `✗ failed loading rows …` until it is scrolled away
+      from or refetched. The border is where every "waiting on the
+      server" signal lives.
+    - Every request carries `Query.Ctx`, cancelled when a newer request
+      supersedes it. Pass it to your HTTP call. `Options.Context` is the
+      parent; `Model.Cancel()` stops everything.
+    - A failed query stays stale, with `✗ failed` on the border and the
+      user's filter and sort kept; committing it again, or `Refresh`,
+      retries. Nothing retries automatically.
+    - The **query history** — each committed query answered (with how
+      long it took), failed or cancelled — leaves `pkg/source` as neutral
+      messages that the app shell writes to the output console (rule 14),
+      failures on the statusbar too. The screen writes none of it.
+
+    Both durations follow `logview.MaxLines`: zero means the default,
+    negative means immediate. Across `SetTheme` (rule 4) carry
+    `CommittedSort` into `SetSort`, the window with `Answered()`,
+    `Failed()` into `SetFailed(Committed())`, and a `StagedSort` into
+    `SetStagedSort` — `examples/patterns/remote` shows the order.
 
     Pagination is a wire protocol, not a UI. The user scrolls; windows
     arrive under them. Don't add `n`/`p` page keys — they collide with
@@ -1125,6 +1179,19 @@ example in `examples/`.
   to `eu` can land after the reply to `euro`. `pkg/table` reports on
   commit, and a screen driving its own filter should debounce or wait
   for enter rather than reacting to every `Value()` change.
+- **Don't call `SetLoading` or `SetCursor(0)` in a remote loop.** The
+  table decides both from the committed and answered queries: Loading
+  only before the first answer, stale rows after that, and the cursor to
+  the top when the new answer lands. A screen that blanks the body on
+  every commit brings back exactly the wait-in-front-of-a-spinner it
+  exists to remove, and resetting the cursor at commit throws the user
+  off the stale rows they were reading.
+- **Don't drop `Deliver`'s command, or fetch outside `Query.Ctx`.** The
+  command is the query history and the follow-up request after a first
+  answer; the context is what cancels a superseded request on the wire.
+  Without either the screen still works, which is why it is easy to miss:
+  the console stays silent and the server keeps answering requests nobody
+  is waiting for.
 - **Don't let a state-restoration setter look like a user action.**
   `SetSort` / `SetValue` exist so a `SetTheme` rebuild can replay state
   onto a fresh model (rule 4); if they emitted `QueryChangedMsg` every
@@ -1411,7 +1478,13 @@ path.
   window at offset 0. `Options.PageSize` sets the window size requests
   align to (so scrolling within a page asks for nothing); `Prefetch`
   pulls extra pages ahead of the screen to hide the placeholder flash at
-  boundaries. It imports `pkg/query` and nothing else from tuilib —
+  boundaries; `ViewportDelay` makes scrolling ask once it settles.
+  Each request carries a `Ctx` cancelled when it is superseded
+  (`Options.Context` is the parent, `Cancel()` stops everything), and
+  `Page.Err` reports a failed fetch through the same `Deliver`. The query
+  history leaves as `QueryAnsweredMsg` / `QueryFailedMsg` /
+  `QueryCancelledMsg`, which `pkg/app` writes to the output console. It
+  imports `pkg/query` and nothing else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the
   screen does the translating. See rule 29 and `examples/patterns/remote`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
@@ -1575,8 +1648,8 @@ path.
   tab completion is silent because it edits a term rather than
   submitting one. `SetDistinct(col, values)` feeds completion candidates
   from a facet endpoint, since remote mode deliberately stops scraping
-  them from resident rows. `SetWindow(rows, offset, total)` makes the
-  table sparse: it holds the logical indices `[offset, offset+len(rows))`
+  them from resident rows. `SetWindow(rows, offset, total, answered)`
+  makes the table sparse: it holds the logical indices `[offset, offset+len(rows))`
   of a set `total` rows long, while the cursor, the scrollbar and the
   counters all work against `total`. Pass `total < 0` when the source
   can't say (cursor-paginated APIs) — the counter then reads `20+` and
@@ -1584,11 +1657,16 @@ path.
   `Options.Placeholder` (default `·`) and report `ok=false` from
   `Selected`, so scrolling ahead of the data shows filler instead of
   wrong rows and a screen cannot act on one it never received. The cursor
-  is a logical index and does not move when a window arrives, so
-  scrolling to row 800 and waiting leaves you on row 800.
+  is a logical index and does not move when a window of the same query
+  arrives, so scrolling to row 800 and waiting leaves you on row 800.
+  `answered` names the query the window answers; while it differs from
+  the committed one the rows are stale (dimmed, with a border suffix),
+  and `SetFailed` marks the committed query failed — see rule 29.
+  `SortDebounce` stages remote sorts until input goes quiet.
   `Window()` reports `(offset, count, total)`; `ViewportChangedMsg`
   reports the logical range on screen, which is the signal to fetch.
-  `SetRows` / `SetKeyedRows` leave windowed mode. See
+  `SetRows` / `SetKeyedRows` leave windowed mode, and under a remote mode
+  count as the answer to the committed query. See
   `examples/components/table` and `theme.Table()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`

@@ -56,20 +56,34 @@
 // incomplete. The two modes are independent — a table can sort remotely
 // while filtering the page it holds, or the reverse.
 //
-// SetWindow(rows, offset, total) is the other half: the table holds only
-// the logical indices [offset, offset+len(rows)) of a set total rows long,
-// while the cursor, the scrollbar and the counters all work against total.
-// Indices the window doesn't hold render as Options.Placeholder and report
-// ok=false from Selected, so scrolling past the loaded range shows filler
-// rather than wrong data and a screen can't act on a row it never
-// received. Pair it with ViewportChangedMsg, which reports the logical
-// range now on screen — that is the signal to fetch the next window.
+// SetWindow(rows, offset, total, answered) is the other half: the table
+// holds only the logical indices [offset, offset+len(rows)) of a set total
+// rows long, while the cursor, the scrollbar and the counters all work
+// against total. Indices the window doesn't hold render as
+// Options.Placeholder and report ok=false from Selected, so scrolling past
+// the loaded range shows filler rather than wrong data and a screen can't
+// act on a row it never received. Pair it with ViewportChangedMsg, which
+// reports the logical range now on screen — that is the signal to fetch the
+// next window.
+//
+// A slow source is the table's to present, not the screen's. It compares
+// the committed query — what the user last asked for — with the answered
+// one each window arrives with. Before any answer the body is Loading.
+// After that a committed query makes the rows stale: they stay on screen,
+// dimmed, and the border names the query they answer and the one loading,
+// until an answer to the committed query lands and the cursor goes to the
+// top. SetFailed keeps them stale and says the query failed; committing it
+// again retries. Under SortRemote, sort input is staged and commits once it
+// has been quiet for Options.SortDebounce, so stepping across columns is
+// one request. A screen driving a remote table never calls SetLoading or
+// moves the cursor on a query change.
 package table
 
 import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -246,13 +260,17 @@ const (
 // is a request storm. Tab completion is likewise silent — it edits the
 // in-progress term without committing it.
 //
-// The message does not move the cursor. A screen answering it typically
-// resets cursor and offset to the top, since row 40 of the previous result
-// set means nothing in the next one — but doing that here would jump the
-// cursor through stale rows a frame before the new ones land, so it is the
-// screen's call. Consecutive duplicate queries are elided, and the
-// state-restoration setters (SetSort, SetValue) adopt their new state
-// silently, so a SetTheme rebuild never reads as a user-driven change.
+// A sort is reported once sort input has been quiet for
+// Options.SortDebounce; a filter commit carries a staged sort with it.
+//
+// The message does not move the cursor: the rows on screen stay, stale,
+// and the user can keep reading them. The table moves the cursor to the top
+// itself when the answer to the committed query arrives through SetWindow,
+// since row 40 of the previous result set means nothing in the next one.
+// Consecutive duplicate queries are elided — except that committing a
+// failed query again is a retry — and the state-restoration setters
+// (SetSort, SetValue, SetStagedSort) adopt their new state silently, so a
+// SetTheme rebuild never reads as a user-driven change.
 type QueryChangedMsg struct {
 	// Raw is the committed filter text exactly as typed. Empty when the
 	// filter is empty or FilterMode is FilterLocal.
@@ -293,6 +311,12 @@ type Options struct {
 	FilterMode FilterMode
 	// SortMode selects who applies the sort. Defaults to SortLocal.
 	SortMode SortMode
+	// SortDebounce is how long sort input ([, ], s, header clicks) must go
+	// quiet before a remote sort commits, so stepping across columns is one
+	// request rather than one per press. The header marker moves at once.
+	// Zero means DefaultSortDebounce; negative commits every change at
+	// once. Ignored under SortLocal.
+	SortDebounce time.Duration
 	// Placeholder is the cell text drawn for a row inside the logical
 	// range that the current window doesn't hold — see SetWindow.
 	// Defaults to "·". Pre-style it foreground-only (pkg/ansi.CellColor)
@@ -591,6 +615,9 @@ type Model struct {
 	qSortDesc bool
 	qPending  bool
 
+	// rq is the remote-source state: staged sort, answered query, failure.
+	rq remoteState
+
 	// Windowing. When windowed, rows holds only [winStart, winStart+len)
 	// of a logical set winTotal long (-1 when the source can't say), and
 	// every cursor / scroll / count reads through rowCount and rowAt
@@ -697,6 +724,16 @@ func New(opts Options) Model {
 		vpTotal:       -1,
 		focusIdx:      -1,
 	}
+	m.rq = remoteState{debounce: opts.SortDebounce, cSortCol: -1, baseTitle: opts.Title}
+	switch {
+	case m.rq.debounce == 0:
+		m.rq.debounce = DefaultSortDebounce
+	case m.rq.debounce < 0:
+		m.rq.debounce = 0
+	}
+	if len(opts.Rows) > 0 {
+		m.answerCommitted()
+	}
 	if m.phGlyph == "" {
 		// Options.Placeholder still wins; the glyph set is the fallback, so a
 		// theme can restyle filler rows without every caller restating it.
@@ -765,6 +802,9 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 	if mm, ok := msg.(mouse.Msg); ok {
 		return m.handleMouse(mm)
 	}
+	if handled, cmd := m.handleRemote(msg); handled {
+		return m, cmd
+	}
 	km, ok := msg.(tea.KeyMsg)
 	if !ok {
 		m.body, cmd = m.body.Update(msg)
@@ -786,6 +826,10 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		// the inside; the body takes the highlight back when they do.
 		if !m.filter.Focused() {
 			m.body.SetFocused(true)
+			// Enter on a failed query is a retry, even with the text unchanged.
+			if km.String() == "enter" && m.rq.failed {
+				m.rq.retry = true
+			}
 		}
 		m.applyFilter()
 		m.refresh()
@@ -826,16 +870,19 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 	case key.Matches(km, m.keys.SortPrev):
 		if m.stepSortColumn(-1) {
+			m.sortChanged()
 			m.applyFilter()
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.SortNext):
 		if m.stepSortColumn(+1) {
+			m.sortChanged()
 			m.applyFilter()
 			m.refresh()
 		}
 	case key.Matches(km, m.keys.SortDir):
 		if m.toggleSortDir() {
+			m.sortChanged()
 			m.applyFilter()
 			m.refresh()
 		}
@@ -993,13 +1040,16 @@ func (m *Model) rebuildPlaceholder() {
 }
 
 // SetWindow installs a sparse window: rows are the logical indices
-// [offset, offset+len(rows)) of a set total rows long. Pass total < 0 when
+// [offset, offset+len(rows)) of a set total rows long, answering the query
+// named by answered — build it from the request that produced the page.
+// When answered matches the committed query the rows stop being stale, and
+// if they had been, the cursor moves to the top. Pass total < 0 when
 // the source can't say (cursor-paginated APIs); the table then treats the
 // end of what has loaded as the end, which grows as more arrives.
 //
-// The cursor is a logical index and does not move when a window lands, so
-// scrolling to row 800 and having that window arrive leaves the cursor on
-// row 800. Indices the window doesn't hold render as Placeholder and
+// The cursor is a logical index and does not move when a window of the
+// same query lands, so scrolling to row 800 and having that window arrive
+// leaves the cursor on row 800. Indices the window doesn't hold render as Placeholder and
 // report ok=false from Selected, so a screen can't act on a row it hasn't
 // actually received.
 //
@@ -1010,10 +1060,11 @@ func (m *Model) rebuildPlaceholder() {
 // reaches the source. Prefer fixed or Flex column widths too —
 // content-auto sizes to the widest resident cell, so columns reflow every
 // time the window swaps.
-func (m *Model) SetWindow(rows []Row, offset, total int) {
+func (m *Model) SetWindow(rows []Row, offset, total int, answered Answer) {
 	if offset < 0 {
 		offset = 0
 	}
+	m.setAnswer(answered)
 	m.windowed = true
 	m.winStart = offset
 	m.winTotal = total
@@ -1052,6 +1103,7 @@ func (m *Model) clearWindow() {
 // rebinds to the same logical row even when neighbours come and go.
 func (m *Model) SetRows(rows []Row) {
 	m.clearWindow()
+	m.answerCommitted()
 	m.rows = append([]Row(nil), rows...)
 	m.rowKeys = nil
 	m.rowData = nil
@@ -1070,6 +1122,7 @@ func (m *Model) SetRows(rows []Row) {
 // pkg/poll uses to keep the user's place across periodic refreshes.
 func (m *Model) SetKeyedRows(rows []KeyedRow) {
 	m.clearWindow()
+	m.answerCommitted()
 	prevKey, hadKey := m.SelectedKey()
 	prevCursor := m.cursor
 
@@ -1154,10 +1207,16 @@ func (m *Model) SetDistinct(col int, values []string) {
 }
 
 // SetTitle updates the title rendered on the body pane's top border.
-func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
+func (m *Model) SetTitle(s string) {
+	m.rq.baseTitle = s
+	m.body.SetTitle(s)
+	m.syncRemote()
+}
 
 // Title returns the label on the pane's border.
-func (m Model) Title() string { return m.body.Title() }
+// While the rows are stale the border also carries a suffix naming the
+// query they answer and the one in flight; Title returns the label alone.
+func (m Model) Title() string { return m.rq.baseTitle }
 
 // Focus gives the component the keyboard, highlighting the body pane.
 //
@@ -1322,6 +1381,7 @@ func (m *Model) SetSort(col int, desc bool) {
 		m.sortCol = col
 		m.sortDesc = desc
 	}
+	m.rq.cSortCol, m.rq.cSortDesc, m.rq.staged = m.sortCol, m.sortDesc, false
 	m.applyFilter()
 	m.refresh()
 	m.syncQuery()
@@ -1789,7 +1849,7 @@ func (m *Model) noteFocus() {
 // single tea.Cmd. Update return paths call this so callers don't need to
 // know which specific subset changed on any given tick.
 func (m *Model) flushMsgs() tea.Cmd {
-	return tea.Batch(m.flushViewport(), m.flushFocus(), m.flushQuery(), m.flushActivity())
+	return tea.Batch(m.flushViewport(), m.flushFocus(), m.flushQuery(), m.flushActivity(), m.flushRemote())
 }
 
 // currentQuery samples the query a remote source should be answering. A
@@ -1798,7 +1858,7 @@ func (m *Model) flushMsgs() tea.Cmd {
 func (m Model) currentQuery() (raw string, sortCol int, sortDesc bool) {
 	sortCol = -1
 	if m.sortMode == SortRemote {
-		sortCol, sortDesc = m.sortCol, m.sortDesc
+		sortCol, sortDesc = m.rq.cSortCol, m.rq.cSortDesc
 	}
 	if m.filterMode == FilterRemote && m.filterable {
 		if m.filter.Focused() {
@@ -1817,11 +1877,18 @@ func (m *Model) noteQuery() {
 	if m.filterMode != FilterRemote && m.sortMode != SortRemote {
 		return
 	}
+	raw, _, _ := m.currentQuery()
+	if raw != m.qRaw && m.rq.staged {
+		// A filter commit carries the staged sort with it: one query, now.
+		m.commitSort()
+	}
 	raw, sortCol, sortDesc := m.currentQuery()
-	if raw == m.qRaw && sortCol == m.qSortCol && sortDesc == m.qSortDesc {
+	if raw == m.qRaw && sortCol == m.qSortCol && sortDesc == m.qSortDesc && !m.rq.retry {
 		return
 	}
 	m.qRaw, m.qSortCol, m.qSortDesc = raw, sortCol, sortDesc
+	m.rq.retry = false
+	m.rq.failed = false
 	m.qPending = true
 }
 
@@ -2019,6 +2086,7 @@ func (m *Model) clickHeader(x int) tea.Cmd {
 	} else {
 		m.sortCol, m.sortDesc = col, false
 	}
+	m.sortChanged()
 	m.applySort()
 	m.refresh()
 	return nil
@@ -2133,6 +2201,7 @@ func (m *Model) refresh() {
 		end = n
 	}
 
+	stale := m.Stale()
 	var b strings.Builder
 	b.WriteString(header)
 	if m.headerRule != "" {
@@ -2147,23 +2216,32 @@ func (m *Model) refresh() {
 		}
 		cells = m.withActivity(i, cells)
 		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
+		sel, cell := m.selectedStyle, m.cellStyle
+		if stale {
+			sel, cell = sel.Faint(true), cell.Faint(true)
+		}
 		switch {
 		case i == m.cursor:
 			// One styled run over the whole row, gutter included: a nested
 			// mark style would close the highlight at its first reset and
 			// punch a hole in the selected row's background (rule 19).
-			b.WriteString(m.selectedStyle.Render(m.gutterFor(i) + row))
+			b.WriteString(sel.Render(m.gutterFor(i) + row))
 		case m.markable && m.isMarkedAt(i):
 			b.WriteString(m.markStyle.Render(m.glyphs.Mark) +
-				m.cellStyle.Render(" "+m.actGutterFor(i)+row))
+				cell.Render(" "+m.actGutterFor(i)+row))
 		default:
-			b.WriteString(m.cellStyle.Render(m.gutterFor(i) + row))
+			b.WriteString(cell.Render(m.gutterFor(i) + row))
 		}
 	}
 	if m.filterable {
 		m.body.SetHeader(m.filterHeader())
 	}
-	m.body.SetContent(b.String())
+	if m.remote() && m.rq.failed && !m.rq.hasAnswer {
+		m.body.SetContent(m.failedBody())
+	} else {
+		m.body.SetContent(b.String())
+	}
+	m.syncRemote()
 
 	// Drive the pane's right-edge scrollbar from our logical row counts so
 	// the thumb reflects position within the dataset, not within the

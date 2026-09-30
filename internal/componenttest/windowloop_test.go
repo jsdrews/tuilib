@@ -23,6 +23,10 @@ import (
 type fakeSource struct {
 	total    int
 	requests []source.Query
+	// hold parks requests instead of answering them, the way a slow source
+	// does; release answers the newest.
+	hold bool
+	held []source.Query
 }
 
 func (f *fakeSource) rows(offset, limit int) []table.Row {
@@ -70,15 +74,16 @@ func newRig(t *testing.T, total, pageSize, height int) *rig {
 			{Title: "Name", Width: 12, Sortable: true},
 			{Title: "Region", Width: 8},
 		},
-		FilterMode: table.FilterRemote,
-		SortMode:   table.SortRemote,
-		Filterable: true,
+		FilterMode:   table.FilterRemote,
+		SortMode:     table.SortRemote,
+		SortDebounce: -1,
+		Filterable:   true,
 	})
 	tbl.SetRect(geom.New(0, 0, 40, height))
 	return &rig{
 		t:    t,
 		tbl:  tbl,
-		src:  source.New(source.Options{PageSize: pageSize}),
+		src:  source.New(source.Options{PageSize: pageSize, ViewportDelay: -1}),
 		fake: &fakeSource{total: total},
 	}
 }
@@ -116,18 +121,11 @@ func (r *rig) route(msg tea.Msg) []tea.Cmd {
 
 	case source.RequestMsg:
 		r.fake.requests = append(r.fake.requests, m.Query)
-		rows := r.fake.rows(m.Query.Offset, m.Query.Limit)
-		page := source.Page{
-			Gen:    m.Query.Gen,
-			Offset: m.Query.Offset,
-			Count:  len(rows),
-			Total:  r.fake.total,
-		}
-		if !r.src.Deliver(page) {
+		if r.fake.hold {
+			r.fake.held = append(r.fake.held, m.Query)
 			return nil
 		}
-		r.tbl.SetWindow(rows, page.Offset, page.Total)
-		return nil
+		return r.answer(m.Query)
 
 	case table.ViewportChangedMsg:
 		return []tea.Cmd{r.src.Viewport(m.FirstVisible, m.LastVisible)}
@@ -136,6 +134,30 @@ func (r *rig) route(msg tea.Msg) []tea.Cmd {
 		return []tea.Cmd{r.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc)}
 	}
 	return nil
+}
+
+// answer delivers q's page the way a screen's fetchedMsg branch would.
+func (r *rig) answer(q source.Query) []tea.Cmd {
+	rows := r.fake.rows(q.Offset, q.Limit)
+	page := source.Page{Gen: q.Gen, Offset: q.Offset, Count: len(rows), Total: r.fake.total}
+	ok, cmd := r.src.Deliver(page)
+	if ok {
+		r.tbl.SetWindow(rows, page.Offset, page.Total, table.Answer{Raw: q.Raw, Sort: q.Sort, Desc: q.Desc})
+	}
+	return []tea.Cmd{cmd}
+}
+
+// release answers every parked request, oldest first, and stops parking.
+func (r *rig) release() {
+	r.t.Helper()
+	r.fake.hold = false
+	held := r.fake.held
+	r.fake.held = nil
+	for _, q := range held {
+		for _, c := range r.answer(q) {
+			r.pump(c)
+		}
+	}
 }
 
 // key drives a keypress through the table and pumps whatever it produces.
@@ -280,5 +302,42 @@ func TestWindowLoopSortRefetches(t *testing.T) {
 	}
 	if reqs[0].Sort != "Name" {
 		t.Errorf("request carried Sort = %q, want Name", reqs[0].Sort)
+	}
+}
+
+// A slow source: while a committed filter is unanswered, the rows on screen
+// answer the previous query, so scrolling them must not ask for pages of the
+// new one — that would supersede its first page. When the answer lands the
+// cursor goes to the top and the loop converges on the first page alone.
+func TestWindowLoopStaleScrollAsksNothing(t *testing.T) {
+	r := newRig(t, 1000, 100, 14)
+	r.pump(r.src.Init())
+
+	r.fake.hold = true
+	r.typeKey(runes("/"))
+	r.typeKey(runes("x"))
+	r.key(tea.KeyMsg{Type: tea.KeyEnter})
+	if !r.tbl.Stale() {
+		t.Fatal("the table should be stale while the filter is unanswered")
+	}
+	before := len(r.fake.requests)
+	r.key(runes("G"))
+	if n := len(r.fake.requests) - before; n != 0 {
+		t.Fatalf("scrolling stale rows made %d requests, want 0", n)
+	}
+	first := r.fake.held[len(r.fake.held)-1]
+
+	r.release()
+	if r.tbl.Stale() {
+		t.Error("the filter's answer should clear staleness")
+	}
+	if r.tbl.Cursor() != 0 {
+		t.Errorf("cursor = %d, want the top of the new answer", r.tbl.Cursor())
+	}
+	if first.Ctx.Err() == nil {
+		t.Error("a delivered request's context should be released")
+	}
+	if n := len(r.fake.requests) - before; n != 0 {
+		t.Errorf("the first answer provoked %d more requests, want 0", n)
 	}
 }

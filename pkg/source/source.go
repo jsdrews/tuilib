@@ -3,14 +3,14 @@
 // that range", without ever doing the I/O itself.
 //
 // It is shaped like pkg/poll: it owns no data and performs no requests. It
-// tracks which window is held, which is in flight, and which generation
-// each request belongs to, and it emits RequestMsg when the rows on screen
-// stop being rows it has. Your screen answers that with whatever HTTP,
-// gRPC, or database call it likes, then hands the result back through
-// Deliver and pushes the rows into the component. Keeping the fetch in the
-// screen is deliberate: every component in tuilib is synchronous, and a
-// coordinator that owned a context and a retry policy would drag both into
-// places that have no business holding them.
+// tracks which window is held, which is in flight, and which query each
+// request belongs to, and it emits RequestMsg when the rows on screen stop
+// being rows it has. Your screen answers that with whatever HTTP, gRPC, or
+// database call it likes, passing Query.Ctx so a superseded request is
+// cancelled, then hands the result back through Deliver and pushes the rows
+// into the component. Keeping the fetch in the screen is deliberate: every
+// component in tuilib is synchronous, and a coordinator that owned a retry
+// policy would drag it into places that have no business holding it.
 //
 // It deliberately does not import pkg/table. The table reports what
 // happened (ViewportChangedMsg, QueryChangedMsg) and the screen translates
@@ -23,24 +23,48 @@
 //	func (s *Screen) Init() tea.Cmd { return s.src.Init() }
 //
 //	case table.ViewportChangedMsg:
-//	    return s, s.src.Viewport(msg.FirstVisible, msg.LastVisible)
+//	    cmds = append(cmds, s.src.Viewport(msg.FirstVisible, msg.LastVisible))
 //	case table.QueryChangedMsg:
-//	    return s, s.src.SetQuery(msg.Raw, msg.Terms, msg.Sort, msg.Desc)
+//	    cmds = append(cmds, s.src.SetQuery(msg.Raw, msg.Terms, msg.Sort, msg.Desc))
 //	case source.RequestMsg:
-//	    return s, s.fetch(msg.Query)          // your call, your context
+//	    return s, s.fetch(msg.Query)          // your call, under msg.Query.Ctx
 //	case fetchedMsg:
-//	    if !s.src.Deliver(msg.Page) {
-//	        return s, nil                     // a stale reply; drop it
+//	    ok, cmd := s.src.Deliver(msg.Page)
+//	    switch {
+//	    case !ok:                             // superseded; drop it
+//	    case msg.Page.Err != nil:
+//	        s.table.SetFailed(answered(msg.Query))
+//	    default:
+//	        s.table.SetWindow(msg.Rows, msg.Page.Offset, msg.Page.Total, answered(msg.Query))
 //	    }
-//	    s.table.SetWindow(msg.Rows, msg.Page.Offset, msg.Page.Total)
-//	    return s, s.table.SetLoading(false)
+//	    return s, cmd
+//	}
+//	cmds = append(cmds, s.src.Update(msg))     // every message, like pkg/poll
 //
 // Installing the window makes the component emit a fresh
 // ViewportChangedMsg, which closes the loop: a short page that still
 // doesn't cover the screen asks for the rest on its own.
+//
+// Three things keep a slow source bearable. Every request carries its own
+// context, cancelled the moment a newer request supersedes it — a new
+// query, or a newer window of the same one — so at most one request per
+// source is live on the server. Scrolling asks only once the viewport has
+// been still for Options.ViewportDelay, so a held key or a scrollbar drag
+// is one request, not one per page crossed. And while a committed query
+// has no answer yet, scrolling asks for nothing at all: the rows on screen
+// answer the previous query, and their positions mean nothing in the next.
+//
+// The query history — each committed query answered, failed or cancelled —
+// leaves as QueryAnsweredMsg, QueryFailedMsg and QueryCancelledMsg in the
+// commands SetQuery and Deliver return. They are deliberately neutral, like
+// pkg/runner's messages: pkg/app turns them into output-console records.
 package source
 
 import (
+	"context"
+	"sync/atomic"
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/query"
@@ -48,6 +72,10 @@ import (
 
 // DefaultPageSize is the window size used when Options.PageSize is unset.
 const DefaultPageSize = 100
+
+// DefaultViewportDelay is how long the viewport must be still before a
+// scroll asks for rows, when Options.ViewportDelay is zero.
+const DefaultViewportDelay = 150 * time.Millisecond
 
 // Mode selects how the source is addressed.
 type Mode int
@@ -89,10 +117,14 @@ type Query struct {
 	// older is refused by Deliver, which is what stops an out-of-order
 	// reply from painting a window the user has already scrolled past.
 	Gen int
+
+	// Ctx is cancelled as soon as this request is superseded — by a new
+	// query, a newer window, Refresh, or Cancel — and once its page has
+	// been delivered. Pass it to the call that does the fetch.
+	Ctx context.Context
 }
 
-// RequestMsg asks the screen to fetch Query. It is the only message this
-// package emits.
+// RequestMsg asks the screen to fetch Query.
 type RequestMsg struct {
 	Query Query
 }
@@ -114,6 +146,34 @@ type Page struct {
 	// Empty means the source is exhausted, which is also what finally
 	// establishes the total.
 	Next string
+	// Err is set when the fetch failed. Deliver it like any other page:
+	// Deliver decides whether anyone is still waiting for it.
+	Err error
+}
+
+// QueryAnsweredMsg reports that a committed query got its first answer —
+// or its first answer after failing. One per committed query, never one
+// per page.
+type QueryAnsweredMsg struct {
+	Query   Query
+	Elapsed time.Duration
+}
+
+// QueryFailedMsg reports a fetch that failed while someone was still
+// waiting for it. Window is true when the query already had an answer and
+// only a page of it failed.
+type QueryFailedMsg struct {
+	Query   Query
+	Err     error
+	Elapsed time.Duration
+	Window  bool
+}
+
+// QueryCancelledMsg reports a committed query abandoned before it was
+// answered, because By was committed in its place.
+type QueryCancelledMsg struct {
+	Query Query
+	By    Query
 }
 
 // Options configures a Model.
@@ -128,13 +188,40 @@ type Options struct {
 	// user sees placeholders briefly at each page boundary; one page of
 	// prefetch usually hides that at the cost of an extra request.
 	Prefetch int
+	// ViewportDelay is how long the viewport must be still before a
+	// scroll asks for rows. Zero means DefaultViewportDelay; negative
+	// means ask at once. Init, SetQuery and Refresh never wait.
+	ViewportDelay time.Duration
+	// Context is the parent of every request's context, so cancelling it
+	// cancels everything in flight. Defaults to context.Background().
+	Context context.Context
+}
+
+// answerState is where the current query stands.
+type answerState int
+
+const (
+	unanswered answerState = iota
+	answered
+	failed
+)
+
+var nextID atomic.Int64
+
+// settleMsg fires when a scroll's delay has elapsed.
+type settleMsg struct {
+	id  int64
+	seq int
 }
 
 // Model is the coordinator. Embed as a value; drive it through the methods.
 type Model struct {
+	id       int64
 	mode     Mode
 	pageSize int
 	prefetch int
+	delay    time.Duration
+	parent   context.Context
 
 	raw   string
 	terms []query.Term
@@ -143,6 +230,7 @@ type Model struct {
 
 	first, last int
 	haveVP      bool
+	vpSeq       int
 
 	heldStart int
 	heldCount int
@@ -150,10 +238,15 @@ type Model struct {
 	next      string
 	exhausted bool
 
+	state answerState
+
 	gen       int
 	pending   bool
 	wantStart int
 	wantLimit int
+	live      Query
+	liveAt    time.Time
+	cancel    context.CancelFunc
 
 	// emptyStart/emptyLimit remember the last window the source answered
 	// with nothing, so a range it has no rows for is not requested in a
@@ -171,10 +264,22 @@ func New(opts Options) Model {
 	if opts.Prefetch < 0 {
 		opts.Prefetch = 0
 	}
+	switch {
+	case opts.ViewportDelay == 0:
+		opts.ViewportDelay = DefaultViewportDelay
+	case opts.ViewportDelay < 0:
+		opts.ViewportDelay = 0
+	}
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 	return Model{
+		id:       nextID.Add(1),
 		mode:     opts.Mode,
 		pageSize: opts.PageSize,
 		prefetch: opts.Prefetch,
+		delay:    opts.ViewportDelay,
+		parent:   opts.Context,
 		total:    -1,
 	}
 }
@@ -187,37 +292,64 @@ func (m *Model) Init() tea.Cmd {
 	return m.request(0, m.pageSize)
 }
 
+// Update handles the source's own timer. Forward every message to it, the
+// way pkg/poll is forwarded; anything that isn't the source's returns nil.
+func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	s, ok := msg.(settleMsg)
+	if !ok || s.id != m.id || s.seq != m.vpSeq {
+		return nil
+	}
+	return m.maybeRequest()
+}
+
 // Viewport reports the logical row range now on screen, inclusive. Feed it
-// from the component's viewport message. It returns a request when those
-// rows are not ones the source has already supplied, and nil otherwise —
-// so calling it on every scroll tick is fine.
+// from the component's viewport message. When those rows are not ones the
+// source has supplied, it asks for them once the viewport has been still
+// for Options.ViewportDelay — so calling it on every scroll tick is fine.
 func (m *Model) Viewport(first, last int) tea.Cmd {
 	if last < first {
 		last = first
 	}
 	m.first, m.last, m.haveVP = first, last, true
-	return m.maybeRequest()
+	if _, _, ok := m.wanted(); !ok {
+		return nil
+	}
+	if m.delay <= 0 {
+		return m.maybeRequest()
+	}
+	m.vpSeq++
+	msg := settleMsg{id: m.id, seq: m.vpSeq}
+	return tea.Tick(m.delay, func(time.Time) tea.Msg { return msg })
 }
 
 // SetQuery installs a new filter and sort, discards the held window, and
 // requests the first page of the new query. Everything in flight is
-// abandoned: Deliver refuses replies to the query that was just replaced,
-// so a slow response to the previous filter cannot land under the new one.
+// cancelled, and Deliver refuses replies to the query that was just
+// replaced, so a slow response to the previous filter cannot land under
+// the new one. A query abandoned before it was answered is reported as
+// QueryCancelledMsg.
 //
 // It always requests, even when the arguments match the current query —
 // a caller that has gone to the trouble of calling it wants a fetch.
 func (m *Model) SetQuery(raw string, terms []query.Term, sort string, desc bool) tea.Cmd {
+	prev, abandoned := m.live, m.state == unanswered && m.pending
 	m.raw, m.terms, m.sort, m.desc = raw, terms, sort, desc
 	m.last -= m.first
 	m.first = 0
 	m.resetWindow()
-	return m.request(0, m.pageSize)
+	m.state = unanswered
+	req := m.request(0, m.pageSize)
+	if !abandoned {
+		return req
+	}
+	ev := QueryCancelledMsg{Query: prev, By: m.live}
+	return tea.Batch(func() tea.Msg { return ev }, req)
 }
 
 // Refresh re-requests the window currently on screen without changing the
-// query — the poll-driven "same view, fresh data" case. Under ByCursor it
-// restarts from the first page, since a cursor walk cannot be resumed from
-// the middle.
+// query — the poll-driven "same view, fresh data" case, and the retry after
+// a failure. Under ByCursor it restarts from the first page, since a cursor
+// walk cannot be resumed from the middle.
 func (m *Model) Refresh() tea.Cmd {
 	if m.mode == ByCursor {
 		m.resetWindow()
@@ -228,14 +360,41 @@ func (m *Model) Refresh() tea.Cmd {
 	return m.request(start, limit)
 }
 
-// Deliver records a fetched page and reports whether it was accepted. A
-// false return means the page answers a superseded request — the screen
-// must drop those rows rather than install them.
-func (m *Model) Deliver(p Page) bool {
+// Cancel cancels whatever is in flight. A reply that arrives anyway is
+// refused by Deliver.
+func (m *Model) Cancel() {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	m.gen++
+	m.pending = false
+}
+
+// Deliver records a fetched page — or a failed fetch, when p.Err is set —
+// and reports whether it was accepted. A false return means the page
+// answers a superseded request: drop it. The command carries the query
+// history (QueryAnsweredMsg, QueryFailedMsg) and, when a query's first
+// answer leaves part of the screen uncovered, the request for the rest.
+func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 	if p.Gen != m.gen {
-		return false
+		return false, nil
+	}
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
 	}
 	m.pending = false
+	elapsed := time.Since(m.liveAt)
+
+	if p.Err != nil {
+		ev := QueryFailedMsg{Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
+		if m.state != answered {
+			m.state = failed
+		}
+		return true, func() tea.Msg { return ev }
+	}
+
 	if p.Count == 0 {
 		m.emptyStart, m.emptyLimit, m.emptySeen = m.wantStart, m.wantLimit, true
 	} else {
@@ -252,20 +411,28 @@ func (m *Model) Deliver(p Page) bool {
 		} else {
 			m.total = p.Total
 		}
-		return true
+	} else {
+		m.heldStart, m.heldCount = p.Offset, p.Count
+		m.total = p.Total
 	}
 
-	m.heldStart, m.heldCount = p.Offset, p.Count
-	m.total = p.Total
-	return true
+	if m.state == answered {
+		return true, nil
+	}
+	// The first answer: the component moves its cursor to the top, so
+	// wherever the stale rows had been scrolled to no longer applies.
+	m.state = answered
+	m.last -= m.first
+	m.first = 0
+	ev := QueryAnsweredMsg{Query: m.live, Elapsed: elapsed}
+	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest())
 }
 
 // Total is the logical row count last reported, or -1 while unknown. Pass
 // it straight to the component's window setter.
 func (m Model) Total() int { return m.total }
 
-// Pending reports whether a request is outstanding — the cue for a
-// loading indicator.
+// Pending reports whether a request is outstanding.
 func (m Model) Pending() bool { return m.pending }
 
 // Held reports the window the source has supplied: its first row's logical
@@ -289,34 +456,46 @@ func (m *Model) resetWindow() {
 	m.emptySeen = false
 }
 
-// maybeRequest returns a request when the rows on screen aren't covered by
-// what the source has already supplied.
+// maybeRequest requests the window wanted, if any.
 func (m *Model) maybeRequest() tea.Cmd {
-	if !m.haveVP {
+	start, limit, ok := m.wanted()
+	if !ok {
 		return nil
+	}
+	return m.request(start, limit)
+}
+
+// wanted reports the window to request when the rows on screen aren't
+// covered by what the source has already supplied. Nothing is wanted while
+// the current query is unanswered with its first request out, or failed:
+// the rows on screen then answer another query, and scrolling them says
+// nothing about which rows of this one are wanted.
+func (m Model) wanted() (start, limit int, ok bool) {
+	if !m.haveVP || m.state == failed || (m.state == unanswered && m.pending) {
+		return 0, 0, false
 	}
 	if m.mode == ByCursor {
 		if m.exhausted || m.pending {
-			return nil
+			return 0, 0, false
 		}
 		// Ask for more once the screen reaches the end of what has loaded,
 		// or the prefetch margin ahead of it.
 		if m.last < m.heldCount-m.prefetch*m.pageSize-1 {
-			return nil
+			return 0, 0, false
 		}
-		return m.request(m.heldCount, m.pageSize)
+		return m.heldCount, m.pageSize, true
 	}
 	if m.heldCount > 0 && m.first >= m.heldStart && m.last < m.heldStart+m.heldCount {
-		return nil
+		return 0, 0, false
 	}
-	start, limit := m.wantWindow()
+	start, limit = m.wantWindow()
 	if m.pending && start == m.wantStart && limit == m.wantLimit {
-		return nil
+		return 0, 0, false
 	}
 	if m.emptySeen && start == m.emptyStart && limit == m.emptyLimit {
-		return nil
+		return 0, 0, false
 	}
-	return m.request(start, limit)
+	return start, limit, true
 }
 
 // wantWindow is the page-aligned range covering the rows on screen plus
@@ -343,10 +522,16 @@ func (m Model) wantWindow() (start, limit int) {
 	return start, limit
 }
 
-// request emits a fetch for [start, start+limit) under a fresh generation.
-// Every request gets its own generation, so only the newest reply is ever
-// accepted and out-of-order responses can't fight over the window.
+// request emits a fetch for [start, start+limit) under a fresh generation,
+// cancelling whatever was in flight. Every request gets its own
+// generation, so only the newest reply is ever accepted and out-of-order
+// responses can't fight over the window.
 func (m *Model) request(start, limit int) tea.Cmd {
+	if m.cancel != nil {
+		m.cancel()
+	}
+	ctx, cancel := context.WithCancel(m.parent)
+	m.cancel = cancel
 	m.gen++
 	m.pending = true
 	m.wantStart, m.wantLimit = start, limit
@@ -357,11 +542,13 @@ func (m *Model) request(start, limit int) tea.Cmd {
 		Sort:  m.sort,
 		Desc:  m.desc,
 		Gen:   m.gen,
+		Ctx:   ctx,
 	}
 	if m.mode == ByCursor {
 		q.Cursor = m.next
 	} else {
 		q.Offset = start
 	}
+	m.live, m.liveAt = q, time.Now()
 	return func() tea.Msg { return RequestMsg{Query: q} }
 }
