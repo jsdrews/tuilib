@@ -951,7 +951,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, nil
 
-	case source.QueryAnsweredMsg, source.QueryFailedMsg, source.QueryCancelledMsg:
+	case source.QueryAnsweredMsg, source.QueryFailedMsg, source.QueryCancelledMsg, source.QueryRecoveredMsg:
 		m.logQuery(msg)
 		var cmd tea.Cmd
 		m.stack, cmd = m.stack.Update(msg)
@@ -1152,6 +1152,8 @@ func (m *Model) logQuery(msg tea.Msg) {
 		m.logEntry("", fmt.Sprintf("%s → answered in %s", queryLabel(e.Query), roundElapsed(e.Elapsed)), "", output.LevelInfo)
 	case source.QueryCancelledMsg:
 		m.logEntry("", fmt.Sprintf("%s → cancelled, superseded by %s", queryLabel(e.Query), queryLabel(e.By)), "", output.LevelInfo)
+	case source.QueryRecoveredMsg:
+		m.logEntry("", fmt.Sprintf("%s → polls recovered", queryLabel(e.Query)), "", output.LevelInfo)
 	case source.QueryFailedMsg:
 		what := queryLabel(e.Query)
 		if e.Window {

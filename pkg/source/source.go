@@ -122,7 +122,43 @@ type Query struct {
 	// query, a newer window, Refresh, or Cancel — and once its page has
 	// been delivered. Pass it to the call that does the fetch.
 	Ctx context.Context
+
+	// Poll marks a follow poll: a request the source made on its own
+	// because the data is Growing (see Options.Follow). Fetch it like any
+	// other window.
+	Poll bool
+	// Probe marks a poll made while the user is not following (Anchored):
+	// fetch it, but only count what came back — the component shows how
+	// much is new without appending it.
+	Probe bool
+	// Inclusive, on Anchored, includes the item at Cursor itself: the
+	// first request of an At anchor, so the anchor appears exactly once.
+	Inclusive bool
+	// FromAnchor, on Anchored, marks the request that starts a view: page
+	// from the anchor — Cursor for At, the end for Newest or Oldest —
+	// rather than from the component's edge.
+	FromAnchor bool
+
+	// Find asks for the first item matching Term, starting after Offset
+	// (Dir Newer) or before it (Dir Older), within the committed filter.
+	// Limit is 1. Answer with Page.Found and the match's position in
+	// Page.Offset (Model) or Page.Cursor (Anchored).
+	Find bool
+	Term string
+	// Dir is the direction a Find — or, on Anchored, an edge request —
+	// walks.
+	Dir Dir
 }
+
+// Dir is a direction through ordered data.
+type Dir int
+
+const (
+	// Newer walks towards the end — later offsets, newer items.
+	Newer Dir = iota
+	// Older walks towards the start.
+	Older
+)
 
 // RequestMsg asks the screen to fetch Query.
 type RequestMsg struct {
@@ -149,6 +185,21 @@ type Page struct {
 	// Err is set when the fetch failed. Deliver it like any other page:
 	// Deliver decides whether anyone is still waiting for it.
 	Err error
+
+	// Found answers a Find: whether a match exists, at Offset (or Cursor,
+	// on Anchored).
+	Found bool
+	// Cursor is the match's cursor when a Find on Anchored data found one.
+	Cursor string
+	// More reports, on Anchored, whether the edge this page extended has
+	// more beyond it. False closes that edge.
+	More bool
+}
+
+// QueryRecoveredMsg reports that follow polls are succeeding again after
+// failing. QueryFailedMsg reported the start of the outage, once.
+type QueryRecoveredMsg struct {
+	Query Query
 }
 
 // QueryAnsweredMsg reports that a committed query got its first answer —
@@ -195,7 +246,22 @@ type Options struct {
 	// Context is the parent of every request's context, so cancelling it
 	// cancels everything in flight. Defaults to context.Background().
 	Context context.Context
+
+	// MaxHeld keeps a contiguous range of up to this many items rather
+	// than one window: a page adjacent to what is held extends it, a
+	// disjoint one replaces it. Zero keeps one window, which is what a
+	// table wants; a timeline read back and forth wants a range. The
+	// component trims the range itself and reports it through SetHeld.
+	MaxHeld int
+
+	// Follow is how often a Growing source is polled (see SetGrowing).
+	// Zero means DefaultFollow; negative never polls.
+	Follow time.Duration
 }
+
+// DefaultFollow is the poll interval for Growing data when Options.Follow
+// is zero.
+const DefaultFollow = 2 * time.Second
 
 // answerState is where the current query stands.
 type answerState int
@@ -214,14 +280,27 @@ type settleMsg struct {
 	seq int
 }
 
+// pollMsg fires when a Growing source is due a poll.
+type pollMsg struct {
+	id  int64
+	seq int
+}
+
 // Model is the coordinator. Embed as a value; drive it through the methods.
 type Model struct {
-	id       int64
+	core
+
 	mode     Mode
 	pageSize int
 	prefetch int
 	delay    time.Duration
-	parent   context.Context
+	maxHeld  int
+	follow   time.Duration
+
+	growing      bool
+	pollSeq      int
+	pollArmed    bool
+	pollsFailing bool
 
 	raw   string
 	terms []query.Term
@@ -240,13 +319,8 @@ type Model struct {
 
 	state answerState
 
-	gen       int
-	pending   bool
 	wantStart int
 	wantLimit int
-	live      Query
-	liveAt    time.Time
-	cancel    context.CancelFunc
 
 	// emptyStart/emptyLimit remember the last window the source answered
 	// with nothing, so a range it has no rows for is not requested in a
@@ -273,13 +347,20 @@ func New(opts Options) Model {
 	if opts.Context == nil {
 		opts.Context = context.Background()
 	}
+	switch {
+	case opts.Follow == 0:
+		opts.Follow = DefaultFollow
+	case opts.Follow < 0:
+		opts.Follow = 0
+	}
 	return Model{
-		id:       nextID.Add(1),
+		core:     core{id: nextID.Add(1), parent: opts.Context},
+		maxHeld:  max(0, opts.MaxHeld),
+		follow:   opts.Follow,
 		mode:     opts.Mode,
 		pageSize: opts.PageSize,
 		prefetch: opts.Prefetch,
 		delay:    opts.ViewportDelay,
-		parent:   opts.Context,
 		total:    -1,
 	}
 }
@@ -295,11 +376,116 @@ func (m *Model) Init() tea.Cmd {
 // Update handles the source's own timer. Forward every message to it, the
 // way pkg/poll is forwarded; anything that isn't the source's returns nil.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
-	s, ok := msg.(settleMsg)
-	if !ok || s.id != m.id || s.seq != m.vpSeq {
+	switch s := msg.(type) {
+	case settleMsg:
+		if s.id != m.id || s.seq != m.vpSeq {
+			return nil
+		}
+		return m.maybeRequest()
+	case pollMsg:
+		if s.id != m.id || s.seq != m.pollSeq {
+			return nil
+		}
+		m.pollArmed = false
+		return m.poll()
+	}
+	return nil
+}
+
+// SetGrowing says whether the data is gaining items at its end — a job or
+// flow run still running. While it is, the source polls every
+// Options.Follow: while the viewport shows the newest item (the component
+// is following) a poll fetches the tail, and otherwise it is a probe of one
+// item that only learns the grown total. Setting it false stops polling
+// after one final read, which catches items saved after the run ended.
+func (m *Model) SetGrowing(b bool) tea.Cmd {
+	if m.growing == b {
 		return nil
 	}
-	return m.maybeRequest()
+	m.growing = b
+	m.pollSeq++
+	m.pollArmed = false
+	if !b {
+		return m.poll()
+	}
+	return m.armPoll()
+}
+
+// Growing reports whether the source is polling for new items.
+func (m Model) Growing() bool { return m.growing }
+
+// PollsFailing reports whether follow polls are failing. The first failure
+// was reported as QueryFailedMsg; the first success will be reported as
+// QueryRecoveredMsg.
+func (m Model) PollsFailing() bool { return m.pollsFailing }
+
+// Poke makes a Growing source poll now rather than at the next interval —
+// for a push channel (a websocket) saying there is news. Push channels are
+// hints: they can drop messages, so the data still comes from the poll.
+func (m *Model) Poke() tea.Cmd {
+	if !m.growing {
+		return nil
+	}
+	m.pollSeq++
+	m.pollArmed = false
+	return m.poll()
+}
+
+// SetHeld adopts the range the component actually holds, after it trimmed
+// past its cap. Only meaningful with Options.MaxHeld.
+func (m *Model) SetHeld(start, count int) {
+	if m.maxHeld <= 0 {
+		return
+	}
+	m.heldStart, m.heldCount = start, max(0, count)
+}
+
+// Find asks for the first item matching term after from (Newer) or before
+// it (Older), within the committed filter. The reply's Page.Found and
+// Page.Offset say where the match is; Deliver accepts it like any page but
+// installs nothing, so the screen moves the component there.
+func (m *Model) Find(term string, dir Dir, from int) tea.Cmd {
+	q := m.newQuery(from, 1)
+	q.Find, q.Term, q.Dir = true, term, dir
+	return m.issue(q)
+}
+
+func (m *Model) armPoll() tea.Cmd {
+	if !m.growing || m.follow <= 0 || m.pollArmed {
+		return nil
+	}
+	m.pollArmed = true
+	msg := pollMsg{id: m.id, seq: m.pollSeq}
+	return tea.Tick(m.follow, func(time.Time) tea.Msg { return msg })
+}
+
+// following reports whether the viewport shows the newest item held.
+func (m Model) following() bool {
+	end := m.heldStart + m.heldCount
+	if m.total >= 0 {
+		end = m.total
+	}
+	return m.haveVP && m.last >= end-1
+}
+
+// poll issues a follow poll unless something else is in flight, in which
+// case it waits for the next interval rather than superseding it.
+func (m *Model) poll() tea.Cmd {
+	if m.pending || m.state != answered {
+		return m.armPoll()
+	}
+	end := m.heldStart + m.heldCount
+	var q Query
+	if m.following() {
+		// The tail page again as well as what is past it: holes near the
+		// end (items saved out of order) fill in on the next poll.
+		start := max(m.heldStart, end-m.pageSize)
+		q = m.newQuery(start, end-start+m.pageSize)
+	} else {
+		q = m.newQuery(end, 1)
+	}
+	q.Poll = true
+	return m.issue(q)
 }
 
 // Viewport reports the logical row range now on screen, inclusive. Feed it
@@ -362,14 +548,7 @@ func (m *Model) Refresh() tea.Cmd {
 
 // Cancel cancels whatever is in flight. A reply that arrives anyway is
 // refused by Deliver.
-func (m *Model) Cancel() {
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-	}
-	m.gen++
-	m.pending = false
-}
+func (m *Model) Cancel() { m.abandon() }
 
 // Deliver records a fetched page — or a failed fetch, when p.Err is set —
 // and reports whether it was accepted. A false return means the page
@@ -377,22 +556,39 @@ func (m *Model) Cancel() {
 // history (QueryAnsweredMsg, QueryFailedMsg) and, when a query's first
 // answer leaves part of the screen uncovered, the request for the rest.
 func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
-	if p.Gen != m.gen {
+	if !m.accept(p) {
 		return false, nil
 	}
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-	}
-	m.pending = false
 	elapsed := time.Since(m.liveAt)
 
 	if p.Err != nil {
+		if m.live.Poll {
+			if m.pollsFailing {
+				return true, m.armPoll()
+			}
+			m.pollsFailing = true
+		}
 		ev := QueryFailedMsg{Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
 		if m.state != answered {
 			m.state = failed
 		}
-		return true, func() tea.Msg { return ev }
+		return true, tea.Batch(func() tea.Msg { return ev }, m.armPoll())
+	}
+	if m.live.Find {
+		if p.Found {
+			// The view is about to move to the hit: fetch its page now,
+			// rather than a settle delay later, so the next n finds it
+			// resident instead of asking again.
+			span := m.last - m.first
+			m.first, m.last, m.haveVP = p.Offset, p.Offset+span, true
+		}
+		return true, tea.Batch(m.maybeRequest(), m.armPoll())
+	}
+	var recovered tea.Cmd
+	if m.live.Poll && m.pollsFailing {
+		m.pollsFailing = false
+		ev := QueryRecoveredMsg{Query: m.live}
+		recovered = func() tea.Msg { return ev }
 	}
 
 	if p.Count == 0 {
@@ -412,12 +608,12 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 			m.total = p.Total
 		}
 	} else {
-		m.heldStart, m.heldCount = p.Offset, p.Count
+		m.hold(p.Offset, p.Count)
 		m.total = p.Total
 	}
 
 	if m.state == answered {
-		return true, nil
+		return true, tea.Batch(recovered, m.armPoll())
 	}
 	// The first answer: the component moves its cursor to the top, so
 	// wherever the stale rows had been scrolled to no longer applies.
@@ -425,7 +621,20 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 	m.last -= m.first
 	m.first = 0
 	ev := QueryAnsweredMsg{Query: m.live, Elapsed: elapsed}
-	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest())
+	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest(), m.armPoll())
+}
+
+// hold records a delivered page as held: the whole of it, or — with
+// MaxHeld — merged into the held range when the two touch.
+func (m *Model) hold(offset, count int) {
+	end := offset + count
+	held := m.heldStart + m.heldCount
+	if m.maxHeld <= 0 || m.heldCount == 0 || count == 0 || offset > held || end < m.heldStart {
+		m.heldStart, m.heldCount = offset, count
+		return
+	}
+	start := min(offset, m.heldStart)
+	m.heldStart, m.heldCount = start, max(end, held)-start
 }
 
 // Total is the logical row count last reported, or -1 while unknown. Pass
@@ -474,6 +683,11 @@ func (m Model) wanted() (start, limit int, ok bool) {
 	if !m.haveVP || m.state == failed || (m.state == unanswered && m.pending) {
 		return 0, 0, false
 	}
+	// A find in flight is waited for, never superseded: its answer moves
+	// the view, and the fetch for wherever it lands follows from that.
+	if m.pending && m.live.Find {
+		return 0, 0, false
+	}
 	if m.mode == ByCursor {
 		if m.exhausted || m.pending {
 			return 0, 0, false
@@ -513,7 +727,10 @@ func (m Model) wantWindow() (start, limit int) {
 		pages = 1
 	}
 	limit = pages * p
-	if m.total >= 0 && start+limit > m.total {
+	// A Growing total is a floor, not a ceiling: clamping to it asks for
+	// fewer items than exist by the time the request is answered, and the
+	// reply's larger total then leaves the newest rows forever unloaded.
+	if m.total >= 0 && !m.growing && start+limit > m.total {
 		limit = m.total - start
 	}
 	if limit < 1 {
@@ -527,28 +744,77 @@ func (m Model) wantWindow() (start, limit int) {
 // generation, so only the newest reply is ever accepted and out-of-order
 // responses can't fight over the window.
 func (m *Model) request(start, limit int) tea.Cmd {
-	if m.cancel != nil {
-		m.cancel()
-	}
-	ctx, cancel := context.WithCancel(m.parent)
-	m.cancel = cancel
-	m.gen++
-	m.pending = true
 	m.wantStart, m.wantLimit = start, limit
+	return m.issue(m.newQuery(start, limit))
+}
+
+// newQuery is a query for [start, start+limit) under the current filter
+// and sort, not yet issued.
+func (m *Model) newQuery(start, limit int) Query {
 	q := Query{
 		Limit: limit,
 		Raw:   m.raw,
 		Terms: m.terms,
 		Sort:  m.sort,
 		Desc:  m.desc,
-		Gen:   m.gen,
-		Ctx:   ctx,
 	}
 	if m.mode == ByCursor {
 		q.Cursor = m.next
 	} else {
 		q.Offset = start
 	}
-	m.live, m.liveAt = q, time.Now()
+	return q
+}
+
+// core is the request plumbing Model and Anchored share: one request in
+// flight at a time, each with its own generation and context.
+type core struct {
+	id     int64
+	parent context.Context
+
+	gen     int
+	pending bool
+	live    Query
+	liveAt  time.Time
+	cancel  context.CancelFunc
+}
+
+// issue gives q a generation and a context, cancelling whatever was in
+// flight, and emits it.
+func (c *core) issue(q Query) tea.Cmd {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	ctx, cancel := context.WithCancel(c.parent)
+	c.cancel = cancel
+	c.gen++
+	c.pending = true
+	q.Gen, q.Ctx = c.gen, ctx
+	c.live, c.liveAt = q, time.Now()
 	return func() tea.Msg { return RequestMsg{Query: q} }
+}
+
+// accept reports whether p answers the live request and, if so, releases
+// it: its context is cancelled and nothing is pending.
+func (c *core) accept(p Page) bool {
+	if p.Gen != c.gen {
+		return false
+	}
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	c.pending = false
+	return true
+}
+
+// abandon cancels whatever is in flight; a reply that arrives anyway is
+// refused.
+func (c *core) abandon() {
+	if c.cancel != nil {
+		c.cancel()
+		c.cancel = nil
+	}
+	c.gen++
+	c.pending = false
 }

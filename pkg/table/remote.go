@@ -1,13 +1,12 @@
 package table
 
 import (
-	"fmt"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/pkg/focus"
 )
 
@@ -20,49 +19,9 @@ const DefaultSortDebounce = 400 * time.Millisecond
 // the table can tell whether its rows answer what the user last committed.
 // Build it from the request that produced the page — source.Query carries
 // the same three fields.
-type Answer struct {
-	Raw  string
-	Sort string
-	Desc bool
-}
-
-func (a Answer) normalized() Answer {
-	a.Raw = strings.TrimSpace(a.Raw)
-	if a.Sort == "" {
-		a.Desc = false
-	}
-	return a
-}
-
-// label renders the query for the stale title suffix.
-func (a Answer) label(asc, desc string) string {
-	var parts []string
-	if a.Raw != "" {
-		parts = append(parts, "filter "+a.Raw)
-	}
-	if a.Sort != "" {
-		dir := asc
-		if a.Desc {
-			dir = desc
-		}
-		parts = append(parts, "sort "+a.Sort+dir)
-	}
-	if len(parts) == 0 {
-		return "all"
-	}
-	return strings.Join(parts, " · ")
-}
-
-var staleFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-
-const staleFrameEvery = 90 * time.Millisecond
+type Answer = remoteview.Answer
 
 type sortSettleMsg struct {
-	token focus.Token
-	seq   int
-}
-
-type staleTickMsg struct {
 	token focus.Token
 	seq   int
 }
@@ -81,21 +40,11 @@ type remoteState struct {
 	stageSeq  int
 	stageArmd bool
 
-	answer    Answer
-	hasAnswer bool
-	failed    bool
-	retry     bool
-
-	// A page of an answered query that failed: which rows were missing
-	// when it did. Scrolling elsewhere makes new rows missing, which the
-	// source is fetching afresh, so the failure applies to these alone.
-	winFailed                 bool
-	winFailFirst, winFailLast int
+	// st is where the table stands with its source: the answered query,
+	// failure, and the border suffix's spinner.
+	st remoteview.Status
 
 	baseTitle string
-	frame     int
-	tickSeq   int
-	tickArmd  bool
 	loadCmd   tea.Cmd
 }
 
@@ -110,7 +59,7 @@ func (m Model) committed() Answer {
 	if sortCol >= 0 && sortCol < len(m.cols) {
 		a.Sort, a.Desc = m.cols[sortCol].Title, sortDesc
 	}
-	return a.normalized()
+	return a.Normalized()
 }
 
 // Stale reports whether the rows on screen answer a query other than the
@@ -118,33 +67,27 @@ func (m Model) committed() Answer {
 // rows are real records of the previous query; a verb that must not act on
 // them can check this first.
 func (m Model) Stale() bool {
-	return m.remote() && m.rq.hasAnswer && m.rq.answer != m.committed()
+	return m.remote() && m.rq.st.Stale(m.committed())
 }
 
 // Answered returns the query the rows on screen answer, and false before
 // any has arrived. Carry it across a SetTheme rebuild by passing it back
 // to SetWindow with the rows.
-func (m Model) Answered() (Answer, bool) { return m.rq.answer, m.rq.hasAnswer }
+func (m Model) Answered() (Answer, bool) { return m.rq.st.Answer, m.rq.st.HasAnswer }
 
 // Failed reports whether the committed query's fetch failed. The rows stay
 // as they were — stale, or none — until a retry or a new query answers.
-func (m Model) Failed() bool { return m.rq.failed }
+func (m Model) Failed() bool { return m.rq.st.Failed }
 
 // SetFailed tells the table the fetch for q failed. It takes effect only
 // when q is the committed query; a failure answering anything else is
 // already superseded. Restore it after a SetTheme rebuild the same way,
 // once the filter and sort have been restored.
 func (m *Model) SetFailed(q Answer) {
-	if !m.remote() || q.normalized() != m.committed() {
+	if !m.remote() {
 		return
 	}
-	if m.rq.hasAnswer && !m.Stale() {
-		// The query is answered; only a page of it failed.
-		m.rq.winFailFirst, m.rq.winFailLast, m.rq.winFailed = m.missingOnScreen()
-		m.refresh()
-		return
-	}
-	m.rq.failed = true
+	m.rq.st.SetFailed(q, m.committed(), m.missingOnScreen())
 	m.refresh()
 }
 
@@ -188,7 +131,7 @@ func (m *Model) sortChanged() {
 		m.commitSort()
 		return
 	}
-	if m.sortCol == m.rq.cSortCol && m.sortDesc == m.rq.cSortDesc && !m.rq.failed {
+	if m.sortCol == m.rq.cSortCol && m.sortDesc == m.rq.cSortDesc && !m.rq.st.Failed {
 		m.rq.staged = false
 		return
 	}
@@ -198,8 +141,8 @@ func (m *Model) sortChanged() {
 }
 
 func (m *Model) commitSort() {
-	if m.sortCol == m.rq.cSortCol && m.sortDesc == m.rq.cSortDesc && m.rq.failed {
-		m.rq.retry = true
+	if m.sortCol == m.rq.cSortCol && m.sortDesc == m.rq.cSortDesc && m.rq.st.Failed {
+		m.rq.st.Retry = true
 	}
 	m.rq.cSortCol, m.rq.cSortDesc = m.sortCol, m.sortDesc
 	m.rq.staged = false
@@ -212,16 +155,9 @@ func (m *Model) setAnswer(a Answer) {
 	if !m.remote() {
 		return
 	}
-	a = a.normalized()
-	m.rq.winFailed = false
-	was := m.Stale() || (m.rq.hasAnswer && m.rq.failed)
-	m.rq.answer, m.rq.hasAnswer = a, true
-	if a == m.committed() {
-		m.rq.failed = false
-		if was {
-			m.cursor = 0
-			m.viewStart = 0
-		}
+	if m.rq.st.SetAnswer(a, m.committed()) {
+		m.cursor = 0
+		m.viewStart = 0
 	}
 }
 
@@ -235,12 +171,11 @@ func (m *Model) handleRemote(msg tea.Msg) (bool, tea.Cmd) {
 		m.commitSort()
 		m.refresh()
 		return true, m.flushMsgs()
-	case staleTickMsg:
-		if t.token != m.token || t.seq != m.rq.tickSeq {
+	}
+	if handled, advanced := m.rq.st.Handle(m.token, msg); handled {
+		if !advanced {
 			return true, nil
 		}
-		m.rq.tickArmd = false
-		m.rq.frame++
 		m.refresh()
 		return true, m.flushMsgs()
 	}
@@ -263,12 +198,8 @@ func (m *Model) flushRemote() tea.Cmd {
 		msg := sortSettleMsg{token: m.token, seq: m.rq.stageSeq}
 		cmds = append(cmds, tea.Tick(m.rq.debounce, func(time.Time) tea.Msg { return msg }))
 	}
-	if m.waiting() && !m.rq.tickArmd {
-		m.rq.tickArmd = true
-		m.rq.tickSeq++
-		msg := staleTickMsg{token: m.token, seq: m.rq.tickSeq}
-		cmds = append(cmds, tea.Tick(staleFrameEvery, func(time.Time) tea.Msg { return msg }))
-	}
+	waiting := m.rq.st.Waiting(m.committed(), m.missingOnScreen()) || m.spanEdgeLoading() != ""
+	cmds = append(cmds, m.rq.st.Arm(m.token, waiting))
 	return tea.Batch(cmds...)
 }
 
@@ -278,7 +209,7 @@ func (m *Model) syncRemote() {
 	if !m.remote() {
 		return
 	}
-	loading := !m.rq.hasAnswer && !m.rq.failed
+	loading := m.rq.st.Loading()
 	if cmd := m.body.SetLoading(loading); cmd != nil {
 		m.rq.loadCmd = cmd
 	}
@@ -289,70 +220,31 @@ func (m *Model) syncRemote() {
 	m.body.SetTitle(title)
 }
 
-// waiting reports whether the border is showing a spinner: stale rows
-// waiting on the committed query, or rows on screen the window doesn't
-// hold yet.
-func (m Model) waiting() bool {
-	if m.rq.failed {
-		return false
-	}
-	if m.Stale() {
-		return true
-	}
-	_, _, ok := m.missingOnScreen()
-	return ok && !m.pageFailed()
-}
-
-// pageFailed reports whether the rows missing on screen are the ones whose
-// page failed.
-func (m Model) pageFailed() bool {
-	first, last, ok := m.missingOnScreen()
-	return ok && m.rq.winFailed && first == m.rq.winFailFirst && last == m.rq.winFailLast
-}
-
 // missingOnScreen reports the first and last rows on screen that the
 // window doesn't hold — the rows a scroll is waiting for.
-func (m Model) missingOnScreen() (first, last int, ok bool) {
-	if !m.windowed || !m.rq.hasAnswer {
-		return 0, 0, false
+func (m Model) missingOnScreen() remoteview.Missing {
+	var miss remoteview.Missing
+	if !m.windowed || !m.rq.st.HasAnswer {
+		return miss
 	}
 	end := min(m.viewStart+m.dataRows(), m.rowCount())
 	for i := m.viewStart; i < end; i++ {
 		if _, resident := m.rowAt(i); resident {
 			continue
 		}
-		if !ok {
-			first, ok = i, true
+		if !miss.OK {
+			miss.First, miss.OK = i, true
 		}
-		last = i
+		miss.Last = i
 	}
-	return first, last, ok
+	return miss
 }
 
 func (m Model) staleSuffix() string {
-	asc, desc := m.glyphs.SortAsc, m.glyphs.SortDesc
-	committed := m.committed().label(asc, desc)
-	spin := staleFrames[m.rq.frame%len(staleFrames)]
-	if !m.Stale() && m.rq.hasAnswer {
-		first, last, ok := m.missingOnScreen()
-		switch {
-		case !ok:
-			return ""
-		case m.pageFailed():
-			return fmt.Sprintf("✗ failed loading rows %d–%d", first+1, last+1)
-		default:
-			return fmt.Sprintf("%s loading rows %d–%d", spin, first+1, last+1)
-		}
+	if s := m.spanEdgeLoading(); s != "" {
+		return s
 	}
-	switch {
-	case m.rq.failed && !m.rq.hasAnswer:
-		return "✗ failed " + committed
-	case m.rq.failed && m.Stale():
-		return "showing " + m.rq.answer.label(asc, desc) + " · ✗ failed " + committed
-	case m.Stale():
-		return "showing " + m.rq.answer.label(asc, desc) + " · " + spin + " loading " + committed
-	}
-	return ""
+	return m.rq.st.Suffix(m.committed(), m.missingOnScreen(), "rows", m.glyphs.SortAsc, m.glyphs.SortDesc)
 }
 
 // failedBody is drawn in place of the rows when the first load failed.
@@ -367,7 +259,7 @@ func (m *Model) answerCommitted() {
 	if !m.remote() {
 		return
 	}
-	m.rq.answer, m.rq.hasAnswer, m.rq.failed = m.committed(), true, false
+	m.rq.st.AnswerCommitted(m.committed())
 }
 
 // Committed returns the query the source was last asked for, as an Answer —

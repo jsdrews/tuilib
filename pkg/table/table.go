@@ -91,6 +91,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
@@ -317,6 +318,13 @@ type Options struct {
 	// Zero means DefaultSortDebounce; negative commits every change at
 	// once. Ignored under SortLocal.
 	SortDebounce time.Duration
+	// Anchored makes the table hold a span of Anchored Records — rows
+	// reachable only by walking from an anchor, with no offsets — grown
+	// with AppendRows / PrependRows. Pair with source.Anchored.
+	Anchored bool
+	// MaxItems caps a span's resident rows; the end furthest from the
+	// viewport is trimmed. Zero means 5,000.
+	MaxItems int
 	// Placeholder is the cell text drawn for a row inside the logical
 	// range that the current window doesn't hold — see SetWindow.
 	// Defaults to "·". Pre-style it foreground-only (pkg/ansi.CellColor)
@@ -618,6 +626,10 @@ type Model struct {
 	// rq is the remote-source state: staged sort, answered query, failure.
 	rq remoteState
 
+	// span holds an Anchored table's rows; nil otherwise.
+	span     *remoteview.Range[KeyedRow]
+	maxItems int
+
 	// Windowing. When windowed, rows holds only [winStart, winStart+len)
 	// of a logical set winTotal long (-1 when the source can't say), and
 	// every cursor / scroll / count reads through rowCount and rowAt
@@ -734,6 +746,14 @@ func New(opts Options) Model {
 	if len(opts.Rows) > 0 {
 		m.answerCommitted()
 	}
+	if opts.Anchored {
+		sp := remoteview.NewSpan[KeyedRow]()
+		m.span = &sp
+		m.maxItems = opts.MaxItems
+		if m.maxItems <= 0 {
+			m.maxItems = 5000
+		}
+	}
 	if m.phGlyph == "" {
 		// Options.Placeholder still wins; the glyph set is the fallback, so a
 		// theme can restyle filler rows without every caller restating it.
@@ -827,8 +847,8 @@ func (m Model) update(msg tea.Msg) (Model, tea.Cmd) {
 		if !m.filter.Focused() {
 			m.body.SetFocused(true)
 			// Enter on a failed query is a retry, even with the text unchanged.
-			if km.String() == "enter" && m.rq.failed {
-				m.rq.retry = true
+			if km.String() == "enter" && m.rq.st.Failed {
+				m.rq.st.Retry = true
 			}
 		}
 		m.applyFilter()
@@ -1121,8 +1141,14 @@ func (m *Model) SetRows(rows []Row) {
 // sort state are preserved across the swap. This is the primitive
 // pkg/poll uses to keep the user's place across periodic refreshes.
 func (m *Model) SetKeyedRows(rows []KeyedRow) {
-	m.clearWindow()
 	m.answerCommitted()
+	m.setKeyedRows(rows)
+}
+
+// setKeyedRows is SetKeyedRows without claiming the rows answer the
+// committed query — a span says what its rows answer itself.
+func (m *Model) setKeyedRows(rows []KeyedRow) {
+	m.clearWindow()
 	prevKey, hadKey := m.SelectedKey()
 	prevCursor := m.cursor
 
@@ -1883,12 +1909,12 @@ func (m *Model) noteQuery() {
 		m.commitSort()
 	}
 	raw, sortCol, sortDesc := m.currentQuery()
-	if raw == m.qRaw && sortCol == m.qSortCol && sortDesc == m.qSortDesc && !m.rq.retry {
+	if raw == m.qRaw && sortCol == m.qSortCol && sortDesc == m.qSortDesc && !m.rq.st.Retry {
 		return
 	}
 	m.qRaw, m.qSortCol, m.qSortDesc = raw, sortCol, sortDesc
-	m.rq.retry = false
-	m.rq.failed = false
+	m.rq.st.Retry = false
+	m.rq.st.Failed = false
 	m.qPending = true
 }
 
@@ -2236,7 +2262,7 @@ func (m *Model) refresh() {
 	if m.filterable {
 		m.body.SetHeader(m.filterHeader())
 	}
-	if m.remote() && m.rq.failed && !m.rq.hasAnswer {
+	if m.remote() && m.rq.st.Failed && !m.rq.st.HasAnswer {
 		m.body.SetContent(m.failedBody())
 	} else {
 		m.body.SetContent(b.String())

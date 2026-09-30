@@ -96,7 +96,7 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
-   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/eventlog`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
    bordered, titled render from `View()`. To put a label on a component,
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
@@ -1057,6 +1057,53 @@ example in `examples/`.
     enough to copy), `examples/patterns/activity` (all of it on one screen), and
     `docs/activity-v2.md`.
 
+
+34. **Choose the component by the data's shape.** When remote data may
+    be too large for one request, classify it before writing a screen:
+    what an item is — a **Record** (fields compared across items), an
+    **Event** (fields in a timeline read in order), or a **Line** (raw
+    text read in order) — and how an item is reached — **Seekable**
+    (item N fetchable directly, with a total), **Anchored** (walked
+    forwards or backwards from an anchor, no reliable total), or
+    **Streamed** (only the tail, then what arrives). **Growing** data
+    gains items while the user watches. The terms are in `CONTEXT.md`.
+
+    | | Seekable | Anchored | Streamed |
+    |---|---|---|---|
+    | **Record** | `table` + `SetWindow` + `source.Model` | `table` (`Anchored`) + `source.Anchored` | `table` + `SetKeyedRows` from a watch |
+    | **Event** | `eventlog` + `source.Model` (`MaxHeld`) + `inspector` on enter | `eventlog` (`Anchored`) + `source.Anchored` + `inspector` | `logview` + `inspector` |
+    | **Line** | `eventlog` + `source.Model` (`MaxHeld`) | `eventlog` (`Anchored`) + `source.Anchored` | `logview` + `pkg/resume` |
+
+    **Growing** data is followed: `SetGrowing(true)` on both the source
+    (which then polls every `Options.Follow`) and the eventlog (which
+    pins the newest item and counts what arrives once the user scrolls
+    away). The screen routes `eventlog.ViewportChangedMsg` into
+    `src.SetHeld` + `src.Viewport` (or, for a span, `ToOlder`/`ToNewer`
+    into `Anchored.Viewport`), `QueryChangedMsg` into `SetQuery`, and
+    `FindMsg` into `src.Find`; a find's reply goes to `Found` / `FoundAt`.
+    `examples/patterns/eventlog` is the whole Seekable loop,
+    `examples/patterns/anchored` the Anchored one (`Query.FromAnchor`
+    starts a view; every other request extends an edge, and a search hit
+    re-anchors with `log.Reanchor()` + `src.SetAnchor(source.At(hit))`),
+    and `examples/patterns/podlogs` the Streamed one.
+
+    - **If it fits in one request, don't page it**: a `textview`, or
+      `SetRows`. Paging machinery is for data that doesn't fit.
+    - **Events never go in a table.** A timeline has one order; a
+      table's reasons to exist are sorting and comparing across rows.
+      Put the fields one enter away, in an `inspector` (rule 16).
+    - **Search jumps, filter narrows.** A filter is part of the query
+      and returns fewer items; search moves the view to the next match
+      and keeps its context. They are separate controls — a filtered
+      result loses exactly the surrounding lines a reader needed.
+    - **Push channels are hints.** AWX's and Prefect's websockets drop
+      messages under load and can't resume; poll for the data and let a
+      push only make the next poll sooner.
+
+    Per-source classification (Prefect runs and logs, AWX job events,
+    Elasticsearch, pod logs, generic REST), and the API facts behind
+    each, are in `docs/remote-data.md`.
+
 ## Anti-patterns
 
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
@@ -1469,6 +1516,41 @@ path.
   page of a paged source produces completions that are *wrong* rather
   than merely incomplete; a remote caller should pass facet values
   instead.
+- **Eventlog component:** `pkg/eventlog` shows Events and Lines from a
+  paged source (rule 34). Items (`Key`, `Lines`, `Data`, `Hole`) are the
+  unit: a multi-line event is a block, one with no output draws a dim
+  `· no output` line (so the gutter never skips a number), the
+  cursor moves by item. Seekable data arrives through `SetPage` and
+  merges into one range; `Options.Anchored` makes it a span grown with
+  `Append` / `Prepend` (keys are cursors; `Edges()` gives them back). It
+  shares `internal/remoteview` with `pkg/table` — stale dimming, the
+  border suffix, Loading before the first answer, `✗ failed` — and adds
+  follow (`SetGrowing`, `↓ N new`), a brief highlight on the line
+  numbers of items that just loaded beside ones already on screen — a
+  page reached by scrolling or a search, new items while following, or
+  what arrived while you were away when `G` brings you back; a load that
+  replaces everything marks nothing (`NewFor`, default 2s) — search that jumps (`/`, `n`/`N` locally, then `FindMsg`; a
+  remote hit lands only once its line is loaded, and presses while it is
+  on the way are answered by that landing, not queued past it), a filter
+  that narrows (`f`, `QueryChangedMsg`), and `ActivatedMsg` for an
+  inspector. A gutter
+  down the left gives the reader something fixed to measure the cursor
+  against: `Item.Mark` when set (a counter, a timestamp — what you'd
+  quote), else the position for Seekable data, else nothing, since
+  Anchored data has no positions (`NoGutter` hides it). A timestamp mark
+  is always the source's own (`@timestamp`, the kubelet's line time),
+  never the client's fetch time; when the line text already carries the
+  application's timestamp, leave `Mark` empty rather than show two. `logview` has
+  the opt-in counterpart, `Options.LineNumbers`, which skips marker
+  lines. See `examples/patterns/eventlog` and `theme.Eventlog()`.
+- **Resuming a coarse-timestamp stream:** `pkg/resume` is stern's
+  algorithm for pod logs with no I/O — `Observe`, `Resume` → `(since,
+  skip)`, `Drop`, `Reconnected`, and `OlderCut` / `ObserveOlder` for
+  "load older" merged with `logview.Prepend`. Mark reconnects and
+  restarts with `logview.AppendMarker`.
+- **Large remote data in general:** `docs/remote-data.md` classifies each
+  source we build TUIs for (Prefect, AWX, Elasticsearch, pod logs, generic
+  REST) and names the component and paging mode for it. See rule 34.
 - **Remote paging:** `pkg/source` is the coordinator between "the user
   scrolled here" and "ask the server for that range" — `Query`,
   `RequestMsg`, `Page`, and a `Model` that owns the held window, the

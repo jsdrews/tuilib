@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
@@ -308,7 +309,7 @@ func TestMissingRowsShowLoadingOnBorder(t *testing.T) {
 	}
 	armed := false
 	for _, msg := range flatten(cmd) {
-		if _, ok := msg.(staleTickMsg); ok {
+		if _, ok := msg.(remoteview.TickMsg); ok {
 			armed = true
 		}
 	}

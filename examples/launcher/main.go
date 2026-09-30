@@ -42,14 +42,17 @@ import (
 	patactions "github.com/jsdrews/tuilib/examples/patterns/actions"
 	patactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
 	patactivityrecipes "github.com/jsdrews/tuilib/examples/patterns/activityrecipes"
+	patanchored "github.com/jsdrews/tuilib/examples/patterns/anchored"
 	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
 	patdrilldown "github.com/jsdrews/tuilib/examples/patterns/drilldown"
+	pateventlog "github.com/jsdrews/tuilib/examples/patterns/eventlog"
 	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
 	patfocus "github.com/jsdrews/tuilib/examples/patterns/focus"
 	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
 	patmodals "github.com/jsdrews/tuilib/examples/patterns/modals"
 	patmouse "github.com/jsdrews/tuilib/examples/patterns/mouse"
 	patmultiselect "github.com/jsdrews/tuilib/examples/patterns/multiselect"
+	patpodlogs "github.com/jsdrews/tuilib/examples/patterns/podlogs"
 	patpoll "github.com/jsdrews/tuilib/examples/patterns/poll"
 	patremote "github.com/jsdrews/tuilib/examples/patterns/remote"
 	patrunner "github.com/jsdrews/tuilib/examples/patterns/runner"
@@ -161,6 +164,18 @@ var entries = []entry{
 	{groupPatterns, "Remote", "patterns/remote",
 		"The whole windowed-source loop: pkg/source coordinating a pkg/table in FilterRemote/SortRemote over demoapi — a real http.Handler behind a real client, 5,000 applications, one 100-row page at a time, 250ms of latency. Scroll faster than it answers and you see the \"·\" placeholders for rows it hasn't received; the cursor stays put and the data arrives under it. / filters at the source (enter commits — one request, not one per keystroke) and a scoped term leaves as ?region=eu-west, since Term.Title is already the resolved column. [/]/s sorts there too, r refetches, e makes the next fetch return a 503 so you can watch the error path. Completion candidates come from the facets endpoint, because one page can't know every region.",
 		patremote.New},
+	{groupPatterns, "Eventlog", "patterns/eventlog",
+		"pkg/eventlog over a fake AWX-shaped job: events with a counter, 0-n output lines and fields, emitted while the job runs and served one page at a time with latency (L cycles it). The view follows the newest event; scroll up and it stops, counting what arrived since, and G returns. f filters on the server (\"failed\", a host), / searches: n/N jump among loaded events, then ask the source for the next match beyond them. Enter opens an event's fields in an inspector. A filter containing \"boom\" makes the fetch 503.",
+		pateventlog.New},
+	{groupPatterns, "Eventlog (finished job)", "patterns/eventlog",
+		"The same eventlog over an AWX-shaped job that has already finished — the troubleshooting case. 8,000 events, nothing growing or polling, opened at the first event. / then n/N jump among the loaded events and, past them, ask the job for the next match (try \"fatal\" or \"timeout\"), which re-centres the view with its context around it. f narrows to what matches on the server (\"failed\", a host). Enter opens an event's fields.",
+		pateventlog.NewFinished},
+	{groupPatterns, "Anchored", "patterns/anchored",
+		"pkg/eventlog over Anchored data: a fake Elasticsearch-shaped index of 20,000 log documents, still growing, paged with search_after — no offsets, no total. The view opens at the newest and follows; scroll toward either edge and the span grows there (⠙ loading older…), trimmed at the far end past 5,000. f filters (level:error, service:orders, text); / then n/N jump among loaded documents, and past them the source finds the next hit and re-anchors around it, like Kibana's surrounding documents. Enter opens a document. L cycles latency.",
+		patanchored.New},
+	{groupPatterns, "Pod logs", "patterns/podlogs",
+		"Streamed data: a fake pod log read the way the Kubernetes API allows — a tail, then follow, no pagination — in a pkg/logview with pkg/resume. Four lines a second against a since that is truncated to the second, so reconnects would repeat lines; the tracker drops exactly those. The connection drops every 20s and each reconnect is marked (rotation loss can't be detected, so the marker says so). The container restarts every 100s: a marker, then the new run; P opens the previous run on its own. O loads older lines by asking for a longer tail until the start of what the kubelet retained.",
+		patpodlogs.New},
 	{groupPatterns, "Actions", "patterns/actions",
 		"The verb menu. Press a or right-click a row to open action.Menu: it sizes itself to its widest row and anchors where you asked. This screen is single-target on purpose — Multi-select is the one that marks rows. Start a Restart and reopen the menu to see the Exclusive gate. Single click commits, click-away dismisses, Delete confirms first.",
 		patactions.New},

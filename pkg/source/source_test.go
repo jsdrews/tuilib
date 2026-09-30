@@ -585,3 +585,210 @@ func count[T any](ms []tea.Msg) int {
 	}
 	return n
 }
+
+// ---- MaxHeld, follow, find ----
+
+func TestMaxHeldMergesAdjacentPages(t *testing.T) {
+	m := newSrc(t, Options{MaxHeld: 5000})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	w := req(m.Viewport(150, 170))
+	m.Deliver(Page{Gen: w.Gen, Offset: 100, Count: 100, Total: 1000})
+	if start, count := m.Held(); start != 0 || count != 200 {
+		t.Fatalf("Held = (%d, %d), want the pages merged into [0,200)", start, count)
+	}
+	if got := req(m.Viewport(20, 40)); got != nil {
+		t.Errorf("scrolling back into the range refetched %+v", *got)
+	}
+	far := req(m.Viewport(800, 820))
+	m.Deliver(Page{Gen: far.Gen, Offset: 800, Count: 100, Total: 1000})
+	if start, count := m.Held(); start != 800 || count != 100 {
+		t.Errorf("Held = (%d, %d), want a far jump to replace the range", start, count)
+	}
+	m.SetHeld(820, 80)
+	if start, count := m.Held(); start != 820 || count != 80 {
+		t.Errorf("SetHeld not adopted: (%d, %d)", start, count)
+	}
+}
+
+func TestMaxHeldZeroKeepsOneWindow(t *testing.T) {
+	m := newSrc(t, Options{})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	w := req(m.Viewport(150, 170))
+	m.Deliver(Page{Gen: w.Gen, Offset: 100, Count: 100, Total: 1000})
+	if start, count := m.Held(); start != 100 || count != 100 {
+		t.Errorf("Held = (%d, %d); a table holds one window", start, count)
+	}
+}
+
+// pollOf fires the poll timer a command armed. A Tick runs once only, so
+// tests that also inspect the command's messages use pollIn instead.
+func pollOf(t *testing.T, m *Model, cmd tea.Cmd) *Query {
+	t.Helper()
+	return pollIn(m, msgs(cmd))
+}
+
+func pollIn(m *Model, ms []tea.Msg) *Query {
+	for _, msg := range ms {
+		if p, ok := msg.(pollMsg); ok {
+			return req(m.Update(p))
+		}
+	}
+	return nil
+}
+
+func TestFollowPollsTheTailWhileFollowing(t *testing.T) {
+	m := newSrc(t, Options{MaxHeld: 5000, Follow: time.Millisecond})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 100})
+	m.Viewport(80, 99) // the newest item is on screen: following
+	p := pollOf(t, &m, m.SetGrowing(true))
+	if p == nil || !p.Poll {
+		t.Fatal("a Growing source should poll")
+	}
+	if p.Offset != 0 || p.Limit != 200 {
+		t.Errorf("poll = [%d,+%d), want the tail page again plus what's past it", p.Offset, p.Limit)
+	}
+	_, cmd := m.Deliver(Page{Gen: p.Gen, Offset: 0, Count: 130, Total: 130})
+	if start, count := m.Held(); start != 0 || count != 130 {
+		t.Errorf("Held = (%d, %d)", start, count)
+	}
+	if pollOf(t, &m, cmd) == nil {
+		t.Error("the next poll should be armed after a delivery")
+	}
+}
+
+func TestProbeWhileNotFollowing(t *testing.T) {
+	m := newSrc(t, Options{MaxHeld: 5000, Follow: time.Millisecond})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 100})
+	m.Viewport(0, 19)
+	p := pollOf(t, &m, m.SetGrowing(true))
+	if p == nil || p.Offset != 100 || p.Limit != 1 {
+		t.Fatalf("probe = %+v, want one item past the end", p)
+	}
+}
+
+func TestPollWaitsForARequestInFlight(t *testing.T) {
+	m := newSrc(t, Options{Follow: time.Millisecond})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	user := req(m.Viewport(150, 170))
+	cmd := m.SetGrowing(true)
+	if p := pollOf(t, &m, cmd); p != nil {
+		t.Errorf("a poll superseded the user's request: %+v", *p)
+	}
+	if user.Ctx.Err() != nil {
+		t.Error("the user's request was cancelled by a poll")
+	}
+}
+
+func TestPollFailureReportedOnceThenRecovery(t *testing.T) {
+	m := newSrc(t, Options{Follow: time.Millisecond})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 10, Total: 10})
+	p := pollOf(t, &m, m.SetGrowing(true))
+	_, cmd := m.Deliver(Page{Gen: p.Gen, Err: errors.New("down")})
+	ms := msgs(cmd)
+	if n := count[QueryFailedMsg](ms); n != 1 || !m.PollsFailing() {
+		t.Fatalf("first failure reported %d times", n)
+	}
+	p = pollIn(&m, ms)
+	if p == nil {
+		t.Fatal("polling should continue through failures")
+	}
+	_, cmd = m.Deliver(Page{Gen: p.Gen, Err: errors.New("down")})
+	ms = msgs(cmd)
+	if n := count[QueryFailedMsg](ms); n != 0 {
+		t.Error("a continuing outage was reported again")
+	}
+	p = pollIn(&m, ms)
+	_, cmd = m.Deliver(Page{Gen: p.Gen, Offset: 10, Count: 1, Total: 11})
+	if n := count[QueryRecoveredMsg](msgs(cmd)); n != 1 || m.PollsFailing() {
+		t.Error("the first success should report a recovery")
+	}
+}
+
+func TestStopGrowingDoesAFinalRead(t *testing.T) {
+	m := newSrc(t, Options{Follow: time.Hour})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 10, Total: 10})
+	m.SetGrowing(true)
+	if f := req(m.SetGrowing(false)); f == nil || !f.Poll {
+		t.Error("stopping should read once more for late items")
+	}
+}
+
+func TestPokePollsNow(t *testing.T) {
+	m := newSrc(t, Options{Follow: time.Hour})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 10, Total: 10})
+	if m.Poke() != nil {
+		t.Error("Poke on data that isn't Growing should do nothing")
+	}
+	m.SetGrowing(true)
+	if p := req(m.Poke()); p == nil || !p.Poll {
+		t.Error("Poke should poll immediately")
+	}
+}
+
+func TestFindRequestsOneMatchAndInstallsNothing(t *testing.T) {
+	m := newSrc(t, Options{})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	m.SetQuery("level:error", nil, "", false)
+	f := req(m.Find("timeout", Newer, 99))
+	if f == nil || !f.Find || f.Term != "timeout" || f.Offset != 99 || f.Limit != 1 || f.Raw != "level:error" {
+		t.Fatalf("find = %+v", f)
+	}
+	ok, _ := m.Deliver(Page{Gen: f.Gen, Found: true, Offset: 612})
+	if !ok || m.Total() != -1 {
+		t.Error("a find answer is accepted but must not install a window")
+	}
+}
+
+func TestAViewportRequestDoesNotSupersedeAFind(t *testing.T) {
+	m := New(Options{PageSize: 100, ViewportDelay: -1, MaxHeld: 5000})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	f := req(m.Find("ok", Newer, 99))
+	// The jump that ran out of loaded matches also scrolled the view.
+	if got := req(m.Viewport(95, 115)); got != nil {
+		t.Errorf("a scroll during a find issued %+v, cancelling the find", *got)
+	}
+	if f.Ctx.Err() != nil {
+		t.Fatal("the find was cancelled")
+	}
+	ok, cmd := m.Deliver(Page{Gen: f.Gen, Found: true, Offset: 100})
+	if !ok {
+		t.Fatal("the find's answer must still be accepted")
+	}
+	if got := req(cmd); got == nil || got.Offset > 100 || got.Offset+got.Limit <= 100 {
+		t.Errorf("a found hit should fetch its page at once: %+v", got)
+	}
+}
+
+func TestAnchoredEdgeRequestDoesNotSupersedeAFind(t *testing.T) {
+	m := NewAnchored(AnchoredOptions{PageSize: 100, ViewportDelay: -1})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Count: 100, More: true})
+	f := req(m.Find("ok", Older))
+	if got := req(m.Viewport(5, 90)); got != nil {
+		t.Errorf("an edge request during a find: %+v", *got)
+	}
+	if f.Ctx.Err() != nil {
+		t.Error("the find was cancelled")
+	}
+}
+
+func TestGrowingDoesNotClampToTheStaleTotal(t *testing.T) {
+	m := New(Options{PageSize: 100, ViewportDelay: -1, MaxHeld: 5000, Follow: time.Hour})
+	q := req(m.Init())
+	m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 150})
+	m.SetGrowing(true)
+	got := req(m.Viewport(130, 149))
+	if got == nil || got.Offset+got.Limit <= 150 {
+		t.Errorf("q = %+v — a growing set may already be past 150; ask for the whole page", got)
+	}
+}
