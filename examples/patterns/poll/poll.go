@@ -135,22 +135,14 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	cursor, value := s.list.Cursor(), s.list.Value()
-	prevKey, hadKey := s.list.SelectedKey()
+	st := s.list.State()
 	opts := t.List()
 	opts.Title = "tasks"
 	opts.Filterable = true
 	opts.Filter.Placeholder = "filter tasks…"
 	s.list = list.New(opts)
 	s.applyJobs()
-	if value != "" {
-		s.list.SetValue(value)
-	}
-	if hadKey {
-		s.snapToKey(prevKey)
-	} else {
-		s.list.SetCursor(cursor)
-	}
+	s.list.Restore(st)
 	s.refreshTitle()
 }
 
@@ -163,20 +155,6 @@ func (s *Screen) applyJobs() {
 	}
 	s.list.SetKeyedItems(items)
 	s.refreshTitle()
-}
-
-func (s *Screen) snapToKey(key string) {
-	for i, j := range s.jobs {
-		if j.id == key {
-			items := make([]list.KeyedItem, len(s.jobs))
-			for k, jj := range s.jobs {
-				items[k] = list.KeyedItem{Key: jj.id, Display: formatJob(jj)}
-			}
-			s.list.SetKeyedItems(items)
-			s.list.SetCursor(i)
-			return
-		}
-	}
 }
 
 func (s *Screen) refreshTitle() {

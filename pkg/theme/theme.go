@@ -29,6 +29,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/confirm"
+	"github.com/jsdrews/tuilib/pkg/eventlog"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/glyph"
@@ -600,6 +601,7 @@ func (t Theme) Logview() logview.Options {
 	return logview.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
+		GutterStyle:      lipgloss.NewStyle().Foreground(t.Muted),
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
 		ActiveBorder:     t.shapeActive(),
@@ -610,6 +612,29 @@ func (t Theme) Logview() logview.Options {
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             logview.DefaultKeys(),
+	}
+}
+
+// Eventlog returns eventlog.Options pre-filled from the theme — the
+// selected item in Accent on Subtle like a table row, match highlight like
+// the logview's, border colors matching pane. Set Title, Anchored,
+// Filterable and Searchable on the returned value before eventlog.New.
+func (t Theme) Eventlog() eventlog.Options {
+	return eventlog.Options{
+		MatchStyle:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
+		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
+		GutterStyle:    lipgloss.NewStyle().Foreground(t.Muted),
+		NewStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
+		SlotBrackets:   t.SlotBrackets,
+		HScrollbar:     true,
+		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
+		Filter:         t.Filter(),
+		Keys:           eventlog.DefaultKeys(),
 	}
 }
 

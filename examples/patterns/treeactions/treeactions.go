@@ -152,9 +152,7 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, query := s.tree.Cursor(), s.tree.Query()
-	filterMode := s.tree.FilterMode()
-	marks := s.tree.Marks()
+	st := s.tree.State()
 
 	opts := t.Tree()
 	opts.Title = "cluster"
@@ -164,13 +162,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	opts.InitialDepth = 3
 	opts.Filter.Placeholder = "search pods…"
 	s.tree = tw.New(opts)
-
-	if query != "" {
-		s.tree.SetQuery(query)
-		s.tree.SetFilterMode(filterMode)
-	}
-	s.tree.SetCursor(cursor)
-	s.tree.SetMarks(marks)
+	s.tree.Restore(st)
 	s.refreshTitle()
 }
 

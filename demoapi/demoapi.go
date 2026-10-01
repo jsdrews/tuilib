@@ -63,6 +63,20 @@
 //	POST /chaos/delete/{id}                // a row leaves the set
 //	POST /chaos/spawn?id=X&busy=1          // a row arrives, already working
 //
+// # Elasticsearch search
+//
+// POST /logs-app/_search answers like Elasticsearch over a growing log
+// index: the 10,000-hit window, search_after with a required tiebreaker,
+// totals that stop counting, refresh, and documents ingested late. See
+// es.go.
+//
+// # AWX job events
+//
+// Under /api/v2/jobs/ the fixture answers like AWX's job endpoints — counter
+// ranges, page mode capped at 200, stdout and outcome filters, a running
+// job whose late-saved events leave holes and whose event processing trails
+// its status. See awx.go.
+//
 // Alternating ?stale= with a fresh read is how a read path that goes
 // *backwards* is reproduced — busy, settled, busy — which no client-side
 // generation check can repair, because neither reply overtook the other.
@@ -147,6 +161,11 @@ type server struct {
 	// single request is already covered, and says nothing about what a screen
 	// does with state it stopped being able to refresh.
 	downUntil time.Time
+
+	// started is when the fixture was built, on the world's clock: when
+	// the AWX corner's running job began, and where the search corner's
+	// seeded documents end and live ones begin.
+	started time.Time
 }
 
 // New returns the fixture as an http.Handler.
@@ -161,6 +180,7 @@ func New(opts Options) http.Handler {
 		lat: opts.Latency,
 		rng: rand.New(rand.NewSource(seed ^ 0x5eed)),
 	}
+	s.started = s.w.now()
 	s.routes()
 	return s
 }
@@ -173,6 +193,14 @@ func (s *server) routes() {
 	s.mux.HandleFunc("GET /jobs", s.listJobs)
 	s.mux.HandleFunc("GET /jobs/{id}", s.getJob)
 	s.mux.HandleFunc("GET /jobs/{id}/log", s.jobLog)
+
+	// AWX-shaped job events; see awx.go.
+	s.mux.HandleFunc("GET /api/v2/jobs/", s.awxListJobs)
+	s.mux.HandleFunc("GET /api/v2/jobs/{id}/", s.awxGetJob)
+	s.mux.HandleFunc("GET /api/v2/jobs/{id}/job_events/", s.awxEvents)
+
+	// Elasticsearch-shaped search over one log index; see es.go.
+	s.mux.HandleFunc("POST /logs-app/_search", s.esSearch)
 
 	// Chaos is stateful, so it is endpoints rather than query parameters: a
 	// test says when the world changes shape, and the change outlives the

@@ -182,30 +182,21 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.cmds.Cursor(), s.cmds.Value()
+	cmdSt, logSt := s.cmds.State(), s.log.State()
+
 	listOpts := t.List()
 	listOpts.Title = "commands"
 	listOpts.Items = labels()
 	s.cmds = list.New(listOpts)
-	if value != "" {
-		s.cmds.SetValue(value)
-	}
-	s.cmds.SetCursor(cursor)
+	s.cmds.Restore(cmdSt)
 
-	q := s.log.Query()
-	prev := s.log.Lines()
 	logOpts := t.Logview()
 	logOpts.Title = "output"
 	logOpts.Searchable = true
 	logOpts.MaxLines = 5000
 	logOpts.Filter.Placeholder = "search…"
 	s.log = lv.New(logOpts)
-	if len(prev) > 0 {
-		s.log.AppendLines(prev)
-	}
-	if q != "" {
-		s.log.SetQuery(q)
-	}
+	s.log.Restore(logSt)
 
 	s.applyFocus()
 }

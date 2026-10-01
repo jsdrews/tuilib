@@ -55,14 +55,13 @@ func (s *cities) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *cities) SetTheme(t theme.Theme) {
     s.t = t
-    cursor, value := s.list.Cursor(), s.list.Value()
+    st := s.list.State() // cursor, filter, items… everything the user did
     opts := t.List()
     opts.Title = "Cities"
     opts.Items = []string{"London", "Tokyo", "Madrid", "Lima"}
     opts.Filterable = true
     s.list = list.New(opts)
-    if value != "" { s.list.SetValue(value) }
-    s.list.SetCursor(cursor)
+    s.list.Restore(st)
 }
 
 func main() {
@@ -98,6 +97,9 @@ handles its own state in `Update`.
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/confirm` | Modal yes/no dialog with title + message + confirm/cancel buttons; resolves via `ConfirmedMsg` / `CancelledMsg` so parent screens stay bubbletea-idiomatic. Designed for `layout.ZStack(base, layout.Center(w, h, ...))` |
 | `pkg/alert` | Modal acknowledgement dialog with title + message + single OK button; resolves via `DismissedMsg`. Use for "stop and acknowledge" feedback (errors, blocking notices); for passive feedback prefer the lighter `app.Info` / `app.Error` statusbar messages. Override `ActiveColor` with `theme.ErrorBG` for an error-tinted look |
+| `pkg/remote` | Binds a `table` or `eventlog` to a remote source so a screen writes only the fetch: `NewEventlog` / `NewTable` over `Seekable{Page, Find}` or `Anchored{Edge, Find}` — plain functions over typed requests — then `Init`, `Update`, `Restyle`. Paging, following, search landing and theme swaps are the binding's |
+| `pkg/eventlog` | Events and lines from a paged remote source: items (key, lines, data) with a cursor per item, a merged range (Seekable) or a span grown at either edge (Anchored), follow with a new-items count, search that jumps past what is loaded, a filter that narrows the query, and the table's stale/loading/failed border signals. See CLAUDE.md rule 34 |
+| `pkg/resume` | Exact resume for a stream whose "since" is coarser than its lines (pod logs): tracks the last second and the lines seen in it, and where a longer tail's older lines stop |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
 | `pkg/tree` | Searchable, expand/collapse hierarchical viewer over any `Node` (Label + Children); `/`-search highlights inline and `\` hides non-matching subtrees while keeping ancestors. `Options.Markable` adds a multi-selection keyed on each node's path — `x` toggles (space stays expand/collapse), `X` or shift+click extends a range, `A` marks every visible row, `D` clears; marking a branch marks that node alone, and paths are hierarchical so a caller can prefix-test for the subtree. Labels may contain lipgloss-styled ANSI (colored status icons, etc.) — the cursor's row highlight stays intact across colored segments |
 | `pkg/inspector` | Two-column label/value viewer for structured records (k8s manifests, REST responses, Prefect run details). `Field{Label, Value, Children}` composes; `FromAny` / `FromMap` convert `json.Unmarshal` output into Fields. Sibling labels auto-align per group, ▸/▾ expand nested objects/arrays, `/` searches labels and values, `\` hides non-matching subtrees. `SetFields` preserves expansion state + cursor by row path across swaps — the auto-refresh primitive for inspector |
@@ -385,7 +387,11 @@ section.
 | Loading | `list`, `logview`, and `tree` all start in `SetLoading(true)`; staggered `tea.Tick` delays simulate fetches that resolve at different times. `r` refetches, and the spinner replaces the previous result rather than overlaying it |
 | Drilldown | Master-detail with async fetches at every level. Enter on either pane "opens the focused selection": left-enter loads the detail (reqID-tagged so stale results drop) and shifts focus right, right-enter pushes a child screen |
 | Poll | `pkg/poll` drives a 2s tick that mutates a synthetic job list; `SetKeyedItems` keeps the cursor on the same job ID across every refresh even as statuses flip and the list reorders. `p` pauses, `r` refreshes now, `+`/`-` adjust cadence |
-| Remote | The whole windowed-source loop: `pkg/source` coordinating a table in `FilterRemote`/`SortRemote` over a simulated 5,000-row API that answers one 100-row page at a time with 250ms of latency. Scroll faster than it answers and you see the `·` placeholders; the cursor stays put and data arrives under it |
+| Remote | The whole windowed-source loop: `pkg/source` coordinating a table in `FilterRemote`/`SortRemote` over a simulated 5,000-row API that answers one 100-row page at a time, with latency `L` cycles from 250ms to 8s. Scroll faster than it answers and you see the `·` placeholders; the cursor stays put and data arrives under it. Commit a filter or sort and the rows stay on screen, dimmed, with the border naming the query they answer and the one loading; `[`/`]`/`s` wait for a quiet moment before asking, superseded requests are cancelled, and every query's outcome lands in the output console |
+| Eventlog | `pkg/eventlog` bound with `pkg/remote` to demoapi's AWX-shaped job-events endpoints over HTTP — a running job: counter ranges, holes from late-saved events that fill in, follow with a new-events count, `f` to filter on the server (`failed`, `host:web-1`), `/` + `n`/`N` to find past what is loaded, enter to open an event, `L` to cycle latency |
+| Eventlog (finished job) | The same over a finished AWX job of 8,000 events — the troubleshooting case: opens at the first event, nothing polls, and `/` + `n`/`N` find matches across the whole job, asking AWX for the next one past what is loaded |
+| Anchored | `pkg/eventlog` bound with `pkg/remote` to demoapi's Elasticsearch-shaped `_search` over HTTP — `search_after` with the `_shard_doc` tiebreaker, a span grown at whichever edge you scroll toward, a tail that rewinds to catch late-ingested documents, and a search hit past the span that re-anchors around it |
+| Pod logs | A fake pod log in `pkg/logview` with `pkg/resume`: exact reconnects at one-second resolution, marked reconnects and restarts, `O` to load older lines from a longer tail, `P` for the previous run |
 | Actions | The verb menu. `a` or right-click opens `action.Menu`, sized to its widest row and anchored where you asked. Single-target on purpose. Start a Restart and reopen the menu to see the `Exclusive` gate; Delete confirms first |
 | Multi-select | `table.Model` with `Options.Markable` + `pkg/action`: `x` marks, `X` (or shift+click) extends a range in either direction, `A` marks everything the filter shows, `D` drops. Marks are held by Key, so they survive filtering and a theme swap. The menu is titled with what it will act on ("3 items"), and the action that did not declare `Multi` dims itself with a reason |
 | Tree actions | `pkg/tree` marking + `pkg/action` on a cluster hierarchy. Marking a branch marks that branch alone; the screen resolves it to the pods a verb should touch with a prefix test on the path, which is why Restart cascades into a marked namespace and Describe does not |

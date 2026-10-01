@@ -120,19 +120,16 @@ func (s *Screen) HelpSections() []help.Section { return s.focus.HelpSections() }
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, q := s.files.Cursor(), s.files.Value()
+	fileSt, rowSt := s.files.State(), s.rows.State()
+
 	lOpts := t.List()
 	lOpts.Title = "files · / to filter"
 	lOpts.Filterable = true
 	lOpts.Filter.Placeholder = "filter files…"
 	lOpts.Items = fileNames
 	s.files = list.New(lOpts)
-	s.files.SetCursor(cursor)
-	if q != "" {
-		s.files.SetValue(q)
-	}
+	s.files.Restore(fileSt)
 
-	tCursor, tQuery := s.rows.Cursor(), s.rows.Value()
 	tOpts := t.Table()
 	tOpts.Title = "deployments · / to filter, tab completes key:value"
 	tOpts.Filterable = true
@@ -144,10 +141,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	}
 	tOpts.Rows = deployments
 	s.rows = table.New(tOpts)
-	s.rows.SetCursor(tCursor)
-	if tQuery != "" {
-		s.rows.SetValue(tQuery)
-	}
+	s.rows.Restore(rowSt)
 
 	at := s.focus.Index()
 	s.focus = focus.NewGroup(&s.files, &s.rows).WithKeys(focus.Keys{

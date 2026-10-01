@@ -54,3 +54,83 @@ A whole component having no data yet; its body is replaced. Activity is per-row 
 **Mark**:
 The user's selection of rows. Activity is the system's state about rows. Both are held by key, so marking rows and then acting on them makes exactly those rows active.
 _Avoid_: select (as a noun for the set)
+
+### Remote queries
+
+**Committed query**:
+The filter and sort the user last committed for a remote source to answer. Filter text commits on enter, esc or blur; a sort commits once sort input goes quiet.
+_Avoid_: pending query, current query, in-flight query
+
+**Answered query**:
+The query the rows on screen are the source's answer to. It trails the committed query while the source is still answering.
+_Avoid_: showing query, displayed query
+
+**Staged sort**:
+A sort the user has moved to but not yet committed. It is the only way the sort a table shows can differ from its committed query.
+_Avoid_: pending sort, draft sort
+
+**Stale**:
+Rows whose answered query differs from the committed query. They stay on screen, drawn dimmed, until the committed query's answer arrives. A state of the rows, not of the component.
+_Avoid_: loading (which replaces the body), reloading, outdated
+
+**Failed query**:
+A committed query whose fetch failed. The rows stay stale, still answering the previous query, and the user's input is kept so the same query can be retried or edited.
+_Avoid_: error state, reverted query
+
+**Query history**:
+The console's record of what happened to each committed query: answered (with how long it took), failed, or cancelled. Routine page fetches are left out; failed ones are not.
+_Avoid_: request log, fetch log
+
+### Remote data shapes
+
+**Record**:
+An item with fields that the user compares across items — a flow run, an application.
+_Avoid_: row (a rendering, not the data), entity
+
+**Event**:
+An item with fields that sits in a timeline the user reads in order — a job event, a log document.
+_Avoid_: entry, message
+
+**Line**:
+Raw text read in order, with no fields the user works with.
+_Avoid_: log entry, message
+
+**Seekable**:
+Data whose item N can be fetched directly, with a total that is known or grows.
+_Avoid_: paginated, offset-based
+
+**Anchored**:
+Data reachable only by walking forwards or backwards from an anchor — the newest item, a time, or a given item — with no reliable total.
+_Avoid_: cursor-based, keyset
+
+**Streamed**:
+Data offered only as its tail and whatever arrives after it.
+_Avoid_: live, tailing
+
+**Growing**:
+Data that gains items at its end while the user watches.
+_Avoid_: live, streaming
+
+**Anchor**:
+Where a view of Anchored data begins — its newest item, its oldest, or a given item.
+_Avoid_: cursor (a cursor marks an edge), seek point
+
+**Span**:
+The contiguous items a component holds of Anchored data, grown or trimmed at either edge. Unlike a window, it has no logical offsets.
+_Avoid_: run (a flow or job run), window, buffer
+
+**Edge**:
+Either end of a span, which either has more beyond it or does not.
+_Avoid_: boundary, end
+
+**Eventlog**:
+The component for Events and Lines read in order from Seekable or Anchored data: it holds a window or a span of items, each drawn as its lines, with a cursor on one item. Streamed data stays in a logview.
+_Avoid_: windowed logview, paged log, timeline
+
+**Follow**:
+Keeping the view pinned to the newest item of Growing data, fetching what arrives. On at the newest item, off as soon as the user moves away; the view never moves by itself.
+_Avoid_: tail, live mode, auto-scroll
+
+**Probe**:
+A follow poll made while the user is not following: it learns how much is new without fetching it into view.
+_Avoid_: peek, count query

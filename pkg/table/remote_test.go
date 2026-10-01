@@ -2,6 +2,7 @@ package table
 
 import (
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -22,10 +23,11 @@ func newRemote(t *testing.T, fm FilterMode, sm SortMode) Model {
 			{Title: "Region", Width: 10},
 			{Title: "Pop", Width: 8, Sortable: true},
 		},
-		Rows:       remoteRows,
-		Filterable: true,
-		FilterMode: fm,
-		SortMode:   sm,
+		Rows:         remoteRows,
+		Filterable:   true,
+		FilterMode:   fm,
+		SortMode:     sm,
+		SortDebounce: -1,
 	})
 	m.SetRect(geom.New(0, 0, 40, 12))
 	return m
@@ -199,12 +201,26 @@ func TestSortKeyEmitsQuery(t *testing.T) {
 
 func TestHeaderClickEmitsQuery(t *testing.T) {
 	m := New(Options{
-		Columns:  []Column{{Title: "Name", Width: 10, Sortable: true}},
-		Rows:     []Row{{"Oslo"}, {"Lima"}},
-		SortMode: SortRemote,
+		Columns:      []Column{{Title: "Name", Width: 10, Sortable: true}},
+		Rows:         []Row{{"Oslo"}, {"Lima"}},
+		SortMode:     SortRemote,
+		SortDebounce: time.Millisecond,
 	})
 	m.SetRect(geom.New(0, 0, 40, 12))
 	m, cmd := m.Update(press(2, 1, 1))
+	var settle tea.Msg
+	for _, msg := range flatten(cmd) { // a Tick runs once only
+		switch msg.(type) {
+		case QueryChangedMsg:
+			t.Fatal("a header click committed before the quiet period")
+		case sortSettleMsg:
+			settle = msg
+		}
+	}
+	if settle == nil {
+		t.Fatal("no sort timer armed")
+	}
+	_, cmd = m.Update(settle)
 	q := drainQueryMsg(cmd)
 	if q == nil {
 		t.Fatal("clicking a sortable header emitted no QueryChangedMsg")

@@ -104,17 +104,14 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.list.Cursor(), s.list.Value()
+	st := s.list.State()
 	lo := t.List()
 	lo.Title = "deployments"
 	lo.Filterable = true
 	lo.Filter.Placeholder = "filter…"
 	s.list = list.New(lo)
 	s.list.SetKeyedItems(s.items())
-	if value != "" {
-		s.list.SetValue(value)
-	}
-	s.list.SetCursor(cursor)
+	s.list.Restore(st)
 }
 
 // items are keyed so the cursor stays on its row across a swap rather than

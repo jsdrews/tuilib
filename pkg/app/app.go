@@ -11,6 +11,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/output"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -949,6 +951,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, nil
 
+	case source.QueryAnsweredMsg, source.QueryFailedMsg, source.QueryCancelledMsg, source.QueryRecoveredMsg:
+		m.logQuery(msg)
+		var cmd tea.Cmd
+		m.stack, cmd = m.stack.Update(msg)
+		m.apply()
+		return m, cmd
+
 	case runner.CaptureStarted:
 		// The badge counts this now rather than on completion: a five-minute
 		// build that signals nothing until it finishes turns "keep working
@@ -1132,6 +1141,62 @@ func (m *Model) logEntry(src, text, body string, lvl output.Level) {
 		}
 	}
 	m.outBuf.AppendAll(recs)
+}
+
+// logQuery records a remote query's outcome — the query history. Answers
+// and cancellations go to the console only: they are news worth reading
+// back, not worth interrupting for. A failure also paints the statusbar.
+func (m *Model) logQuery(msg tea.Msg) {
+	switch e := msg.(type) {
+	case source.QueryAnsweredMsg:
+		m.logEntry("", fmt.Sprintf("%s → answered in %s", queryLabel(e.Query), roundElapsed(e.Elapsed)), "", output.LevelInfo)
+	case source.QueryCancelledMsg:
+		m.logEntry("", fmt.Sprintf("%s → cancelled, superseded by %s", queryLabel(e.Query), queryLabel(e.By)), "", output.LevelInfo)
+	case source.QueryRecoveredMsg:
+		m.logEntry("", fmt.Sprintf("%s → polls recovered", queryLabel(e.Query)), "", output.LevelInfo)
+	case source.QueryFailedMsg:
+		what := queryLabel(e.Query)
+		if e.Window {
+			what = fmt.Sprintf("rows %d–%d of %s", e.Query.Offset+1, e.Query.Offset+e.Query.Limit, what)
+		}
+		text := fmt.Sprintf("%s failed after %s: %v", what, roundElapsed(e.Elapsed), e.Err)
+		var chain []string
+		for err := e.Err; err != nil; err = errors.Unwrap(err) {
+			chain = append(chain, err.Error())
+		}
+		body := ""
+		if len(chain) > 1 {
+			body = strings.Join(chain, "\n")
+		}
+		m.sb.SetError(text)
+		m.logEntry("", text, body, output.LevelError)
+	}
+}
+
+// queryLabel names a remote query the way the table's stale suffix does.
+func queryLabel(q source.Query) string {
+	var parts []string
+	if q.Raw != "" {
+		parts = append(parts, "filter "+q.Raw)
+	}
+	if q.Sort != "" {
+		dir := "▲"
+		if q.Desc {
+			dir = "▼"
+		}
+		parts = append(parts, "sort "+q.Sort+dir)
+	}
+	if len(parts) == 0 {
+		return "all"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func roundElapsed(d time.Duration) time.Duration {
+	if d < time.Second {
+		return d.Round(time.Millisecond)
+	}
+	return d.Round(100 * time.Millisecond)
 }
 
 // logResult records a suspended subprocess's exit status.

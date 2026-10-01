@@ -74,6 +74,14 @@ type Options struct {
 	// subtle background by default.
 	CurrentLineStyle lipgloss.Style
 
+	// LineNumbers draws a gutter numbering lines from the start of what is
+	// loaded. Marker lines (AppendMarker) are not numbered. Numbers shift
+	// when lines are trimmed or prepended: they locate a line on screen,
+	// not in the source.
+	LineNumbers bool
+	// GutterStyle draws the line-number gutter.
+	GutterStyle lipgloss.Style
+
 	// FilterMode controls the initial filter-only state. When true (and a
 	// query is active), only matching lines are shown. Toggle at runtime
 	// via "\" or SetFilterMode.
@@ -167,6 +175,11 @@ type Model struct {
 	maxLines int
 	follow   bool
 
+	// markers[i] is true for a line AppendMarker added; parallel to lines.
+	markers     []bool
+	lineNumbers bool
+	gutterStyle lipgloss.Style
+
 	body       pane.Pane
 	filter     filter.Model
 	searchable bool
@@ -221,6 +234,8 @@ func New(opts Options) Model {
 		matchIdx:         -1,
 		filterMode:       opts.FilterMode,
 		keys:             opts.Keys,
+		lineNumbers:      opts.LineNumbers,
+		gutterStyle:      opts.GutterStyle,
 	}
 
 	bodyH := opts.Height
@@ -320,6 +335,7 @@ func (m Model) View() string { return m.body.View() }
 // Append adds one line and, when following, scrolls to the new bottom.
 func (m *Model) Append(line string) {
 	m.lines = append(m.lines, line)
+	m.markers = append(m.markers, false)
 	m.trim()
 	m.recomputeMatches()
 	m.refresh()
@@ -335,6 +351,7 @@ func (m *Model) AppendLines(lines []string) {
 		return
 	}
 	m.lines = append(m.lines, lines...)
+	m.markers = append(m.markers, make([]bool, len(lines))...)
 	m.trim()
 	m.recomputeMatches()
 	m.refresh()
@@ -343,10 +360,76 @@ func (m *Model) AppendLines(lines []string) {
 	}
 }
 
+// Prepend adds lines above the oldest one held — the "load older" half of
+// a source that can only be read from its tail (see pkg/resume). The view
+// stays on what the user was reading: the scroll offset moves down by the
+// lines added above it, and the current match stays the same match.
+//
+// Past MaxLines the end furthest from the reader is dropped: the newest
+// lines while scrolled back, the prepended ones while following.
+func (m *Model) Prepend(lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	lines = append([]string(nil), lines...)
+	if m.maxLines >= 0 && len(lines)+len(m.lines) > m.maxLines {
+		over := len(lines) + len(m.lines) - m.maxLines
+		if m.follow {
+			lines = lines[min(over, len(lines)):]
+		} else {
+			m.lines = m.lines[:max(0, len(m.lines)-over)]
+			m.markers = m.markers[:len(m.lines)]
+		}
+	}
+	added := len(lines)
+	shown := added
+	if m.filterMode && m.query != "" {
+		shown = 0
+		for _, l := range lines {
+			if strings.Contains(strings.ToLower(l), m.query) {
+				shown++
+			}
+		}
+	}
+	offset := m.body.YOffset()
+	m.lines = append(lines, m.lines...)
+	m.markers = append(make([]bool, len(lines)), m.markers...)
+	cur := m.matchIdx
+	m.recomputeMatches()
+	if cur >= 0 {
+		for _, mp := range m.matches {
+			if mp.line >= added {
+				break
+			}
+			cur++
+		}
+		m.matchIdx = min(cur, len(m.matches)-1)
+	}
+	m.refresh()
+	if m.follow {
+		m.body.GotoBottom()
+	} else {
+		m.body.SetYOffset(offset + shown)
+	}
+}
+
+// AppendMarker adds a line the log itself did not write — "reconnected
+// after 42s", "container restarted" — drawn dimmed so it reads as an
+// annotation rather than output. It is an ordinary line otherwise: it
+// scrolls, counts against MaxLines, and can be searched.
+func (m *Model) AppendMarker(text string) {
+	m.Append(markerStyle.Render(text))
+	m.markers[len(m.markers)-1] = true
+	m.refresh()
+}
+
+var markerStyle = lipgloss.NewStyle().Faint(true)
+
 // Clear empties the buffer, drops any active query state, and re-engages
 // auto-follow.
 func (m *Model) Clear() {
 	m.lines = nil
+	m.markers = nil
 	m.matches = nil
 	m.matchIdx = -1
 	m.follow = true
@@ -588,6 +671,7 @@ func (m *Model) trim() {
 		return
 	}
 	m.lines = append([]string(nil), m.lines[len(m.lines)-m.maxLines:]...)
+	m.markers = append([]bool(nil), m.markers[len(m.markers)-m.maxLines:]...)
 }
 
 func (m *Model) applyQuery() {
@@ -685,8 +769,16 @@ func (m *Model) renderContent() string {
 	if len(m.lines) == 0 {
 		return ""
 	}
+	num := m.numberer()
 	if m.query == "" {
-		return strings.Join(m.lines, "\n")
+		var b strings.Builder
+		for i, line := range m.lines {
+			if i > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(num(i) + line)
+		}
+		return b.String()
 	}
 	byLine := make(map[int][]matchPos, len(m.matches))
 	for _, mp := range m.matches {
@@ -705,7 +797,7 @@ func (m *Model) renderContent() string {
 			if n > 0 {
 				b.WriteByte('\n')
 			}
-			b.WriteString(m.formatLine(m.lines[i], byLine[i], i == curLine))
+			b.WriteString(num(i) + m.formatLine(m.lines[i], byLine[i], i == curLine))
 		}
 		return b.String()
 	}
@@ -714,9 +806,34 @@ func (m *Model) renderContent() string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		b.WriteString(m.formatLine(line, byLine[i], i == curLine))
+		b.WriteString(num(i) + m.formatLine(line, byLine[i], i == curLine))
 	}
 	return b.String()
+}
+
+// numberer returns the gutter for line i: its number counted from the
+// start of the buffer, blank for markers — or nothing without LineNumbers.
+func (m *Model) numberer() func(int) string {
+	if !m.lineNumbers {
+		return func(int) string { return "" }
+	}
+	nums := make([]int, len(m.lines))
+	n := 0
+	for i := range m.lines {
+		if i < len(m.markers) && m.markers[i] {
+			continue
+		}
+		n++
+		nums[i] = n
+	}
+	width := len(fmt.Sprint(n))
+	return func(i int) string {
+		label := ""
+		if nums[i] > 0 {
+			label = fmt.Sprint(nums[i])
+		}
+		return m.gutterStyle.Render(fmt.Sprintf("%*s │ ", width, label))
+	}
 }
 
 func (m *Model) formatLine(line string, spans []matchPos, current bool) string {

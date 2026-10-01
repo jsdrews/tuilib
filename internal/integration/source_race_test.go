@@ -72,35 +72,39 @@ func (s *sourceScreen) Help() []key.Binding    { return s.tab.Help() }
 func (s *sourceScreen) SetTheme(t theme.Theme) {}
 
 type pageMsg struct {
-	page source.Page
-	rows []table.Row
+	query source.Query
+	page  source.Page
+	rows  []table.Row
 }
 
 func (s *sourceScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
+	var cmds []tea.Cmd
 	switch m := msg.(type) {
 	case table.ViewportChangedMsg:
-		return s, s.src.Viewport(m.FirstVisible, m.LastVisible)
+		cmds = append(cmds, s.src.Viewport(m.FirstVisible, m.LastVisible))
 
 	case table.QueryChangedMsg:
-		s.tab.SetCursor(0)
-		return s, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc)
+		cmds = append(cmds, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc))
 
 	case source.RequestMsg:
 		return s, s.fetch(m.Query)
 
 	case pageMsg:
-		if !s.src.Deliver(m.page) {
+		ok, cmd := s.src.Deliver(m.page)
+		if !ok {
 			s.dropped++
 			return s, nil
 		}
 		s.landed++
-		s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total)
-		return s, nil
+		q := m.query
+		s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total, table.Answer{Raw: q.Raw, Sort: q.Sort, Desc: q.Desc})
+		return s, cmd
 	}
 
+	cmds = append(cmds, s.src.Update(msg))
 	var cmd tea.Cmd
 	s.tab, cmd = s.tab.Update(msg)
-	return s, cmd
+	return s, tea.Batch(append(cmds, cmd)...)
 }
 
 func (s *sourceScreen) fetch(q source.Query) tea.Cmd {
@@ -115,11 +119,13 @@ func (s *sourceScreen) fetch(q source.Query) tea.Cmd {
 			u.Set(strings.ToLower(term.Title), term.Value)
 		}
 	}
+	// Deliberately not under q.Ctx: these tests need the abandoned reply to
+	// arrive, so that Deliver's refusal is what keeps it off screen.
 	client, gen := s.api, q.Gen
 	return func() tea.Msg {
 		resp, err := client.Get("http://demoapi/apps?" + u.Encode())
 		if err != nil {
-			return pageMsg{page: source.Page{Gen: gen}}
+			return pageMsg{query: q, page: source.Page{Gen: gen, Err: err}}
 		}
 		defer resp.Body.Close()
 		var body struct {
@@ -135,8 +141,9 @@ func (s *sourceScreen) fetch(q source.Query) tea.Cmd {
 			rows[i] = table.Row{a.Name, a.Region, a.Sync, a.Health}
 		}
 		return pageMsg{
-			page: source.Page{Gen: gen, Offset: body.Offset, Count: len(rows), Total: body.Total},
-			rows: rows,
+			query: q,
+			page:  source.Page{Gen: gen, Offset: body.Offset, Count: len(rows), Total: body.Total},
+			rows:  rows,
 		}
 	}
 }

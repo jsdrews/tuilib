@@ -35,10 +35,37 @@ example in `examples/`.
    deliberately overriding one. Don't set `Width`/`Height` on components
    you're going to hand to `layout.Sized` — the layout engine sizes them.
 
-4. **Rebuild themed components in `SetTheme(t)`, preserving state.** Use
-   accessors (`m.list.Cursor()`, `m.list.Value()`, …) and setters
-   (`m.list.SetCursor`, `m.list.SetValue`) to carry state across the
-   rebuild. The app shell calls `SetTheme` on the current screen during
+4. **Rebuild themed components in `SetTheme(t)`, carrying state with
+   `State` / `Restore`.** Every stateful component — `list`, `table`,
+   `tree`, `inspector`, `logview`, `textview`, `eventlog`, `filter`,
+   `input`, `toggle` — snapshots what the user and the data did to it,
+   and puts it back onto one built from new Options:
+
+   ```go
+   func (s *Screen) SetTheme(t theme.Theme) {
+       st := s.list.State()
+       opts := t.List()
+       opts.Title = "Cities"
+       s.list = list.New(opts)
+       s.list.Restore(st)
+   }
+   ```
+
+   `State` is opaque and covers everything the component holds that
+   Options doesn't set: items or rows, cursor and scroll, filter or
+   query, sort (a staged one too), marks, row activity, open branches,
+   follow, loading, and remote state (the answered query, a failure).
+   `Restore` replays it in the order that keeps each part valid — rows
+   before the filter over them, marks after the rows they mark, the
+   cursor last — which is the part hand-written restores got wrong.
+   Don't restore field by field with the individual setters: that list
+   grows every time a component gains state, and the examples had
+   cursors restored before sorts and filters, lost tree expansion, and a
+   log that dropped its lines on every swap. A State taken from a
+   component never built (the first `SetTheme`, before anything exists)
+   restores nothing, so the same two lines work from the constructor.
+   A view bound with `pkg/remote` is `Restyle(opts)`, which does this
+   inside. The app shell calls `SetTheme` on the current screen during
    theme swaps. Under the app shell you do *not* need a resize handler —
    layout takes care of it.
 
@@ -96,7 +123,7 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
-   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/eventlog`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
    bordered, titled render from `View()`. To put a label on a component,
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
@@ -691,42 +718,66 @@ example in `examples/`.
     the pointer.
 
 29. **Back a table with a remote source via `pkg/source`, and let
-    scrolling be the pagination.** When the rows live behind an API,
-    three pieces divide the work and none of them does the others' job:
+    scrolling be the pagination.** Start with `pkg/remote`: it binds a
+    `table` or `eventlog` to its source, so the screen writes only the
+    fetch — ordinary functions taking a context and a typed request
+    (`Window`, `Edge`, `Find`) — and forwards messages:
+
+    ```go
+    s.tab = remote.NewTable(opts, remote.Seekable[table.KeyedRow]{Page: s.page})
+    func (s *Screen) Init() tea.Cmd { return s.tab.Init() }
+    func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) { return s, s.tab.Update(msg) }
+    func (s *Screen) SetTheme(t theme.Theme) { s.tab.Restyle(opts) }
+    ```
+
+    Everything below is what the binding does for you, and the loop to
+    write by hand only when it doesn't fit. When the rows live behind an
+    API, three pieces divide the work and none of them does the others' job:
 
     - **`pkg/table`** reports and displays. `FilterMode: FilterRemote`
       and `SortMode: SortRemote` stop it answering the filter and sort
       itself; it emits `QueryChangedMsg` instead. `SetWindow(rows,
-      offset, total)` makes it sparse — it holds one window, draws
-      `Placeholder` elsewhere, and runs the cursor, scrollbar and
-      counters against `total`.
+      offset, total, answered)` makes it sparse — it holds one window,
+      draws `Placeholder` elsewhere, and runs the cursor, scrollbar and
+      counters against `total`. It also owns how a slow source *looks*
+      (below).
     - **`pkg/source`** decides *what to ask for*. It owns offset/limit
-      (or the cursor token), the held window, the logical total, and a
-      generation per request. It does no I/O, exactly as `pkg/poll`
-      touches no data.
+      (or the cursor token), the held window, the logical total, a
+      generation and a context per request, and the query history. It
+      does no I/O, exactly as `pkg/poll` touches no data.
     - **Your screen** does the fetch. That is the whole reason the
       coordinator is a separate package: every component here is
       synchronous, and a component owning a context, a retry policy and
       an in-flight request would drag all three into a value-receiver
       `Update`.
 
-    The loop is five lines of routing:
+    The loop is a few lines of routing:
 
     ```go
     func (s *Screen) Init() tea.Cmd { return s.src.Init() }
 
     case table.ViewportChangedMsg:
-        return s, s.src.Viewport(m.FirstVisible, m.LastVisible)
+        cmds = append(cmds, s.src.Viewport(m.FirstVisible, m.LastVisible))
     case table.QueryChangedMsg:
-        return s, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc)
+        cmds = append(cmds, s.src.SetQuery(m.Raw, m.Terms, m.Sort, m.Desc))
     case source.RequestMsg:
-        return s, s.fetch(m.Query)          // your HTTP call
-    case fetchedMsg:
-        if !s.src.Deliver(m.page) {
-            return s, nil                   // stale; drop the rows
+        return s, s.fetch(m.Query)          // your HTTP call, under m.Query.Ctx
+    case fetchedMsg:                        // carries the query, and page.Err on failure
+        ok, cmd := s.src.Deliver(m.page)
+        switch {
+        case !ok:                           // superseded; drop it
+        case m.page.Err != nil:
+            s.tab.SetFailed(answered(m.query))
+        default:
+            s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total, answered(m.query))
         }
-        s.tab.SetWindow(m.rows, m.page.Offset, m.page.Total)
+        return s, cmd
+    }
+    cmds = append(cmds, s.src.Update(msg)) // every message, like pkg/poll
     ```
+
+    where `answered(q)` is `table.Answer{Raw: q.Raw, Sort: q.Sort, Desc:
+    q.Desc}` — the query this page answers, in the table's terms.
 
     `SetWindow` makes the table emit a fresh `ViewportChangedMsg`, which
     is what closes the loop — a short page that still doesn't cover the
@@ -734,11 +785,54 @@ example in `examples/`.
     nothing. `Init` exists because an empty component reports no
     viewport, so nothing else would ever request the first page.
 
-    **Check what `Deliver` returns.** Every request carries its own
-    generation and only the newest is accepted, which is what stops a
-    slow reply to the previous filter painting itself under the current
-    one, and stops out-of-order window replies fighting. A screen that
-    ignores the bool re-introduces both races.
+    **Check what `Deliver` returns, and return its command.** Every
+    request carries its own generation and only the newest is accepted,
+    which is what stops a slow reply to the previous filter painting
+    itself under the current one, and stops out-of-order window replies
+    fighting. A screen that ignores the bool re-introduces both races.
+    The command carries the query history (below) and, after a query's
+    first answer, the request for whatever of the screen it left
+    uncovered. Failures go through `Deliver` too, as `Page.Err`: it
+    decides whether anyone is still waiting for them.
+
+    **A slow source is the library's problem, not the screen's.** With
+    replies taking seconds:
+
+    - A committed query leaves the rows on screen, **stale**: dimmed,
+      with the border naming the query they answer and the one loading.
+      The body spinner (Loading) shows only before the first answer ever.
+      The table does this by comparing its committed query with the
+      `answered` each window brings, so the screen never calls
+      `SetLoading` and never moves the cursor. The cursor stays on the
+      stale rows, which can be read and scrolled, and goes to the top when
+      the committed query's answer lands. `Stale()` lets a verb check.
+    - A remote sort is **staged** until sort input has been quiet for
+      `Options.SortDebounce` (400ms), so `]` `]` `s` is one request. A
+      filter commit carries a staged sort with it.
+    - Scrolling asks only once the viewport has been still for
+      `source.Options.ViewportDelay` (150ms), and not at all while the
+      committed query is unanswered — the stale rows' positions mean
+      nothing in the next query. While rows on screen are `·`
+      placeholders the border reads `⠙ loading rows 201–300`; a page that
+      failed reads `✗ failed loading rows …` until it is scrolled away
+      from or refetched. The border is where every "waiting on the
+      server" signal lives.
+    - Every request carries `Query.Ctx`, cancelled when a newer request
+      supersedes it. Pass it to your HTTP call. `Options.Context` is the
+      parent; `Model.Cancel()` stops everything.
+    - A failed query stays stale, with `✗ failed` on the border and the
+      user's filter and sort kept; committing it again, or `Refresh`,
+      retries. Nothing retries automatically.
+    - The **query history** — each committed query answered (with how
+      long it took), failed or cancelled — leaves `pkg/source` as neutral
+      messages that the app shell writes to the output console (rule 14),
+      failures on the statusbar too. The screen writes none of it.
+
+    Both durations follow `logview.MaxLines`: zero means the default,
+    negative means immediate. Across `SetTheme` (rule 4), `State()` /
+    `Restore` carry all of it — the window and the query it answers, a
+    failure, a staged sort — and a `pkg/remote` view does it in
+    `Restyle`.
 
     Pagination is a wire protocol, not a UI. The user scrolls; windows
     arrive under them. Don't add `n`/`p` page keys — they collide with
@@ -801,8 +895,8 @@ example in `examples/`.
     is on screen. So a user can mark a row, filter it away, and still act
     on it — correct, and a genuine surprise, which is why `action.Set`
     puts `Target` on the menu's own border rather than trusting the user
-    to remember. Carry them across a `SetTheme` rebuild with `SetMarks`
-    the same way you carry the cursor (rule 4).
+    to remember. They come back across a `SetTheme` rebuild with
+    everything else in `State()` / `Restore` (rule 4).
 
     A windowed table (`SetWindow`) cannot be marked: it carries rows
     without keys, so a mark there could only be held by index into a
@@ -971,13 +1065,11 @@ example in `examples/`.
     `Action.Receipt` applies only to `Run` verbs, whose return the shell
     reports.
 
-    **Across `SetTheme` (rule 4)**, carry the rows and the activity state:
-    `rows := s.table.KeyedRows()` (list: `KeyedItems()`, tree: `Root()`) and
-    `act := s.table.ActivityState()` before the rebuild, then `SetKeyedRows(rows)`
-    followed by `SetActivityState(act)` after it — rows first, so the adopted
-    claims land on rows that exist. `SetActivityState` returns the spinner's
-    first tick; `SetTheme` has nowhere to return it, and dropping it is safe:
-    the component re-arms a stalled spinner on the next message it receives.
+    **Across `SetTheme` (rule 4)**, `State()` / `Restore` carry the rows and
+    the activity state together, rows first so the adopted claims land on
+    rows that exist. The spinner's first tick has nowhere to go from
+    `SetTheme`, and needn't: the component re-arms a stalled spinner on the
+    next message it receives.
 
     **`UnobservedMsg` and every other activity message arrive through the
     component's `Update`**, on the turn after the read that ended the claim —
@@ -1002,6 +1094,54 @@ example in `examples/`.
     See `examples/patterns/activityrecipes` (one shape per tab, each small
     enough to copy), `examples/patterns/activity` (all of it on one screen), and
     `docs/activity-v2.md`.
+
+
+34. **Choose the component by the data's shape.** When remote data may
+    be too large for one request, classify it before writing a screen:
+    what an item is — a **Record** (fields compared across items), an
+    **Event** (fields in a timeline read in order), or a **Line** (raw
+    text read in order) — and how an item is reached — **Seekable**
+    (item N fetchable directly, with a total), **Anchored** (walked
+    forwards or backwards from an anchor, no reliable total), or
+    **Streamed** (only the tail, then what arrives). **Growing** data
+    gains items while the user watches. The terms are in `CONTEXT.md`.
+
+    | | Seekable | Anchored | Streamed |
+    |---|---|---|---|
+    | **Record** | `table` + `SetWindow` + `source.Model` | `table` (`Anchored`) + `source.Anchored` | `table` + `SetKeyedRows` from a watch |
+    | **Event** | `eventlog` + `source.Model` (`MaxHeld`) + `inspector` on enter | `eventlog` (`Anchored`) + `source.Anchored` + `inspector` | `logview` + `inspector` |
+    | **Line** | `eventlog` + `source.Model` (`MaxHeld`) | `eventlog` (`Anchored`) + `source.Anchored` | `logview` + `pkg/resume` |
+
+    Bind them with `pkg/remote` (`NewEventlog` / `NewTable` over a
+    `Seekable` or `Anchored` shape): the screen supplies the fetch
+    functions and forwards `Update`, and the binding owns the routing —
+    paging, mirroring what is held, landing search hits, re-anchoring,
+    and keeping state across `Restyle`. **Growing** data is one call,
+    `SetGrowing(true)`: the source polls every `Follow`, and the view
+    pins the newest item and counts what arrives once the user scrolls
+    away.
+    `examples/patterns/eventlog` is the whole Seekable loop,
+    `examples/patterns/anchored` the Anchored one (`Query.FromAnchor`
+    starts a view; every other request extends an edge, and a search hit
+    re-anchors with `log.Reanchor()` + `src.SetAnchor(source.At(hit))`),
+    and `examples/patterns/podlogs` the Streamed one.
+
+    - **If it fits in one request, don't page it**: a `textview`, or
+      `SetRows`. Paging machinery is for data that doesn't fit.
+    - **Events never go in a table.** A timeline has one order; a
+      table's reasons to exist are sorting and comparing across rows.
+      Put the fields one enter away, in an `inspector` (rule 16).
+    - **Search jumps, filter narrows.** A filter is part of the query
+      and returns fewer items; search moves the view to the next match
+      and keeps its context. They are separate controls — a filtered
+      result loses exactly the surrounding lines a reader needed.
+    - **Push channels are hints.** AWX's and Prefect's websockets drop
+      messages under load and can't resume; poll for the data and let a
+      push only make the next poll sooner.
+
+    Per-source classification (Prefect runs and logs, AWX job events,
+    Elasticsearch, pod logs, generic REST), and the API facts behind
+    each, are in `docs/remote-data.md`.
 
 ## Anti-patterns
 
@@ -1125,6 +1265,19 @@ example in `examples/`.
   to `eu` can land after the reply to `euro`. `pkg/table` reports on
   commit, and a screen driving its own filter should debounce or wait
   for enter rather than reacting to every `Value()` change.
+- **Don't call `SetLoading` or `SetCursor(0)` in a remote loop.** The
+  table decides both from the committed and answered queries: Loading
+  only before the first answer, stale rows after that, and the cursor to
+  the top when the new answer lands. A screen that blanks the body on
+  every commit brings back exactly the wait-in-front-of-a-spinner it
+  exists to remove, and resetting the cursor at commit throws the user
+  off the stale rows they were reading.
+- **Don't drop `Deliver`'s command, or fetch outside `Query.Ctx`.** The
+  command is the query history and the follow-up request after a first
+  answer; the context is what cancels a superseded request on the wire.
+  Without either the screen still works, which is why it is easy to miss:
+  the console stays silent and the server keeps answering requests nobody
+  is waiting for.
 - **Don't let a state-restoration setter look like a user action.**
   `SetSort` / `SetValue` exist so a `SetTheme` rebuild can replay state
   onto a fresh model (rule 4); if they emitted `QueryChangedMsg` every
@@ -1152,9 +1305,9 @@ example in `examples/`.
   manual `\n` insertion just makes content harder to read at narrow
   widths. Pre-wrap only when the content is genuinely paragraph prose.
 - **Don't set colors in `Options` literals.** Start from the theme builder.
-- **Don't skip state preservation in `SetTheme`.** If you forget to carry
-  cursor/value across rebuilds, theme-swap will silently reset the user's
-  state.
+- **Don't skip state preservation in `SetTheme`.** Take `State()` before
+  the rebuild and `Restore` it after (rule 4); forgetting it resets the
+  user's cursor, filter, marks and loaded data on every theme swap.
 - **Don't write per-component reset codes.** If bar colors drift between
   embedded segments, the fix is usually "make sure every embedded style
   sets the same `Background()`," not a manual `\x1b[0m`.
@@ -1227,6 +1380,15 @@ example in `examples/`.
   the other five by a script that omitted it, and covered by a test that
   lived in `pkg/list` — so five components shipped broken and the suite
   stayed green.
+- **Don't schedule a library timer with `tea.Tick`.** It starts its timer
+  when the command is *created*, so running the same command twice blocks
+  forever — which is exactly what a test helper that re-runs a batch does.
+  Library code schedules through `internal/tick.After`, which starts the
+  wait when the command runs. Tests call `tick.Instant(t)` so debounces,
+  settles, polls and spinner frames cost nothing, and run commands with
+  `internal/cmdtest.Run`, which drops timers from other libraries (bubbles'
+  cursor blink) instead of waiting them out. The eventlog suite went from
+  21s to 1s on exactly this.
 - **Force a colour profile in any test that asserts on styling.**
   Without a TTY lipgloss falls back to the Ascii profile and strips every
   style, so a render comparison silently passes no matter what the code
@@ -1402,6 +1564,51 @@ path.
   page of a paged source produces completions that are *wrong* rather
   than merely incomplete; a remote caller should pass facet values
   instead.
+- **Eventlog component:** `pkg/eventlog` shows Events and Lines from a
+  paged source (rule 34). Items (`Key`, `Lines`, `Data`, `Hole`) are the
+  unit: a multi-line event is a block, one with no output draws a dim
+  `· no output` line (so the gutter never skips a number), the
+  cursor moves by item. Seekable data arrives through `SetPage` and
+  merges into one range; `Options.Anchored` makes it a span grown with
+  `Append` / `Prepend` (keys are cursors; `Edges()` gives them back). It
+  shares `internal/remoteview` with `pkg/table` — stale dimming, the
+  border suffix, Loading before the first answer, `✗ failed` — and adds
+  follow (`SetGrowing`, `↓ N new`), a brief highlight on the line
+  numbers of items that just loaded beside ones already on screen — a
+  page reached by scrolling or a search, new items while following, or
+  what arrived while you were away when `G` brings you back; a load that
+  replaces everything marks nothing (`NewFor`, default 2s) — search that jumps (`/`, `n`/`N` locally, then `FindMsg`; a
+  remote hit lands only once its line is loaded, and presses while it is
+  on the way are answered by that landing, not queued past it), a filter
+  that narrows (`f`, `QueryChangedMsg`), and `ActivatedMsg` for an
+  inspector. A gutter
+  down the left gives the reader something fixed to measure the cursor
+  against: `Item.Mark` when set (a counter, a timestamp — what you'd
+  quote), else the position for Seekable data, else nothing, since
+  Anchored data has no positions (`NoGutter` hides it). A timestamp mark
+  is always the source's own (`@timestamp`, the kubelet's line time),
+  never the client's fetch time; when the line text already carries the
+  application's timestamp, leave `Mark` empty rather than show two. `logview` has
+  the opt-in counterpart, `Options.LineNumbers`, which skips marker
+  lines. See `examples/patterns/eventlog` and `theme.Eventlog()`.
+- **Resuming a coarse-timestamp stream:** `pkg/resume` is stern's
+  algorithm for pod logs with no I/O — `Observe`, `Resume` → `(since,
+  skip)`, `Drop`, `Reconnected`, and `OlderCut` / `ObserveOlder` for
+  "load older" merged with `logview.Prepend`. Mark reconnects and
+  restarts with `logview.AppendMarker`.
+- **Binding a view to a remote source:** `pkg/remote` is where to start.
+  `NewEventlog(opts, shape)` and `NewTable(opts, shape)` embed their
+  component (its whole surface is promoted) and own a source; `shape` is
+  `Seekable[T]{Page, Find}` or `Anchored[T]{Edge, Find}` — synchronous
+  functions over typed requests (`Window`, `Edge`, `Find`, each carrying
+  the committed `Filter`), run off the UI goroutine under a context the
+  binding cancels when superseded. The screen calls `Init`, forwards
+  `Update`, and swaps themes with `Restyle`; `SetGrowing` and `Refresh`
+  are the only other verbs. `pkg/source`, `pkg/table` and `pkg/eventlog`
+  stay public for anything it doesn't cover.
+- **Large remote data in general:** `docs/remote-data.md` classifies each
+  source we build TUIs for (Prefect, AWX, Elasticsearch, pod logs, generic
+  REST) and names the component and paging mode for it. See rule 34.
 - **Remote paging:** `pkg/source` is the coordinator between "the user
   scrolled here" and "ask the server for that range" — `Query`,
   `RequestMsg`, `Page`, and a `Model` that owns the held window, the
@@ -1411,7 +1618,14 @@ path.
   window at offset 0. `Options.PageSize` sets the window size requests
   align to (so scrolling within a page asks for nothing); `Prefetch`
   pulls extra pages ahead of the screen to hide the placeholder flash at
-  boundaries. It imports `pkg/query` and nothing else from tuilib —
+  boundaries; `ViewportDelay` makes scrolling ask once it settles.
+  Each request carries a `Ctx` cancelled when it is superseded
+  (`Options.Context` is the parent, `Cancel()` stops everything), and
+  `Page.Err` reports a failed fetch through the same `Deliver`. The query
+  history leaves as `QueryAnsweredMsg` / `QueryFailedMsg` /
+  `QueryCancelledMsg`, which `pkg/app` writes to the output console. It
+  imports `pkg/query` (and `internal/tick` for its timers) and nothing
+  else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the
   screen does the translating. See rule 29 and `examples/patterns/remote`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
@@ -1549,8 +1763,8 @@ path.
   Default comparator is case-insensitive on the ANSI-stripped text;
   override with `Column.Less func(a, b string) bool` for numeric, date,
   or unit-aware columns ("8.3M") — see the table example's `popLess`.
-  Carry `SortColumn()`/`SortDescending()` across `SetTheme` rebuilds via
-  `SetSort(col, desc)` the same way you carry `Cursor()`/`Value()`. For
+  The sort comes back with everything else in `State()`/`Restore` across
+  a `SetTheme` rebuild (rule 4). For
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
   `lipgloss.Render` so the selected-row background passes through
   unbroken (rule 19). Internal separators are configurable via
@@ -1575,8 +1789,8 @@ path.
   tab completion is silent because it edits a term rather than
   submitting one. `SetDistinct(col, values)` feeds completion candidates
   from a facet endpoint, since remote mode deliberately stops scraping
-  them from resident rows. `SetWindow(rows, offset, total)` makes the
-  table sparse: it holds the logical indices `[offset, offset+len(rows))`
+  them from resident rows. `SetWindow(rows, offset, total, answered)`
+  makes the table sparse: it holds the logical indices `[offset, offset+len(rows))`
   of a set `total` rows long, while the cursor, the scrollbar and the
   counters all work against `total`. Pass `total < 0` when the source
   can't say (cursor-paginated APIs) — the counter then reads `20+` and
@@ -1584,11 +1798,16 @@ path.
   `Options.Placeholder` (default `·`) and report `ok=false` from
   `Selected`, so scrolling ahead of the data shows filler instead of
   wrong rows and a screen cannot act on one it never received. The cursor
-  is a logical index and does not move when a window arrives, so
-  scrolling to row 800 and waiting leaves you on row 800.
+  is a logical index and does not move when a window of the same query
+  arrives, so scrolling to row 800 and waiting leaves you on row 800.
+  `answered` names the query the window answers; while it differs from
+  the committed one the rows are stale (dimmed, with a border suffix),
+  and `SetFailed` marks the committed query failed — see rule 29.
+  `SortDebounce` stages remote sorts until input goes quiet.
   `Window()` reports `(offset, count, total)`; `ViewportChangedMsg`
   reports the logical range on screen, which is the signal to fetch.
-  `SetRows` / `SetKeyedRows` leave windowed mode. See
+  `SetRows` / `SetKeyedRows` leave windowed mode, and under a remote mode
+  count as the answer to the committed query. See
   `examples/components/table` and `theme.Table()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`
@@ -1602,9 +1821,8 @@ path.
   No follow, no filter mode, no `MaxLines` — for the streaming case
   reach for `pkg/logview`. Same nav vocabulary as list/table/logview
   (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
-  rule 25). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
-  rebuilds via `SetContent`/`SetQuery`/`SetWrap` — the theme swap
-  pattern from rule 4. See `examples/components/textview` and `theme.TextView()`.
+  rule 25). Content, wrap, search and scroll come back across a
+  `SetTheme` rebuild with `State()`/`Restore` (rule 4). See `examples/components/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by
@@ -1622,9 +1840,8 @@ path.
   keeping ancestors visible; `n`/`N` step matches). `SetFields` swaps
   the record while preserving expansion state by row path and pinning
   the cursor to its previous path when it survives the swap — the
-  primitive that auto-refresh will lean on. Carry
-  `Cursor()`/`Query()` across `SetTheme` rebuilds via
-  `SetCursor`/`SetQuery`. See `examples/components/inspector` and
+  primitive that auto-refresh will lean on. Carry it across a `SetTheme`
+  rebuild with `State()`/`Restore` (rule 4). See `examples/components/inspector` and
   `theme.Inspector()`.
 - **Inline metrics:** `pkg/metrics` is a small set of cell-fitting renderers
   for the monitoring shape — `Badge(ok, warn, down)` for status-count

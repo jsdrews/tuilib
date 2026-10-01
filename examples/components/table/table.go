@@ -118,8 +118,7 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.tab.Cursor(), s.tab.Value()
-	sortCol, sortDesc := s.tab.SortColumn(), s.tab.SortDescending()
+	st := s.tab.State()
 	opts := t.Table()
 	opts.Title = "Cities"
 	opts.Filterable = true
@@ -155,11 +154,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 		opts.Rows[i] = append(opts.Rows[i], wikiCell(r[0]))
 	}
 	s.tab = table.New(opts)
-	if value != "" {
-		s.tab.SetValue(value)
-	}
-	s.tab.SetCursor(cursor)
-	s.tab.SetSort(sortCol, sortDesc)
+	s.tab.Restore(st)
 }
 
 // wikiCell builds an OSC 8 hyperlinked cell pointing at the city's

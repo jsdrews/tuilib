@@ -141,9 +141,7 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.tab.Cursor(), s.tab.Value()
-	sortCol, sortDesc := s.tab.SortColumn(), s.tab.SortDescending()
-	marks := s.tab.Marks()
+	st := s.tab.State()
 
 	opts := t.Table()
 	opts.Title = "deployments"
@@ -159,13 +157,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	}
 	s.tab = table.New(opts)
 	s.applyRows()
-
-	if value != "" {
-		s.tab.SetValue(value)
-	}
-	s.tab.SetCursor(cursor)
-	s.tab.SetSort(sortCol, sortDesc)
-	s.tab.SetMarks(marks)
+	s.tab.Restore(st)
 	s.refreshTitle()
 }
 

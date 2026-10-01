@@ -29,6 +29,7 @@ go.work.sum
 
 # Task's cache, and the background demo API's pid/log/binary
 .task/
+usability/
 
 # Editor/IDE
 # .idea/

@@ -67,16 +67,14 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	q := s.log.Query()
+	st := s.log.State()
 	opts := t.Logview()
 	opts.Title = "tail -f /var/log/synthetic"
 	opts.Searchable = true
 	opts.MaxLines = 5000
 	opts.Filter.Placeholder = "search…"
 	s.log = lv.New(opts)
-	if q != "" {
-		s.log.SetQuery(q)
-	}
+	s.log.Restore(st)
 }
 
 var (
