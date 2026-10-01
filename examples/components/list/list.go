@@ -105,15 +105,12 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	cursor, value := s.list.Cursor(), s.list.Value()
+	st := s.list.State()
 	opts := t.List()
 	opts.Title = "Cities"
 	opts.Filterable = true
 	opts.Filter.Placeholder = "filter cities…"
 	opts.Items = items()
 	s.list = list.New(opts)
-	if value != "" {
-		s.list.SetValue(value)
-	}
-	s.list.SetCursor(cursor)
+	s.list.Restore(st)
 }

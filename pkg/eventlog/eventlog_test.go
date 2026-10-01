@@ -8,6 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/internal/cmdtest"
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
@@ -22,27 +24,15 @@ func items(from, to int) []Item {
 
 func newLog(t *testing.T, opts Options) Model {
 	t.Helper()
+	tick.Instant(t) // debounces, spinners and fades cost nothing here
 	opts.Title = "Events"
 	m := New(opts)
 	m.SetRect(geom.New(0, 0, 60, 14))
 	return m
 }
 
-// run executes cmd once (a Tick runs once only), flattening batches.
-func run(cmd tea.Cmd) []tea.Msg {
-	if cmd == nil {
-		return nil
-	}
-	msg := cmd()
-	if b, ok := msg.(tea.BatchMsg); ok {
-		var out []tea.Msg
-		for _, c := range b {
-			out = append(out, run(c)...)
-		}
-		return out
-	}
-	return []tea.Msg{msg}
-}
+// run executes cmd once, flattening batches, without waiting on timers.
+func run(cmd tea.Cmd) []tea.Msg { return cmdtest.Run(cmd) }
 
 func find[T any](ms []tea.Msg) (T, bool) {
 	for _, m := range ms {

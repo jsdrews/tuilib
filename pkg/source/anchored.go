@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/query"
 )
 
@@ -188,7 +189,7 @@ func (m *Anchored) Viewport(toOlder, toNewer int) tea.Cmd {
 	}
 	m.vpSeq++
 	msg := settleMsg{id: m.id, seq: m.vpSeq}
-	return tea.Tick(m.delay, func(time.Time) tea.Msg { return msg })
+	return tick.After(m.delay, func(time.Time) tea.Msg { return msg })
 }
 
 // wanted reports which edge to extend: the nearer of those with more
@@ -294,7 +295,7 @@ func (m *Anchored) armPoll() tea.Cmd {
 	}
 	m.pollArmed = true
 	msg := pollMsg{id: m.id, seq: m.pollSeq}
-	return tea.Tick(m.follow, func(time.Time) tea.Msg { return msg })
+	return tick.After(m.follow, func(time.Time) tea.Msg { return msg })
 }
 
 func (m *Anchored) poll() tea.Cmd {

@@ -55,14 +55,13 @@ func (s *cities) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 
 func (s *cities) SetTheme(t theme.Theme) {
     s.t = t
-    cursor, value := s.list.Cursor(), s.list.Value()
+    st := s.list.State() // cursor, filter, items… everything the user did
     opts := t.List()
     opts.Title = "Cities"
     opts.Items = []string{"London", "Tokyo", "Madrid", "Lima"}
     opts.Filterable = true
     s.list = list.New(opts)
-    if value != "" { s.list.SetValue(value) }
-    s.list.SetCursor(cursor)
+    s.list.Restore(st)
 }
 
 func main() {
@@ -98,6 +97,7 @@ handles its own state in `Update`.
 | `pkg/toggle` | Yes/no selector in a pane — left/right/space/y/n |
 | `pkg/confirm` | Modal yes/no dialog with title + message + confirm/cancel buttons; resolves via `ConfirmedMsg` / `CancelledMsg` so parent screens stay bubbletea-idiomatic. Designed for `layout.ZStack(base, layout.Center(w, h, ...))` |
 | `pkg/alert` | Modal acknowledgement dialog with title + message + single OK button; resolves via `DismissedMsg`. Use for "stop and acknowledge" feedback (errors, blocking notices); for passive feedback prefer the lighter `app.Info` / `app.Error` statusbar messages. Override `ActiveColor` with `theme.ErrorBG` for an error-tinted look |
+| `pkg/remote` | Binds a `table` or `eventlog` to a remote source so a screen writes only the fetch: `NewEventlog` / `NewTable` over `Seekable{Page, Find}` or `Anchored{Edge, Find}` — plain functions over typed requests — then `Init`, `Update`, `Restyle`. Paging, following, search landing and theme swaps are the binding's |
 | `pkg/eventlog` | Events and lines from a paged remote source: items (key, lines, data) with a cursor per item, a merged range (Seekable) or a span grown at either edge (Anchored), follow with a new-items count, search that jumps past what is loaded, a filter that narrows the query, and the table's stale/loading/failed border signals. See CLAUDE.md rule 34 |
 | `pkg/resume` | Exact resume for a stream whose "since" is coarser than its lines (pod logs): tracks the last second and the lines seen in it, and where a longer tail's older lines stop |
 | `pkg/logview` | Streaming text viewer with `/`-search, n/N jump, g/G top/bottom, filter mode, current-line highlight, and a default `MaxLines` safety cap |
@@ -388,9 +388,9 @@ section.
 | Drilldown | Master-detail with async fetches at every level. Enter on either pane "opens the focused selection": left-enter loads the detail (reqID-tagged so stale results drop) and shifts focus right, right-enter pushes a child screen |
 | Poll | `pkg/poll` drives a 2s tick that mutates a synthetic job list; `SetKeyedItems` keeps the cursor on the same job ID across every refresh even as statuses flip and the list reorders. `p` pauses, `r` refreshes now, `+`/`-` adjust cadence |
 | Remote | The whole windowed-source loop: `pkg/source` coordinating a table in `FilterRemote`/`SortRemote` over a simulated 5,000-row API that answers one 100-row page at a time, with latency `L` cycles from 250ms to 8s. Scroll faster than it answers and you see the `·` placeholders; the cursor stays put and data arrives under it. Commit a filter or sort and the rows stay on screen, dimmed, with the border naming the query they answer and the one loading; `[`/`]`/`s` wait for a quiet moment before asking, superseded requests are cancelled, and every query's outcome lands in the output console |
-| Eventlog | `pkg/eventlog` over a fake AWX-shaped job that keeps emitting events: multi-line and empty events, follow with a new-events count, `f` to filter on the server, `/` + `n`/`N` to jump to matches beyond what is loaded, enter to open an event in an inspector, `L` to cycle latency |
-| Eventlog (finished job) | The same over a job that has already finished — the troubleshooting case: opens at the first event, nothing polls, and `/` + `n`/`N` find matches across all 8,000 events, asking the job for the next one past what is loaded |
-| Anchored | `pkg/eventlog` over a fake Elasticsearch-shaped index paged with search_after: a span that grows at whichever edge you scroll toward and is trimmed at the far end, follow at the newest, and a search hit past the span that re-anchors around it |
+| Eventlog | `pkg/eventlog` bound with `pkg/remote` to demoapi's AWX-shaped job-events endpoints over HTTP — a running job: counter ranges, holes from late-saved events that fill in, follow with a new-events count, `f` to filter on the server (`failed`, `host:web-1`), `/` + `n`/`N` to find past what is loaded, enter to open an event, `L` to cycle latency |
+| Eventlog (finished job) | The same over a finished AWX job of 8,000 events — the troubleshooting case: opens at the first event, nothing polls, and `/` + `n`/`N` find matches across the whole job, asking AWX for the next one past what is loaded |
+| Anchored | `pkg/eventlog` bound with `pkg/remote` to demoapi's Elasticsearch-shaped `_search` over HTTP — `search_after` with the `_shard_doc` tiebreaker, a span grown at whichever edge you scroll toward, a tail that rewinds to catch late-ingested documents, and a search hit past the span that re-anchors around it |
 | Pod logs | A fake pod log in `pkg/logview` with `pkg/resume`: exact reconnects at one-second resolution, marked reconnects and restarts, `O` to load older lines from a longer tail, `P` for the previous run |
 | Actions | The verb menu. `a` or right-click opens `action.Menu`, sized to its widest row and anchored where you asked. Single-target on purpose. Start a Restart and reopen the menu to see the `Exclusive` gate; Delete confirms first |
 | Multi-select | `table.Model` with `Options.Markable` + `pkg/action`: `x` marks, `X` (or shift+click) extends a range in either direction, `A` marks everything the filter shows, `D` drops. Marks are held by Key, so they survive filtering and a theme swap. The menu is titled with what it will act on ("3 items"), and the action that did not declare `Multi` dims itself with a reason |

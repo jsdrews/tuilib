@@ -18,6 +18,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/focus"
 )
 
@@ -193,8 +194,13 @@ func (s *Status) Arm(token focus.Token, waiting bool) tea.Cmd {
 	s.tickArmd = true
 	s.tickSeq++
 	msg := TickMsg{Token: token, Seq: s.tickSeq}
-	return tea.Tick(FrameEvery, func(time.Time) tea.Msg { return msg })
+	return tick.After(FrameEvery, func(time.Time) tea.Msg { return msg })
 }
+
+// Rearm forgets any spinner tick in flight, so the next Arm schedules a
+// fresh one — for a Status carried onto a rebuilt host, whose ticks the
+// old host's pending one will not match.
+func (s *Status) Rearm() { s.tickArmd = false }
 
 // Handle consumes the host's spinner tick. handled is true for any
 // TickMsg; advanced is true when it was this host's current tick and the

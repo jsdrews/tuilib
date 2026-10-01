@@ -1,304 +1,371 @@
-// Package eventlog demonstrates pkg/eventlog over Seekable, Growing data:
-// a fake job shaped like an AWX job's events. Each event has a counter, 0
-// to n lines of output and some fields; the job keeps emitting while it
-// runs, answers one page at a time with latency (L cycles it), and can
-// search its own output.
+// Package eventlog demonstrates pkg/eventlog over Seekable, Growing data: an
+// AWX job's events, read over HTTP from demoapi's AWX-shaped endpoints
+// (/api/v2/jobs/{id}/job_events/). Events are numbered by counter, carry
+// 0 to n lines of stdout, and — while the job runs — keep arriving, some
+// of them saved late. L cycles the server's latency.
 //
-// The loop, in this file:
+// The screen is bound with pkg/remote, so all it writes is the AWX client:
+// page and find, two ordinary functions taking a context and a typed
+// request. They are written the way a client of the real AWX would be:
 //
-//	ViewportChangedMsg → src.SetHeld + src.Viewport  (pages, after a settle)
-//	QueryChangedMsg    → src.SetQuery                (the filter narrows)
-//	FindMsg            → src.Find                    (n/N past what is held)
-//	RequestMsg         → fetch                       (the one place I/O happens)
-//	fetchedMsg         → src.Deliver, then Found / SetFailed / SetPage
+//   - Unfiltered, a page is a counter range (counter__gt / counter__lte),
+//     and the total is the highest counter, not count — counters missing
+//     from the range are events not saved yet, shown as holes.
+//   - Filtered, counters no longer line up with positions, so a page is
+//     AWX's page mode, and a search hit is turned into a position with one
+//     more request for count.
+//   - A search asks for "the first match past this counter"
+//     (stdout__icontains, counter__gt, page_size=1).
+//   - A running job is done when event_processing_finished says so, not
+//     when status does: the last events are saved after the job ends.
 //
-// Following is on while the view is on the newest event: new events arrive
-// under it. Scroll up and it stops; the border counts what arrived since,
-// and G returns. Enter opens the event's fields in an inspector.
+// The routing between the view and its source — paging as you scroll,
+// following, landing search hits, dropping replies nobody waits for — is
+// the binding's.
 //
-// NewFinished is the same screen over a job that has already ended — the
-// troubleshooting case. Nothing grows, nothing polls, and it opens at the
-// first event: search (/, then n/N) walks the loaded events and, past
-// them, asks the job for the next match, which is how you find the one
-// failure in 8,000 events without paging through them.
+// New is a running job: following is on while the view is on the newest
+// event; scroll up and it stops, the border counts what arrived since, and
+// G returns. NewFinished is a job that has already ended — the
+// troubleshooting case — opened at its first event: search (/, then n/N)
+// walks the loaded events and, past them, asks AWX for the next match.
+// Enter opens an event's fields in an inspector.
 package eventlog
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/demoapi"
 	"github.com/jsdrews/tuilib/pkg/app"
 	elog "github.com/jsdrews/tuilib/pkg/eventlog"
 	"github.com/jsdrews/tuilib/pkg/help"
 	insp "github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/remote"
 	"github.com/jsdrews/tuilib/pkg/screen"
-	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
 const (
 	pageSize = 100
-	// The job emits this many events a second until it reaches jobLength.
-	rate      = 8
-	jobLength = 3000
-	// A finished job is larger: there is no waiting for it to fill up.
-	finishedLength = 8000
+	// awxPage is AWX's largest page.
+	awxPage = 200
+	// The fixture's jobs: one running, one long finished.
+	liveJob     = 4242
+	finishedJob = 4187
 )
 
 var latencies = []time.Duration{300 * time.Millisecond, 2 * time.Second, 4 * time.Second}
 
 // New returns the demo over a job that is still running.
-func New(t theme.Theme) screen.Screen { return newScreen(t, true) }
+func New(t theme.Theme) screen.Screen { return newScreen(t, liveJob) }
 
 // NewFinished returns the demo over a job that has already finished.
-func NewFinished(t theme.Theme) screen.Screen { return newScreen(t, false) }
+func NewFinished(t theme.Theme) screen.Screen { return newScreen(t, finishedJob) }
 
-func newScreen(t theme.Theme, live bool) screen.Screen {
-	s := &Screen{
-		live:    live,
-		done:    !live,
-		started: time.Now(),
-		src: source.New(source.Options{
-			PageSize: pageSize,
-			MaxHeld:  elog.DefaultMaxItems,
-			Follow:   time.Second,
-		}),
+func newScreen(t theme.Theme, job int) screen.Screen {
+	s := &Screen{t: t, job: job, live: job == liveJob, api: demoapi.From(demoapi.Options{Seed: 4})}
+	s.log = remote.NewEventlog(s.options(t), remote.Seekable[elog.Item]{
+		Page:     s.page,
+		Find:     s.find,
+		PageSize: pageSize,
+		Follow:   time.Second,
+	})
+	if !s.live {
+		// A finished job is read from its first event, not tailed.
+		s.log.SetFollow(false)
 	}
-	s.SetTheme(t)
 	return s
 }
 
 type Screen struct {
-	t       theme.Theme
-	log     elog.Model
-	src     source.Model
-	started time.Time
-	latIdx  int
-	live    bool
-	done    bool
+	t      theme.Theme
+	log    *remote.Eventlog
+	api    demoapi.Target
+	job    int
+	live   bool
+	latIdx atomic.Int32
+	// processed is set by the page function once AWX reports the job's
+	// events all saved; Update turns it into SetGrowing(false).
+	processed atomic.Bool
+	done      bool
 }
 
 func (s *Screen) Title() string         { return "Eventlog" }
 func (s *Screen) IsCapturingKeys() bool { return s.log.IsCapturingKeys() }
-
-func (s *Screen) Init() tea.Cmd {
-	if !s.live {
-		return s.src.Init()
-	}
-	s.log.SetGrowing(true)
-	return tea.Batch(s.src.Init(), s.src.SetGrowing(true))
-}
-
-func (s *Screen) OnEnter(any) tea.Cmd { return nil }
-
-func (s *Screen) Layout() layout.Node { return layout.Sized(&s.log) }
-
-func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
+func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
+func (s *Screen) Layout() layout.Node   { return layout.Sized(s.log) }
+func (s *Screen) Help() []key.Binding   { return help.Flatten(s.HelpSections()) }
 
 func (s *Screen) HelpSections() []help.Section {
-	return help.SectionsOf(&s.log, help.Group("Source",
+	return help.SectionsOf(s.log, help.Group("Source",
 		key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "cycle latency")),
 	))
 }
 
-type fetchedMsg struct {
-	query source.Query
-	page  source.Page
-	items []elog.Item
+func (s *Screen) Init() tea.Cmd {
+	if !s.live {
+		return s.log.Init()
+	}
+	return tea.Batch(s.log.Init(), s.log.SetGrowing(true))
 }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	var cmds []tea.Cmd
-	switch m := msg.(type) {
-	case elog.ViewportChangedMsg:
-		s.src.SetHeld(m.HeldStart, m.HeldCount)
-		cmds = append(cmds, s.src.Viewport(m.FirstVisible, m.LastVisible))
-
-	case elog.QueryChangedMsg:
-		cmds = append(cmds, s.src.SetQuery(m.Raw, m.Terms, "", false))
-
-	case elog.FindMsg:
-		dir := source.Older
-		if m.Newer {
-			dir = source.Newer
-		}
-		cmds = append(cmds, s.src.Find(m.Term, dir, m.From))
-
-	case source.RequestMsg:
-		return s, s.fetch(m.Query)
-
-	case fetchedMsg:
-		ok, cmd := s.src.Deliver(m.page)
-		a := elog.Answer{Raw: m.query.Raw}
-		switch {
-		case !ok:
-		case m.query.Find:
-			s.log.Found(m.page.Found, m.page.Offset)
-		case m.page.Err != nil:
-			s.log.SetFailed(a)
-		default:
-			s.log.SetPage(m.items, m.page.Offset, m.page.Total, a)
-			if !s.done && s.emitted() >= jobLength {
-				s.done = true
-				s.log.SetGrowing(false)
-				cmds = append(cmds, s.src.SetGrowing(false), app.Info("job finished"))
-			}
-		}
-		cmds = append(cmds, cmd)
-	}
-
 	if s.log.IsActivate(msg) {
 		if it, ok := s.log.Selected(); ok {
 			return s, screen.Push(newDetail(s.t, it))
 		}
 	}
 	if km, ok := msg.(tea.KeyMsg); ok && !s.log.IsCapturingKeys() && km.String() == "L" {
-		s.latIdx = (s.latIdx + 1) % len(latencies)
-		return s, app.Info("latency " + latencies[s.latIdx].String())
+		i := (s.latIdx.Load() + 1) % int32(len(latencies))
+		s.latIdx.Store(i)
+		return s, app.Info("latency " + latencies[i].String())
 	}
-
-	cmds = append(cmds, s.src.Update(msg))
-	var cmd tea.Cmd
-	s.log, cmd = s.log.Update(msg)
-	return s, tea.Batch(append(cmds, cmd)...)
-}
-
-// emitted is how many events the job has produced so far.
-func (s *Screen) emitted() int {
-	if !s.live {
-		return finishedLength
+	cmd := s.log.Update(msg)
+	if s.live && !s.done && s.processed.Load() {
+		s.done = true
+		return s, tea.Batch(cmd, s.log.SetGrowing(false), app.Info("job finished"))
 	}
-	return min(jobLength, int(time.Since(s.started).Seconds()*rate)+40)
-}
-
-// fetch answers q from the fake job after the configured latency, under
-// q.Ctx — a superseded request is abandoned, as a real HTTP call would be.
-func (s *Screen) fetch(q source.Query) tea.Cmd {
-	lat, total := latencies[s.latIdx], s.emitted()
-	return func() tea.Msg {
-		select {
-		case <-q.Ctx.Done():
-			return fetchedMsg{query: q, page: source.Page{Gen: q.Gen, Err: context.Canceled}}
-		case <-time.After(lat):
-		}
-		match := matcher(q.Raw)
-		// The filter narrows the set; offsets are into what survives it.
-		var ids []int
-		for i := 1; i <= total; i++ {
-			if match(i) {
-				ids = append(ids, i)
-			}
-		}
-		if q.Find {
-			term := strings.ToLower(q.Term)
-			step, from := 1, q.Offset+1
-			if q.Dir == source.Older {
-				step, from = -1, q.Offset-1
-			}
-			for j := from; j >= 0 && j < len(ids); j += step {
-				if strings.Contains(strings.ToLower(strings.Join(event(ids[j]).Lines, "\n")), term) {
-					return fetchedMsg{query: q, page: source.Page{Gen: q.Gen, Found: true, Offset: j}}
-				}
-			}
-			return fetchedMsg{query: q, page: source.Page{Gen: q.Gen}}
-		}
-		if strings.Contains(q.Raw, "boom") {
-			return fetchedMsg{query: q, page: source.Page{Gen: q.Gen, Err: errors.New("fetch events: 503 Service Unavailable")}}
-		}
-		end := min(q.Offset+q.Limit, len(ids))
-		var items []elog.Item
-		for j := q.Offset; j < end; j++ {
-			items = append(items, event(ids[j]))
-		}
-		return fetchedMsg{
-			query: q,
-			page:  source.Page{Gen: q.Gen, Offset: q.Offset, Count: len(items), Total: len(ids)},
-			items: items,
-		}
-	}
-}
-
-// matcher is the server's filter: "failed", "changed", or a host name.
-func matcher(raw string) func(int) bool {
-	raw = strings.ToLower(strings.TrimSpace(raw))
-	if raw == "" {
-		return func(int) bool { return true }
-	}
-	return func(i int) bool {
-		return strings.Contains(strings.ToLower(strings.Join(event(i).Lines, "\n")), raw)
-	}
-}
-
-var hosts = []string{"web-1", "web-2", "db-1", "cache-1"}
-var tasks = []string{"Gathering Facts", "install packages", "render config", "restart service", "wait for health"}
-
-// event is the job's event i: a task header every so often, a result line
-// per host, and now and then an event with no output at all.
-func event(i int) elog.Item {
-	key := fmt.Sprint(i)
-	mark := key // AWX's counter: stable, and what you'd quote
-	task := tasks[(i/5)%len(tasks)]
-	host := hosts[i%len(hosts)]
-	status := "ok"
-	switch {
-	case i%37 == 0:
-		status = "failed"
-	case i%7 == 0:
-		status = "changed"
-	}
-	data := map[string]any{"counter": i, "task": task, "host": host, "status": status}
-	switch {
-	case i%5 == 0:
-		return elog.Item{Key: key, Mark: mark, Data: data, Lines: []string{
-			"",
-			fmt.Sprintf("TASK [%s] %s", task, strings.Repeat("*", 30)),
-		}}
-	case i%11 == 0:
-		return elog.Item{Key: key, Mark: mark, Data: data} // a runner_on_start: no output
-	case status == "failed":
-		return elog.Item{Key: key, Mark: mark, Data: data, Lines: []string{
-			fmt.Sprintf("fatal: [%s]: FAILED! => {\"msg\": \"timeout waiting for %s\"}", host, task),
-			"  retrying in 5s",
-		}}
-	}
-	return elog.Item{Key: key, Mark: mark, Data: data, Lines: []string{fmt.Sprintf("%s: [%s]", status, host)}}
+	return s, cmd
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	prev, rebuilt := s.log, s.log.Title() != ""
+	s.log.Restyle(s.options(t))
+}
+
+func (s *Screen) options(t theme.Theme) elog.Options {
 	opts := t.Eventlog()
-	opts.Title = "job 4242 · events"
+	opts.Title = fmt.Sprintf("job %d · events", s.job)
 	if !s.live {
-		opts.Title = "job 4187 · events · finished"
+		opts.Title += " · finished"
 	}
 	opts.Filterable = true
 	opts.Searchable = true
-	s.log = elog.New(opts)
-	if !s.live {
-		// A finished job is read from its first event, not tailed.
-		s.log.SetFollow(false)
+	return opts
+}
+
+// ---- the AWX client: the only part a real screen writes -------------------
+
+// event is one record of /api/v2/jobs/{id}/job_events/.
+type event struct {
+	Counter  int    `json:"counter"`
+	Event    string `json:"event"`
+	Stdout   string `json:"stdout"`
+	HostName string `json:"host_name"`
+	Task     string `json:"task"`
+	Failed   bool   `json:"failed"`
+	Changed  bool   `json:"changed"`
+	Created  string `json:"created"`
+}
+
+type eventPage struct {
+	Count   int     `json:"count"`
+	Results []event `json:"results"`
+}
+
+// get fetches path with params, as AWX would be asked.
+func (s *Screen) get(ctx context.Context, path string, params url.Values, into any) error {
+	params.Set("latency", latencies[s.latIdx.Load()].String())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.api.URL(path+"?"+params.Encode()), nil)
+	if err != nil {
+		return err
 	}
-	if !rebuilt {
-		return
+	resp, err := s.api.Client.Do(req)
+	if err != nil {
+		return err
 	}
-	s.log.SetValue(prev.Value())
-	s.log.SetTerm(prev.Term())
-	s.log.SetGrowing(!s.done)
-	if a, ok := prev.Answered(); ok {
-		start, items := prev.Items()
-		s.log.SetPage(items, start, s.src.Total(), a)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		return fmt.Errorf("GET %s: %s: %s", path, resp.Status, e.Error)
 	}
-	if !prev.Following() {
-		s.log.SetCursor(prev.Cursor())
+	return json.NewDecoder(resp.Body).Decode(into)
+}
+
+func (s *Screen) eventsPath() string { return fmt.Sprintf("/api/v2/jobs/%d/job_events/", s.job) }
+
+// filterParams turns the filter bar into AWX's: "failed" and "changed"
+// select by outcome, host:web-1 and task:deploy scope by field, and any
+// other text searches stdout.
+func filterParams(f remote.Filter) url.Values {
+	v := url.Values{}
+	var text []string
+	for _, t := range f.Terms {
+		raw := t.Raw
+		switch {
+		case strings.EqualFold(raw, "failed"):
+			v.Set("failed", "true")
+		case strings.EqualFold(raw, "changed"):
+			v.Set("changed", "true")
+		case strings.HasPrefix(strings.ToLower(raw), "host:"):
+			v.Set("host_name", raw[len("host:"):])
+		case strings.HasPrefix(strings.ToLower(raw), "task:"):
+			v.Set("task__icontains", raw[len("task:"):])
+		default:
+			text = append(text, raw)
+		}
 	}
+	if len(text) > 0 {
+		v.Set("stdout__icontains", strings.Join(text, " "))
+	}
+	return v
+}
+
+// page answers a window of positions.
+func (s *Screen) page(ctx context.Context, w remote.Window) ([]elog.Item, int, error) {
+	if s.live {
+		if err := s.checkProcessed(ctx); err != nil {
+			return nil, 0, err
+		}
+	}
+	if w.Raw == "" {
+		return s.pageByCounter(ctx, w)
+	}
+	return s.pageByPage(ctx, w)
+}
+
+// pageByCounter reads an unfiltered window as a counter range: position i
+// is counter i+1, the total is the highest counter, and a counter the
+// range lacks is an event not saved yet.
+func (s *Screen) pageByCounter(ctx context.Context, w remote.Window) ([]elog.Item, int, error) {
+	var top eventPage
+	if err := s.get(ctx, s.eventsPath(), url.Values{"order_by": {"-counter"}, "page_size": {"1"}}, &top); err != nil {
+		return nil, 0, err
+	}
+	total := 0
+	if len(top.Results) > 0 {
+		total = top.Results[0].Counter
+	}
+	end := min(w.Offset+w.Limit, total)
+	got := map[int]event{}
+	for lo := w.Offset; lo < end; lo += awxPage {
+		var p eventPage
+		params := url.Values{"order_by": {"counter"}, "page_size": {strconv.Itoa(awxPage)},
+			"counter__gt": {strconv.Itoa(lo)}, "counter__lte": {strconv.Itoa(min(lo+awxPage, end))}}
+		if err := s.get(ctx, s.eventsPath(), params, &p); err != nil {
+			return nil, 0, err
+		}
+		for _, e := range p.Results {
+			got[e.Counter] = e
+		}
+	}
+	var items []elog.Item
+	for pos := w.Offset; pos < end; pos++ {
+		if e, ok := got[pos+1]; ok {
+			items = append(items, itemOf(e))
+		} else {
+			c := strconv.Itoa(pos + 1)
+			items = append(items, elog.Item{Key: c, Mark: c, Hole: true})
+		}
+	}
+	return items, total, nil
+}
+
+// pageByPage reads a filtered window with AWX's page mode — a page of 200
+// or two — and slices out the positions asked for.
+func (s *Screen) pageByPage(ctx context.Context, w remote.Window) ([]elog.Item, int, error) {
+	params := filterParams(w.Filter)
+	params.Set("order_by", "counter")
+	params.Set("page_size", strconv.Itoa(awxPage))
+	first := w.Offset / awxPage
+	var events []event
+	total := 0
+	for pg := first; pg*awxPage < w.Offset+w.Limit; pg++ {
+		params.Set("page", strconv.Itoa(pg+1))
+		var p eventPage
+		if err := s.get(ctx, s.eventsPath(), params, &p); err != nil {
+			return nil, 0, err
+		}
+		total = p.Count
+		events = append(events, p.Results...)
+		if (pg+1)*awxPage >= total {
+			break
+		}
+	}
+	from := w.Offset - first*awxPage
+	var items []elog.Item
+	for i := from; i < min(len(events), from+w.Limit); i++ {
+		items = append(items, itemOf(events[i]))
+	}
+	return items, total, nil
+}
+
+// find asks AWX for the first match past the counter the search starts
+// from. Under a filter the hit's position takes one more request: how
+// many filtered events come up to it.
+func (s *Screen) find(ctx context.Context, f remote.Find) (int, bool, error) {
+	past, _ := strconv.Atoi(f.Cursor)
+	if past == 0 {
+		past = f.From + 1
+	}
+	params := filterParams(f.Filter)
+	params.Set("page_size", "1")
+	params.Set("stdout__icontains", strings.TrimSpace(params.Get("stdout__icontains")+" "+f.Term))
+	if f.Newer {
+		params.Set("order_by", "counter")
+		params.Set("counter__gt", strconv.Itoa(past))
+	} else {
+		params.Set("order_by", "-counter")
+		params.Set("counter__lt", strconv.Itoa(past))
+	}
+	var hit eventPage
+	if err := s.get(ctx, s.eventsPath(), params, &hit); err != nil || len(hit.Results) == 0 {
+		return 0, false, err
+	}
+	counter := hit.Results[0].Counter
+	if f.Raw == "" {
+		return counter - 1, true, nil
+	}
+	upTo := filterParams(f.Filter)
+	upTo.Set("page_size", "1")
+	upTo.Set("counter__lte", strconv.Itoa(counter))
+	var p eventPage
+	if err := s.get(ctx, s.eventsPath(), upTo, &p); err != nil {
+		return 0, false, err
+	}
+	return p.Count - 1, true, nil
+}
+
+// checkProcessed notes when AWX has saved every event of the running job.
+func (s *Screen) checkProcessed(ctx context.Context) error {
+	var job struct {
+		Processed bool `json:"event_processing_finished"`
+	}
+	if err := s.get(ctx, fmt.Sprintf("/api/v2/jobs/%d/", s.job), url.Values{}, &job); err != nil {
+		return err
+	}
+	if job.Processed {
+		s.processed.Store(true)
+	}
+	return nil
+}
+
+// itemOf is how an event reads in the timeline: its stdout, one line per
+// line, keyed and marked by its counter.
+func itemOf(e event) elog.Item {
+	c := strconv.Itoa(e.Counter)
+	var lines []string
+	if e.Stdout != "" {
+		lines = strings.Split(strings.ReplaceAll(e.Stdout, "\r\n", "\n"), "\n")
+	}
+	return elog.Item{Key: c, Mark: c, Lines: lines, Data: map[string]any{
+		"counter": e.Counter, "event": e.Event, "host": e.HostName, "task": e.Task,
+		"failed": e.Failed, "changed": e.Changed, "created": e.Created,
+	}}
 }
 
 // detail shows one event's fields.
@@ -310,7 +377,7 @@ func newDetail(t theme.Theme, it elog.Item) screen.Screen {
 	opts := t.Inspector()
 	opts.Title = "event " + it.Key
 	if m, ok := it.Data.(map[string]any); ok {
-		m["output"] = strings.Join(it.Lines, "\n")
+		m["stdout"] = strings.Join(it.Lines, "\n")
 		opts.Fields = insp.FromMap(m)
 	}
 	return &detail{ins: insp.New(opts)}

@@ -200,23 +200,18 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	// cities — preserve cursor/value/items across theme rebuilds.
-	ccursor, cvalue := s.cities.Cursor(), s.cities.Value()
-	citems := s.cities.Items()
+	citySt, detailSt := s.cities.State(), s.detail.State()
+
+	// cities
 	copts := t.List()
 	copts.Title = "cities"
 	copts.Filterable = true
 	copts.Filter.Placeholder = "filter cities…"
 	copts.LoadingLabel = "loading cities…"
-	copts.Items = citems
 	s.cities = list.New(copts)
-	if cvalue != "" {
-		s.cities.SetValue(cvalue)
-	}
-	s.cities.SetCursor(ccursor)
+	s.cities.Restore(citySt)
 
 	// detail — six attribute rows when shown, otherwise empty.
-	dcursor := s.detail.Cursor()
 	dopts := t.List()
 	dopts.Title = "detail"
 	if s.shown != "" {
@@ -225,7 +220,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	dopts.LoadingLabel = "fetching…"
 	dopts.Items = attrRows(s.attrs)
 	s.detail = list.New(dopts)
-	s.detail.SetCursor(dcursor)
+	s.detail.Restore(detailSt)
 
 	s.applyFocus()
 }

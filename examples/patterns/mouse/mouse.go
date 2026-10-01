@@ -150,15 +150,15 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor := s.files.Cursor()
+	fileSt, rowSt, nodeSt := s.files.State(), s.rows.State(), s.nodes.State()
+
 	lOpts := t.List()
 	lOpts.Title = "files"
 	lOpts.Filterable = true
 	lOpts.Items = fileNames
 	s.files = list.New(lOpts)
-	s.files.SetCursor(cursor)
+	s.files.Restore(fileSt)
 
-	tblCursor, sortCol, sortDesc := s.rows.Cursor(), s.rows.SortColumn(), s.rows.SortDescending()
 	tOpts := t.Table()
 	tOpts.Title = "deployments · click a header to sort"
 	tOpts.Columns = []table.Column{
@@ -168,16 +168,14 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	}
 	tOpts.Rows = deployments
 	s.rows = table.New(tOpts)
-	s.rows.SetCursor(tblCursor)
-	s.rows.SetSort(sortCol, sortDesc)
+	s.rows.Restore(rowSt)
 
-	nodeCursor := s.nodes.Cursor()
 	trOpts := t.Tree()
 	trOpts.Title = "services · click a ▸ to expand"
 	trOpts.Root = serviceTree
 	trOpts.InitialDepth = 1
 	s.nodes = tree.New(trOpts)
-	s.nodes.SetCursor(nodeCursor)
+	s.nodes.Restore(nodeSt)
 
 	at := s.focus.Index()
 	s.focus = focus.NewGroup(&s.files, &s.rows, &s.nodes).WithKeys(focus.Keys{

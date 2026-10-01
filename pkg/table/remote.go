@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/focus"
 )
 
@@ -196,7 +197,7 @@ func (m *Model) flushRemote() tea.Cmd {
 	if m.rq.staged && !m.rq.stageArmd {
 		m.rq.stageArmd = true
 		msg := sortSettleMsg{token: m.token, seq: m.rq.stageSeq}
-		cmds = append(cmds, tea.Tick(m.rq.debounce, func(time.Time) tea.Msg { return msg }))
+		cmds = append(cmds, tick.After(m.rq.debounce, func(time.Time) tea.Msg { return msg }))
 	}
 	waiting := m.rq.st.Waiting(m.committed(), m.missingOnScreen()) || m.spanEdgeLoading() != ""
 	cmds = append(cmds, m.rq.st.Arm(m.token, waiting))

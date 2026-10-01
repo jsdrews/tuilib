@@ -391,6 +391,74 @@ GET  /jobs?app=                       → [{"id","app","kind","status","started"
 GET  /jobs/{id}/log?rate=             → chunked text/plain
 ```
 
+### AWX job events
+
+An AWX-shaped corner of the fixture, so the eventlog examples talk to a real
+wire format over HTTP instead of an in-process fake. It reproduces what the
+research behind `docs/remote-data.md` found a timeline has to survive, and
+nothing else of AWX:
+
+```
+GET /api/v2/jobs/                      → {"count","next","previous","results": [job…]}
+GET /api/v2/jobs/{id}/                 → {"id","name","status","started","finished","event_processing_finished"}
+GET /api/v2/jobs/{id}/job_events/      → {"count","next","previous","results": [event…]}
+    ?order_by=counter|-counter            (anything else 400s: AWX's default order has ties)
+    &counter__gt= &counter__gte= &counter__lt= &counter__lte=
+    &page= &page_size=                   (capped at 200, as AWX caps it — clamped, not refused)
+    &stdout__icontains= &failed= &changed= &host_name= &task__icontains=
+```
+
+Job 4187 is finished, 8,000 events. Job 4242 runs from when the fixture is
+built, eight events a second up to 3,000, on the world's clock:
+
+- **Counters are gapless at the source**, so any range is one request.
+- **Every thirteenth event is saved two seconds late**: a range read can miss
+  a counter the next read has. The highest counter is the total; `count` is
+  how many matched.
+- **`event_processing_finished` trails `status` by three seconds**, so a
+  client that stops polling on status misses the last events.
+- **Some events carry no stdout** (`runner_on_start`), task headers carry two
+  lines, failures carry two.
+
+`examples/patterns/eventlog` is the client: counter ranges unfiltered, page
+mode under a filter, `stdout__icontains` + `counter__gt` + `page_size=1` to
+find, and one more request for `count` to turn a filtered hit into a position.
+
+### Elasticsearch search
+
+One log index answering like Elasticsearch behind ECK, for the anchored
+example's `search_after` client:
+
+```
+POST /logs-app/_search
+{"size": 200,
+ "sort": [{"@timestamp": "desc"}, {"_shard_doc": "desc"}],
+ "search_after": [1790000000000, 20011],
+ "query": {"query_string": {"query": "log.level:error AND timeout"}},
+ "track_total_hits": false}
+→ {"hits": {"total": {"value", "relation"}, "hits": [{"_id", "_source", "sort"}]}}
+```
+
+20,000 documents are seeded and five more arrive each second:
+
+- **`from` + `size` past 10,000 is refused** with Elasticsearch's own message
+  — deep data is reachable only with `search_after`.
+- **The sort must end in the `_shard_doc` tiebreaker**, in one direction.
+  Two documents share each `@timestamp`, so paging on the timestamp alone
+  would lose the ones at a page's edge; the fixture refuses rather than
+  silently doing that.
+- **`hits.total` counts to 10,000, then reports `gte`**, unless
+  `track_total_hits` is `true` (exact) or `false` (absent).
+- **New documents are searchable after the next refresh** (1s), and every
+  seventeenth is ingested three seconds after its own `@timestamp` — a
+  tail with `search_after` and no overlap never sees it.
+  `internal/integration/es_search_test.go` fails if the example's overlap
+  is removed.
+- **`query`** is `match_all`, or `query_string` of `field:value` terms
+  (`log.level`, `service.name`, `message`) and bare words, joined by `AND`.
+
+Not modelled: point-in-time snapshots, scroll, aggregations.
+
 `rev` on an app changes whenever a job against it completes. That is the field
 `activity`'s `ActivityRevision` watches, and the reason it is on the wire
 rather than derived: a fixture that could not demonstrate the

@@ -51,6 +51,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -117,8 +118,12 @@ type FindMsg struct {
 	Newer bool
 	// From is the logical index to search beyond (Seekable). Anchored
 	// sources start from the edge in the requested direction.
-	From  int
-	Token focus.Token
+	From int
+	// FromKey is the key of the item at From — what an API that searches
+	// by its own ids (AWX's counter__gt) needs, since positions stop
+	// matching ids once a filter is applied.
+	FromKey string
+	Token   focus.Token
 }
 
 // ActivatedMsg reports enter or a double click on an item.
@@ -889,7 +894,7 @@ func (m *Model) jump(newer bool) {
 		from = max(start+n-1, m.cursor)
 	}
 	m.finding, m.findNewer = true, newer
-	msg := FindMsg{Term: m.term, Newer: newer, From: from, Token: m.token}
+	msg := FindMsg{Term: m.term, Newer: newer, From: from, FromKey: m.rng.KeyAt(from), Token: m.token}
 	m.pending = append(m.pending, msg)
 	m.refresh()
 }
@@ -977,7 +982,7 @@ func (m *Model) flush() tea.Cmd {
 		m.freshSeq++
 		msg := newExpiredMsg{token: m.token, seq: m.freshSeq}
 		wait := max(time.Millisecond, m.newFor-time.Since(m.arrivals[0].at))
-		cmds = append(cmds, tea.Tick(wait, func(time.Time) tea.Msg { return msg }))
+		cmds = append(cmds, tick.After(wait, func(time.Time) tea.Msg { return msg }))
 	}
 	return tea.Batch(cmds...)
 }

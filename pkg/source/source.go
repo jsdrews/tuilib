@@ -12,7 +12,8 @@
 // component in tuilib is synchronous, and a coordinator that owned a retry
 // policy would drag it into places that have no business holding it.
 //
-// It deliberately does not import pkg/table. The table reports what
+// It deliberately does not import pkg/table — nothing from tuilib but
+// pkg/query, and internal/tick for its timers. The table reports what
 // happened (ViewportChangedMsg, QueryChangedMsg) and the screen translates
 // those into Viewport and SetQuery calls here, which keeps this package
 // usable for any component that can say which rows are on screen — and
@@ -67,6 +68,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/query"
 )
 
@@ -160,9 +162,12 @@ const (
 	Older
 )
 
-// RequestMsg asks the screen to fetch Query.
+// RequestMsg asks the screen to fetch Query. Source names the model that
+// asked, so a screen with several sources — or pkg/remote, binding one —
+// answers only its own.
 type RequestMsg struct {
-	Query Query
+	Query  Query
+	Source int64
 }
 
 // Page reports what a fetch returned. Rows themselves never come here —
@@ -456,7 +461,7 @@ func (m *Model) armPoll() tea.Cmd {
 	}
 	m.pollArmed = true
 	msg := pollMsg{id: m.id, seq: m.pollSeq}
-	return tea.Tick(m.follow, func(time.Time) tea.Msg { return msg })
+	return tick.After(m.follow, func(time.Time) tea.Msg { return msg })
 }
 
 // following reports whether the viewport shows the newest item held.
@@ -505,7 +510,7 @@ func (m *Model) Viewport(first, last int) tea.Cmd {
 	}
 	m.vpSeq++
 	msg := settleMsg{id: m.id, seq: m.vpSeq}
-	return tea.Tick(m.delay, func(time.Time) tea.Msg { return msg })
+	return tick.After(m.delay, func(time.Time) tea.Msg { return msg })
 }
 
 // SetQuery installs a new filter and sort, discards the held window, and
@@ -791,8 +796,12 @@ func (c *core) issue(q Query) tea.Cmd {
 	c.pending = true
 	q.Gen, q.Ctx = c.gen, ctx
 	c.live, c.liveAt = q, time.Now()
-	return func() tea.Msg { return RequestMsg{Query: q} }
+	id := c.id
+	return func() tea.Msg { return RequestMsg{Query: q, Source: id} }
 }
+
+// ID identifies this source in the RequestMsg values it emits.
+func (c core) ID() int64 { return c.id }
 
 // accept reports whether p answers the live request and, if so, releases
 // it: its context is cancelled and nothing is pending.

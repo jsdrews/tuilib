@@ -37,6 +37,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	timer "github.com/jsdrews/tuilib/internal/tick"
 )
 
 // Options configures a new Model. Interval is required; everything else
@@ -200,7 +202,7 @@ func (m *Model) scheduleTick() tea.Cmd {
 // armTick arms a tick stamped with the tag this Model is waiting for now.
 func (m Model) armTick() tea.Cmd {
 	tag := m.tag
-	return tea.Tick(m.interval, func(time.Time) tea.Msg {
+	return timer.After(m.interval, func(time.Time) tea.Msg {
 		return tickMsg{tag: tag}
 	})
 }

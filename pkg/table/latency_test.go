@@ -11,6 +11,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
+	"github.com/jsdrews/tuilib/internal/tick"
 	"github.com/jsdrews/tuilib/pkg/geom"
 )
 
@@ -33,6 +34,7 @@ func flatten(cmd tea.Cmd) []tea.Msg {
 
 func newLatency(t *testing.T) Model {
 	t.Helper()
+	tick.Instant(t)
 	m := New(Options{
 		Title: "Apps",
 		Columns: []Column{

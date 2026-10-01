@@ -313,12 +313,12 @@ func (s *Screen) retitle() {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	prev := s.log.Lines()
+	st := s.log.State()
 	opts := t.Logview()
 	opts.Searchable = true
 	opts.LineNumbers = true
 	s.log = logview.New(opts)
-	s.log.AppendLines(prev)
+	s.log.Restore(st)
 	s.retitle()
 }
 

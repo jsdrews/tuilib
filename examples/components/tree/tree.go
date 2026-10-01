@@ -143,8 +143,7 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	cursor, query := s.tree.Cursor(), s.tree.Query()
-	marks := s.tree.Marks()
+	st := s.tree.State()
 	opts := t.Tree()
 	opts.Title = "tuilib (synthetic)"
 	opts.Root = sample()
@@ -155,9 +154,5 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	opts.InitialDepth = 2
 	opts.Filter.Placeholder = "search nodes…"
 	s.tree = tw.New(opts)
-	if query != "" {
-		s.tree.SetQuery(query)
-	}
-	s.tree.SetCursor(cursor)
-	s.tree.SetMarks(marks)
+	s.tree.Restore(st)
 }

@@ -168,34 +168,27 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
+	listSt, logSt, treeSt := s.list.State(), s.log.State(), s.tree.State()
 
 	// list
-	cursor, value := s.list.Cursor(), s.list.Value()
 	lopts := t.List()
 	lopts.Title = "cities"
 	lopts.Filterable = true
 	lopts.Filter.Placeholder = "filter cities…"
 	lopts.LoadingLabel = "loading cities…"
 	s.list = list.New(lopts)
-	if value != "" {
-		s.list.SetValue(value)
-	}
-	s.list.SetCursor(cursor)
+	s.list.Restore(listSt)
 
 	// logview
-	q := s.log.Query()
 	gopts := t.Logview()
 	gopts.Title = "events"
 	gopts.Searchable = true
 	gopts.Filter.Placeholder = "search…"
 	gopts.LoadingLabel = "fetching events…"
 	s.log = lv.New(gopts)
-	if q != "" {
-		s.log.SetQuery(q)
-	}
+	s.log.Restore(logSt)
 
 	// tree
-	tcursor := s.tree.Cursor()
 	topts := t.Tree()
 	topts.Title = "modules"
 	topts.Searchable = true
@@ -203,7 +196,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	topts.Filter.Placeholder = "search…"
 	topts.LoadingLabel = "loading modules…"
 	s.tree = tw.New(topts)
-	s.tree.SetCursor(tcursor)
+	s.tree.Restore(treeSt)
 
 	s.applyFocus()
 }

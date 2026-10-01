@@ -139,10 +139,7 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	cursor, value := s.tab.Cursor(), s.tab.Value()
-	sortCol, sortDesc := s.tab.SortColumn(), s.tab.SortDescending()
-	prevKey, hadKey := s.tab.SelectedKey()
-
+	st := s.tab.State()
 	opts := t.Table()
 	opts.Title = "deployments"
 	opts.Filterable = true
@@ -157,15 +154,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	}
 	s.tab = table.New(opts)
 	s.applyRows()
-	if value != "" {
-		s.tab.SetValue(value)
-	}
-	if hadKey {
-		s.snapToKey(prevKey)
-	} else {
-		s.tab.SetCursor(cursor)
-	}
-	s.tab.SetSort(sortCol, sortDesc)
+	s.tab.Restore(st)
 	s.refreshTitle()
 }
 
@@ -176,20 +165,6 @@ func (s *Screen) applyRows() {
 	}
 	s.tab.SetKeyedRows(rows)
 	s.refreshTitle()
-}
-
-func (s *Screen) snapToKey(key string) {
-	rows := make([]table.KeyedRow, len(s.deps))
-	for i, d := range s.deps {
-		rows[i] = table.KeyedRow{Key: d.id, Cells: depCells(d)}
-	}
-	s.tab.SetKeyedRows(rows)
-	for i, d := range s.deps {
-		if d.id == key {
-			s.tab.SetCursor(i)
-			return
-		}
-	}
 }
 
 func depCells(d deployment) []string {

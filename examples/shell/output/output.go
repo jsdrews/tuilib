@@ -223,17 +223,14 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.menu.Cursor(), s.menu.Value()
+	st := s.menu.State()
 	opts := t.List()
 	opts.Title = "actions"
 	opts.Filterable = true
 	opts.Filter.Placeholder = "filter…"
 	opts.Items = actionLabels()
 	s.menu = list.New(opts)
-	if value != "" {
-		s.menu.SetValue(value)
-	}
-	s.menu.SetCursor(cursor)
+	s.menu.Restore(st)
 
 	s.rebuildNotes()
 }

@@ -210,17 +210,14 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.list.Cursor(), s.list.Value()
+	st := s.list.State()
 	lOpts := t.List()
 	lOpts.Title = "operations"
 	lOpts.Filterable = true
 	lOpts.Filter.Placeholder = "filter…"
 	lOpts.Items = opLabels()
 	s.list = list.New(lOpts)
-	if value != "" {
-		s.list.SetValue(value)
-	}
-	s.list.SetCursor(cursor)
+	s.list.Restore(st)
 
 	// A modal that is up has to survive the swap too, with the side it was
 	// sitting on (rule 4).

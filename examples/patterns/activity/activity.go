@@ -250,9 +250,7 @@ func (s *Screen) HelpSections() []help.Section {
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.table.Cursor(), s.table.Value()
-	marks := s.table.Marks()
-	act := s.table.ActivityState()
+	st := s.table.State()
 
 	o := t.Table()
 	o.Title = s.title()
@@ -281,12 +279,7 @@ func (s *Screen) SetTheme(t theme.Theme) {
 
 	s.table = table.New(o)
 	s.table.SetKeyedRows(s.rows())
-	if value != "" {
-		s.table.SetValue(value)
-	}
-	s.table.SetCursor(cursor)
-	s.table.SetMarks(marks)
-	_ = s.table.SetActivityState(act)
+	s.table.Restore(st)
 }
 
 func (s *Screen) title() string {

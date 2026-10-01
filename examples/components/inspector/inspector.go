@@ -129,7 +129,7 @@ func (s *Screen) HelpSections() []help.Section {
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-	cursor, query := s.ins.Cursor(), s.ins.Query()
+	st := s.ins.State()
 	opts := t.Inspector()
 	opts.Title = "pod / api-gateway-7d8b6c9f44-x7p2k"
 	opts.Fields = sampleFields()
@@ -137,8 +137,5 @@ func (s *Screen) SetTheme(t theme.Theme) {
 	opts.InitialDepth = 2
 	opts.Filter.Placeholder = "search labels and values…"
 	s.ins = insp.New(opts)
-	if query != "" {
-		s.ins.SetQuery(query)
-	}
-	s.ins.SetCursor(cursor)
+	s.ins.Restore(st)
 }

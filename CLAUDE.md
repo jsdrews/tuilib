@@ -35,10 +35,37 @@ example in `examples/`.
    deliberately overriding one. Don't set `Width`/`Height` on components
    you're going to hand to `layout.Sized` — the layout engine sizes them.
 
-4. **Rebuild themed components in `SetTheme(t)`, preserving state.** Use
-   accessors (`m.list.Cursor()`, `m.list.Value()`, …) and setters
-   (`m.list.SetCursor`, `m.list.SetValue`) to carry state across the
-   rebuild. The app shell calls `SetTheme` on the current screen during
+4. **Rebuild themed components in `SetTheme(t)`, carrying state with
+   `State` / `Restore`.** Every stateful component — `list`, `table`,
+   `tree`, `inspector`, `logview`, `textview`, `eventlog`, `filter`,
+   `input`, `toggle` — snapshots what the user and the data did to it,
+   and puts it back onto one built from new Options:
+
+   ```go
+   func (s *Screen) SetTheme(t theme.Theme) {
+       st := s.list.State()
+       opts := t.List()
+       opts.Title = "Cities"
+       s.list = list.New(opts)
+       s.list.Restore(st)
+   }
+   ```
+
+   `State` is opaque and covers everything the component holds that
+   Options doesn't set: items or rows, cursor and scroll, filter or
+   query, sort (a staged one too), marks, row activity, open branches,
+   follow, loading, and remote state (the answered query, a failure).
+   `Restore` replays it in the order that keeps each part valid — rows
+   before the filter over them, marks after the rows they mark, the
+   cursor last — which is the part hand-written restores got wrong.
+   Don't restore field by field with the individual setters: that list
+   grows every time a component gains state, and the examples had
+   cursors restored before sorts and filters, lost tree expansion, and a
+   log that dropped its lines on every swap. A State taken from a
+   component never built (the first `SetTheme`, before anything exists)
+   restores nothing, so the same two lines work from the constructor.
+   A view bound with `pkg/remote` is `Restyle(opts)`, which does this
+   inside. The app shell calls `SetTheme` on the current screen during
    theme swaps. Under the app shell you do *not* need a resize handler —
    layout takes care of it.
 
@@ -691,8 +718,21 @@ example in `examples/`.
     the pointer.
 
 29. **Back a table with a remote source via `pkg/source`, and let
-    scrolling be the pagination.** When the rows live behind an API,
-    three pieces divide the work and none of them does the others' job:
+    scrolling be the pagination.** Start with `pkg/remote`: it binds a
+    `table` or `eventlog` to its source, so the screen writes only the
+    fetch — ordinary functions taking a context and a typed request
+    (`Window`, `Edge`, `Find`) — and forwards messages:
+
+    ```go
+    s.tab = remote.NewTable(opts, remote.Seekable[table.KeyedRow]{Page: s.page})
+    func (s *Screen) Init() tea.Cmd { return s.tab.Init() }
+    func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) { return s, s.tab.Update(msg) }
+    func (s *Screen) SetTheme(t theme.Theme) { s.tab.Restyle(opts) }
+    ```
+
+    Everything below is what the binding does for you, and the loop to
+    write by hand only when it doesn't fit. When the rows live behind an
+    API, three pieces divide the work and none of them does the others' job:
 
     - **`pkg/table`** reports and displays. `FilterMode: FilterRemote`
       and `SortMode: SortRemote` stop it answering the filter and sort
@@ -789,10 +829,10 @@ example in `examples/`.
       failures on the statusbar too. The screen writes none of it.
 
     Both durations follow `logview.MaxLines`: zero means the default,
-    negative means immediate. Across `SetTheme` (rule 4) carry
-    `CommittedSort` into `SetSort`, the window with `Answered()`,
-    `Failed()` into `SetFailed(Committed())`, and a `StagedSort` into
-    `SetStagedSort` — `examples/patterns/remote` shows the order.
+    negative means immediate. Across `SetTheme` (rule 4), `State()` /
+    `Restore` carry all of it — the window and the query it answers, a
+    failure, a staged sort — and a `pkg/remote` view does it in
+    `Restyle`.
 
     Pagination is a wire protocol, not a UI. The user scrolls; windows
     arrive under them. Don't add `n`/`p` page keys — they collide with
@@ -855,8 +895,8 @@ example in `examples/`.
     is on screen. So a user can mark a row, filter it away, and still act
     on it — correct, and a genuine surprise, which is why `action.Set`
     puts `Target` on the menu's own border rather than trusting the user
-    to remember. Carry them across a `SetTheme` rebuild with `SetMarks`
-    the same way you carry the cursor (rule 4).
+    to remember. They come back across a `SetTheme` rebuild with
+    everything else in `State()` / `Restore` (rule 4).
 
     A windowed table (`SetWindow`) cannot be marked: it carries rows
     without keys, so a mark there could only be held by index into a
@@ -1025,13 +1065,11 @@ example in `examples/`.
     `Action.Receipt` applies only to `Run` verbs, whose return the shell
     reports.
 
-    **Across `SetTheme` (rule 4)**, carry the rows and the activity state:
-    `rows := s.table.KeyedRows()` (list: `KeyedItems()`, tree: `Root()`) and
-    `act := s.table.ActivityState()` before the rebuild, then `SetKeyedRows(rows)`
-    followed by `SetActivityState(act)` after it — rows first, so the adopted
-    claims land on rows that exist. `SetActivityState` returns the spinner's
-    first tick; `SetTheme` has nowhere to return it, and dropping it is safe:
-    the component re-arms a stalled spinner on the next message it receives.
+    **Across `SetTheme` (rule 4)**, `State()` / `Restore` carry the rows and
+    the activity state together, rows first so the adopted claims land on
+    rows that exist. The spinner's first tick has nowhere to go from
+    `SetTheme`, and needn't: the component re-arms a stalled spinner on the
+    next message it receives.
 
     **`UnobservedMsg` and every other activity message arrive through the
     component's `Update`**, on the turn after the read that ended the claim —
@@ -1074,13 +1112,14 @@ example in `examples/`.
     | **Event** | `eventlog` + `source.Model` (`MaxHeld`) + `inspector` on enter | `eventlog` (`Anchored`) + `source.Anchored` + `inspector` | `logview` + `inspector` |
     | **Line** | `eventlog` + `source.Model` (`MaxHeld`) | `eventlog` (`Anchored`) + `source.Anchored` | `logview` + `pkg/resume` |
 
-    **Growing** data is followed: `SetGrowing(true)` on both the source
-    (which then polls every `Options.Follow`) and the eventlog (which
+    Bind them with `pkg/remote` (`NewEventlog` / `NewTable` over a
+    `Seekable` or `Anchored` shape): the screen supplies the fetch
+    functions and forwards `Update`, and the binding owns the routing —
+    paging, mirroring what is held, landing search hits, re-anchoring,
+    and keeping state across `Restyle`. **Growing** data is one call,
+    `SetGrowing(true)`: the source polls every `Follow`, and the view
     pins the newest item and counts what arrives once the user scrolls
-    away). The screen routes `eventlog.ViewportChangedMsg` into
-    `src.SetHeld` + `src.Viewport` (or, for a span, `ToOlder`/`ToNewer`
-    into `Anchored.Viewport`), `QueryChangedMsg` into `SetQuery`, and
-    `FindMsg` into `src.Find`; a find's reply goes to `Found` / `FoundAt`.
+    away.
     `examples/patterns/eventlog` is the whole Seekable loop,
     `examples/patterns/anchored` the Anchored one (`Query.FromAnchor`
     starts a view; every other request extends an edge, and a search hit
@@ -1266,9 +1305,9 @@ example in `examples/`.
   manual `\n` insertion just makes content harder to read at narrow
   widths. Pre-wrap only when the content is genuinely paragraph prose.
 - **Don't set colors in `Options` literals.** Start from the theme builder.
-- **Don't skip state preservation in `SetTheme`.** If you forget to carry
-  cursor/value across rebuilds, theme-swap will silently reset the user's
-  state.
+- **Don't skip state preservation in `SetTheme`.** Take `State()` before
+  the rebuild and `Restore` it after (rule 4); forgetting it resets the
+  user's cursor, filter, marks and loaded data on every theme swap.
 - **Don't write per-component reset codes.** If bar colors drift between
   embedded segments, the fix is usually "make sure every embedded style
   sets the same `Background()`," not a manual `\x1b[0m`.
@@ -1341,6 +1380,15 @@ example in `examples/`.
   the other five by a script that omitted it, and covered by a test that
   lived in `pkg/list` — so five components shipped broken and the suite
   stayed green.
+- **Don't schedule a library timer with `tea.Tick`.** It starts its timer
+  when the command is *created*, so running the same command twice blocks
+  forever — which is exactly what a test helper that re-runs a batch does.
+  Library code schedules through `internal/tick.After`, which starts the
+  wait when the command runs. Tests call `tick.Instant(t)` so debounces,
+  settles, polls and spinner frames cost nothing, and run commands with
+  `internal/cmdtest.Run`, which drops timers from other libraries (bubbles'
+  cursor blink) instead of waiting them out. The eventlog suite went from
+  21s to 1s on exactly this.
 - **Force a colour profile in any test that asserts on styling.**
   Without a TTY lipgloss falls back to the Ascii profile and strips every
   style, so a render comparison silently passes no matter what the code
@@ -1548,6 +1596,16 @@ path.
   skip)`, `Drop`, `Reconnected`, and `OlderCut` / `ObserveOlder` for
   "load older" merged with `logview.Prepend`. Mark reconnects and
   restarts with `logview.AppendMarker`.
+- **Binding a view to a remote source:** `pkg/remote` is where to start.
+  `NewEventlog(opts, shape)` and `NewTable(opts, shape)` embed their
+  component (its whole surface is promoted) and own a source; `shape` is
+  `Seekable[T]{Page, Find}` or `Anchored[T]{Edge, Find}` — synchronous
+  functions over typed requests (`Window`, `Edge`, `Find`, each carrying
+  the committed `Filter`), run off the UI goroutine under a context the
+  binding cancels when superseded. The screen calls `Init`, forwards
+  `Update`, and swaps themes with `Restyle`; `SetGrowing` and `Refresh`
+  are the only other verbs. `pkg/source`, `pkg/table` and `pkg/eventlog`
+  stay public for anything it doesn't cover.
 - **Large remote data in general:** `docs/remote-data.md` classifies each
   source we build TUIs for (Prefect, AWX, Elasticsearch, pod logs, generic
   REST) and names the component and paging mode for it. See rule 34.
@@ -1566,7 +1624,8 @@ path.
   `Page.Err` reports a failed fetch through the same `Deliver`. The query
   history leaves as `QueryAnsweredMsg` / `QueryFailedMsg` /
   `QueryCancelledMsg`, which `pkg/app` writes to the output console. It
-  imports `pkg/query` and nothing else from tuilib —
+  imports `pkg/query` (and `internal/tick` for its timers) and nothing
+  else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the
   screen does the translating. See rule 29 and `examples/patterns/remote`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
@@ -1704,8 +1763,8 @@ path.
   Default comparator is case-insensitive on the ANSI-stripped text;
   override with `Column.Less func(a, b string) bool` for numeric, date,
   or unit-aware columns ("8.3M") — see the table example's `popLess`.
-  Carry `SortColumn()`/`SortDescending()` across `SetTheme` rebuilds via
-  `SetSort(col, desc)` the same way you carry `Cursor()`/`Value()`. For
+  The sort comes back with everything else in `State()`/`Restore` across
+  a `SetTheme` rebuild (rule 4). For
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
   `lipgloss.Render` so the selected-row background passes through
   unbroken (rule 19). Internal separators are configurable via
@@ -1762,9 +1821,8 @@ path.
   No follow, no filter mode, no `MaxLines` — for the streaming case
   reach for `pkg/logview`. Same nav vocabulary as list/table/logview
   (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
-  rule 25). Carry `Content()`/`Query()`/`Wrap()` across `SetTheme`
-  rebuilds via `SetContent`/`SetQuery`/`SetWrap` — the theme swap
-  pattern from rule 4. See `examples/components/textview` and `theme.TextView()`.
+  rule 25). Content, wrap, search and scroll come back across a
+  `SetTheme` rebuild with `State()`/`Restore` (rule 4). See `examples/components/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by
@@ -1782,9 +1840,8 @@ path.
   keeping ancestors visible; `n`/`N` step matches). `SetFields` swaps
   the record while preserving expansion state by row path and pinning
   the cursor to its previous path when it survives the swap — the
-  primitive that auto-refresh will lean on. Carry
-  `Cursor()`/`Query()` across `SetTheme` rebuilds via
-  `SetCursor`/`SetQuery`. See `examples/components/inspector` and
+  primitive that auto-refresh will lean on. Carry it across a `SetTheme`
+  rebuild with `State()`/`Restore` (rule 4). See `examples/components/inspector` and
   `theme.Inspector()`.
 - **Inline metrics:** `pkg/metrics` is a small set of cell-fitting renderers
   for the monitoring shape — `Badge(ok, warn, down)` for status-count
