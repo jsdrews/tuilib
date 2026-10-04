@@ -17,12 +17,19 @@
 //
 // A main cannot be shared. A handler can be shared four ways.
 //
-// # Why it has no dependencies
+// # Why it is generated from a spec
 //
-// Standard library only, plus pkg/query from this module. The cost of a
-// package here is not compile time — Go builds what is imported — it is
-// go.mod: anything demoapi required, every consumer of tuilib would require.
-// The day this needs a third-party import it should become a nested module.
+// The wire contract is api/openapi.yaml. oapi-codegen turns it into package
+// api — models, a typed client, and the strict server interface this package
+// implements — so the server cannot drift from the document a client is
+// generated from. Edit the spec, run go generate ./demoapi/api, and the
+// compiler names every handler the change broke.
+//
+// That costs one third-party import, oapi-codegen's runtime, which reaches
+// only binaries that import demoapi: Go fetches and builds the modules an
+// import graph needs, so a program built on tuilib's components never sees
+// it. The generator itself runs through go run at a pinned version and is
+// not a requirement of this module at all.
 //
 // # Latency and failure are per-request
 //
@@ -92,14 +99,18 @@
 package demoapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jsdrews/tuilib/demoapi/api"
 )
 
 // DefaultApps is enough rows that a windowed table is actually windowed.
@@ -145,7 +156,7 @@ type Options struct {
 
 type server struct {
 	w   *world
-	mux *http.ServeMux
+	h   http.Handler
 	lat time.Duration
 
 	// rng backs ?flaky=. Separate from the world's, and mutex-guarded, so a
@@ -176,38 +187,32 @@ func New(opts Options) http.Handler {
 	}
 	s := &server{
 		w:   newWorld(opts),
-		mux: http.NewServeMux(),
 		lat: opts.Latency,
 		rng: rand.New(rand.NewSource(seed ^ 0x5eed)),
 	}
 	s.started = s.w.now()
-	s.routes()
+	s.h = api.HandlerWithOptions(
+		api.NewStrictHandlerWithOptions(s, []api.StrictMiddlewareFunc{withURL}, api.StrictHTTPServerOptions{
+			RequestErrorHandlerFunc: badRequest,
+			ResponseErrorHandlerFunc: func(w http.ResponseWriter, _ *http.Request, err error) {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+			},
+		}),
+		api.StdHTTPServerOptions{ErrorHandlerFunc: badRequest},
+	)
 	return s
 }
 
-func (s *server) routes() {
-	s.mux.HandleFunc("GET /apps", s.listApps)
-	s.mux.HandleFunc("GET /apps/facets", s.facets)
-	s.mux.HandleFunc("GET /apps/{id}", s.getApp)
-	s.mux.HandleFunc("POST /apps/{id}/{action}", s.launch)
-	s.mux.HandleFunc("GET /jobs", s.listJobs)
-	s.mux.HandleFunc("GET /jobs/{id}", s.getJob)
-	s.mux.HandleFunc("GET /jobs/{id}/log", s.jobLog)
-
-	// AWX-shaped job events; see awx.go.
-	s.mux.HandleFunc("GET /api/v2/jobs/", s.awxListJobs)
-	s.mux.HandleFunc("GET /api/v2/jobs/{id}/", s.awxGetJob)
-	s.mux.HandleFunc("GET /api/v2/jobs/{id}/job_events/", s.awxEvents)
-
-	// Elasticsearch-shaped search over one log index; see es.go.
-	s.mux.HandleFunc("POST /logs-app/_search", s.esSearch)
-
-	// Chaos is stateful, so it is endpoints rather than query parameters: a
-	// test says when the world changes shape, and the change outlives the
-	// request that asked for it.
-	s.mux.HandleFunc("POST /chaos/down", s.chaosDown)
-	s.mux.HandleFunc("POST /chaos/delete/{id}", s.chaosDelete)
-	s.mux.HandleFunc("POST /chaos/spawn", s.chaosSpawn)
+// badRequest answers a request the generated layer could not bind — a
+// parameter of the wrong type, a body that is not JSON — in the fixture's one
+// error shape, or Elasticsearch's under the search path, rather than the
+// plain text oapi-codegen writes by default.
+func badRequest(w http.ResponseWriter, r *http.Request, err error) {
+	if strings.HasPrefix(r.URL.Path, "/logs-app/") {
+		esErr(w, http.StatusBadRequest, "parse_exception", err.Error())
+		return
+	}
+	writeErr(w, http.StatusBadRequest, err.Error())
 }
 
 // ServeHTTP applies the per-request knobs, then routes.
@@ -242,7 +247,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mux.ServeHTTP(w, r)
+	s.h.ServeHTTP(w, r)
 }
 
 func (s *server) isDown() bool {
@@ -251,41 +256,37 @@ func (s *server) isDown() bool {
 	return time.Now().Before(s.downUntil)
 }
 
-// chaosDown refuses every read for a window. POST /chaos/down?for=5s, or
+// ChaosDown refuses every read for a window. POST /chaos/down?for=5s, or
 // ?for=0 to end one early.
-func (s *server) chaosDown(w http.ResponseWriter, r *http.Request) {
-	d := duration(r.URL.Query().Get("for"))
+func (s *server) ChaosDown(_ context.Context, r api.ChaosDownRequestObject) (api.ChaosDownResponseObject, error) {
+	d := duration(deref(r.Params.For))
 	s.mu.Lock()
 	s.downUntil = time.Now().Add(d)
 	s.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"down_for": d.String()})
+	return api.ChaosDown200JSONResponse{DownFor: d.String()}, nil
 }
 
-// chaosDelete removes an application from the set.
-func (s *server) chaosDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !s.w.remove(id) {
-		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
-		return
+// ChaosDelete removes an application from the set.
+func (s *server) ChaosDelete(_ context.Context, r api.ChaosDeleteRequestObject) (api.ChaosDeleteResponseObject, error) {
+	if !s.w.remove(r.Id) {
+		return api.ChaosDeletedefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("application", r.Id)}, nil
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+	return api.ChaosDelete200JSONResponse{Deleted: r.Id}, nil
 }
 
-// chaosSpawn adds an application. ?id= reuses a name something else had;
+// ChaosSpawn adds an application. ?id= reuses a name something else had;
 // ?busy=1 has it arrive already working.
-func (s *server) chaosSpawn(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	id := q.Get("id")
+func (s *server) ChaosSpawn(_ context.Context, r api.ChaosSpawnRequestObject) (api.ChaosSpawnResponseObject, error) {
+	id := r.Params.Id
 	if id == "" {
-		writeErr(w, http.StatusBadRequest, "spawn needs an id")
-		return
+		return api.ChaosSpawndefaultJSONResponse{StatusCode: http.StatusBadRequest, Body: api.Error{Error: "spawn needs an id"}}, nil
 	}
-	a, ok := s.w.spawn(id, q.Get("busy") == "1" || q.Get("busy") == "true")
+	a, ok := s.w.spawn(id, deref(r.Params.Busy))
 	if !ok {
-		writeErr(w, http.StatusConflict, "application "+strconv.Quote(id)+" already exists")
-		return
+		return api.ChaosSpawndefaultJSONResponse{StatusCode: http.StatusConflict,
+			Body: api.Error{Error: "application " + strconv.Quote(id) + " already exists"}}, nil
 	}
-	writeJSON(w, http.StatusCreated, a)
+	return api.ChaosSpawn201JSONResponse(a.wire()), nil
 }
 
 func (s *server) roll() float64 {
@@ -294,57 +295,58 @@ func (s *server) roll() float64 {
 	return s.rng.Float64()
 }
 
-func (s *server) listApps(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+func (s *server) ListApps(_ context.Context, r api.ListAppsRequestObject) (api.ListAppsResponseObject, error) {
+	p := r.Params
 
 	// A parameter named after a column scopes to it — ?region=eu-west — which
 	// is what a client driving source.Query sends, since Term.Title is already
 	// the resolved column title. ?q= takes the raw grammar instead, for a
 	// client forwarding what the user typed. Both, AND-ed, is fine.
 	scoped := map[string]string{}
-	for _, col := range appColumns {
-		if v := q.Get(strings.ToLower(col)); v != "" {
-			scoped[col] = v
+	for col, v := range map[string]*string{
+		"Name": p.Name, "Region": p.Region, "Sync": p.Sync, "Health": p.Health, "Phase": p.Phase,
+	} {
+		if v != nil && *v != "" {
+			scoped[col] = *v
 		}
 	}
 
-	p := s.w.listApps(
-		q.Get("q"),
-		scoped,
-		q.Get("sort"),
-		q.Get("desc") == "true" || q.Get("desc") == "1",
-		atoi(q.Get("offset"), 0),
-		atoi(q.Get("limit"), 100),
-	)
-	p.Rows = s.w.asOf(p.Rows, duration(q.Get("stale")))
-	writeJSON(w, http.StatusOK, p)
+	limit := 100
+	if p.Limit != nil {
+		limit = *p.Limit
+	}
+	pg := s.w.listApps(deref(p.Q), scoped, deref(p.Sort), deref(p.Desc), deref(p.Offset), limit)
+	rows := s.w.asOf(pg.Rows, duration(deref(p.Stale)))
+	out := api.ListApps200JSONResponse{Total: pg.Total, Offset: pg.Offset, Rows: make([]api.App, len(rows))}
+	for i, a := range rows {
+		out.Rows[i] = a.wire()
+	}
+	return out, nil
 }
 
-func (s *server) facets(w http.ResponseWriter, r *http.Request) {
-	field := r.URL.Query().Get("field")
-	values := s.w.facet(field)
+func (s *server) ListFacets(_ context.Context, r api.ListFacetsRequestObject) (api.ListFacetsResponseObject, error) {
+	values := s.w.facet(r.Params.Field)
 	if values == nil {
-		writeErr(w, http.StatusBadRequest, "unknown field "+strconv.Quote(field))
-		return
+		return api.ListFacetsdefaultJSONResponse{StatusCode: http.StatusBadRequest,
+			Body: api.Error{Error: "unknown field " + strconv.Quote(r.Params.Field)}}, nil
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"values": values})
+	return api.ListFacets200JSONResponse{Values: values}, nil
 }
 
-func (s *server) getApp(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	if q.Get("refresh") != "" {
-		s.refreshApp(w, r)
-		return
+func (s *server) GetApp(ctx context.Context, r api.GetAppRequestObject) (api.GetAppResponseObject, error) {
+	if deref(r.Params.Refresh) != "" {
+		return s.refreshApp(ctx, r)
 	}
-	a, ok := s.w.app(r.PathValue("id"))
+	a, ok := s.w.app(r.Id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(r.PathValue("id"))+" not found")
-		return
+		return api.GetAppdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("application", r.Id)}, nil
 	}
-	if rows := s.w.asOf([]App{a}, duration(r.URL.Query().Get("stale"))); len(rows) == 1 {
+	if rows := s.w.asOf([]App{a}, duration(deref(r.Params.Stale))); len(rows) == 1 {
 		a = rows[0]
 	}
-	writeJSON(w, http.StatusOK, describe(a, s.w.listJobs(a.ID)))
+	var out api.GetApp200JSONResponse
+	err := out.FromAppDetail(describe(a, s.w.listJobs(a.ID)))
+	return out, err
 }
 
 // refreshApp is Argo's refresh: a GET that holds the connection until the
@@ -357,98 +359,127 @@ func (s *server) getApp(w http.ResponseWriter, r *http.Request) {
 //
 // The hold is real time, not the world's clock, for the reason ?latency= is:
 // it is the connection that waits. ?takes= sets it; a test passes ?takes=0.
-func (s *server) refreshApp(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if _, ok := s.w.app(id); !ok {
-		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
-		return
+func (s *server) refreshApp(ctx context.Context, r api.GetAppRequestObject) (api.GetAppResponseObject, error) {
+	if _, ok := s.w.app(r.Id); !ok {
+		return api.GetAppdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("application", r.Id)}, nil
 	}
 	d := refreshDuration
-	if v := r.URL.Query().Get("takes"); v != "" {
-		d = duration(v)
+	if r.Params.Takes != nil {
+		d = duration(*r.Params.Takes)
 	}
 	if d > 0 {
 		select {
 		case <-time.After(d):
-		case <-r.Context().Done():
-			return
+		case <-ctx.Done():
+			return abandoned{}, nil
 		}
 	}
-	a, ok := s.w.refresh(id)
+	a, ok := s.w.refresh(r.Id)
 	if !ok {
 		// Deleted while the connection was held.
-		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
-		return
+		return api.GetAppdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("application", r.Id)}, nil
 	}
-	writeJSON(w, http.StatusOK, a)
+	var out api.GetApp200JSONResponse
+	err := out.FromApp(a.wire())
+	return out, err
 }
 
-func (s *server) getJob(w http.ResponseWriter, r *http.Request) {
-	j, ok := s.w.job(r.PathValue("id"))
+func (s *server) GetJob(_ context.Context, r api.GetJobRequestObject) (api.GetJobResponseObject, error) {
+	j, ok := s.w.job(r.Id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "job "+strconv.Quote(r.PathValue("id"))+" not found")
-		return
+		return api.GetJobdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("job", r.Id)}, nil
 	}
-	writeJSON(w, http.StatusOK, j)
+	return api.GetJob200JSONResponse(j.wire()), nil
 }
 
-func (s *server) launch(w http.ResponseWriter, r *http.Request) {
-	kind := r.PathValue("action")
+func (s *server) LaunchJob(_ context.Context, r api.LaunchJobRequestObject) (api.LaunchJobResponseObject, error) {
+	fail := func(code int, msg string) (api.LaunchJobResponseObject, error) {
+		return api.LaunchJobdefaultJSONResponse{StatusCode: code, Body: api.Error{Error: msg}}, nil
+	}
+	kind := r.Action
 	switch kind {
 	case "sync", "fail":
 	default:
-		writeErr(w, http.StatusNotFound, "no such action "+strconv.Quote(kind))
-		return
+		return fail(http.StatusNotFound, "no such action "+strconv.Quote(kind))
 	}
-	id := r.PathValue("id")
-	q := r.URL.Query()
+	p := r.Params
 	o := launchOpts{
-		reconcile: duration(q.Get("reconcile")),
-		blackhole: q.Get("blackhole") == "1" || q.Get("blackhole") == "true",
-		say:       q.Get("say"),
+		reconcile: duration(deref(p.Reconcile)),
+		blackhole: deref(p.Blackhole),
+		say:       deref(p.Say),
 		duration:  -1,
 	}
-	if v := q.Get("phases"); v != "" {
-		o.phases = strings.Split(v, ",")
+	if p.Phases != nil {
+		o.phases = *p.Phases
 	}
-	if v := q.Get("takes"); v != "" {
-		o.duration = duration(v)
+	if p.Takes != nil {
+		o.duration = duration(*p.Takes)
 	}
-	j, err := s.w.launch(id, kind, o)
+	j, err := s.w.launch(r.Id, kind, o)
 	switch {
 	case errors.Is(err, ErrNoSuchApp):
-		writeErr(w, http.StatusNotFound, "application "+strconv.Quote(id)+" not found")
-		return
+		return fail(http.StatusNotFound, "application "+strconv.Quote(r.Id)+" not found")
 	case errors.Is(err, ErrBusy):
 		// 409, not 202. A client that asked at the same moment as a schedule
 		// has to learn it lost, and this is the only place that can know.
-		writeErr(w, http.StatusConflict,
-			"application "+strconv.Quote(id)+" already has an operation in progress")
-		return
+		return fail(http.StatusConflict,
+			"application "+strconv.Quote(r.Id)+" already has an operation in progress")
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
+		return fail(http.StatusInternalServerError, err.Error())
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"job": j.ID})
+	return api.LaunchJob202JSONResponse{Job: j.ID}, nil
 }
 
-// listJobs is the busy set as its own collection — the shape of an operations
+// ListJobs is the busy set as its own collection — the shape of an operations
 // endpoint, as opposed to a status field on each row. ?status=running is what
 // a screen deriving its indicators from this rather than from the app list
 // would ask for.
-func (s *server) listJobs(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	jobs := s.w.listJobs(q.Get("app"))
-	if want := q.Get("status"); want != "" {
-		kept := jobs[:0]
-		for _, j := range jobs {
-			if j.Status == want {
-				kept = append(kept, j)
-			}
+func (s *server) ListJobs(_ context.Context, r api.ListJobsRequestObject) (api.ListJobsResponseObject, error) {
+	jobs := s.w.listJobs(deref(r.Params.App))
+	out := api.ListJobs200JSONResponse{}
+	for _, j := range jobs {
+		if r.Params.Status != nil && j.Status != string(*r.Params.Status) {
+			continue
 		}
-		jobs = kept
+		out = append(out, j.wire())
 	}
-	writeJSON(w, http.StatusOK, jobs)
+	return out, nil
+}
+
+type urlKey struct{}
+
+// withURL hands a handler the URL it was asked on. The strict interface gives
+// a handler typed parameters and nothing else, and DRF's next and previous
+// links are the request's own URL with the page changed — every parameter the
+// client sent, the failure knobs included.
+func withURL(f api.StrictHandlerFunc, _ string) api.StrictHandlerFunc {
+	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, req any) (any, error) {
+		return f(context.WithValue(ctx, urlKey{}, *r.URL), w, r, req)
+	}
+}
+
+func requestURL(ctx context.Context) url.URL {
+	u, _ := ctx.Value(urlKey{}).(url.URL)
+	return u
+}
+
+// abandoned answers a request whose client has gone: it writes nothing, as a
+// handler that returned without a response would.
+type abandoned struct{}
+
+func (abandoned) VisitGetAppResponse(http.ResponseWriter) error    { return nil }
+func (abandoned) VisitGetJobLogResponse(http.ResponseWriter) error { return nil }
+
+func notFound(what, id string) api.Error {
+	return api.Error{Error: what + " " + strconv.Quote(id) + " not found"}
+}
+
+func deref[T any](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -461,7 +492,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // that is what a screen has to learn to handle; a typed Go error would be a
 // nicer API and would teach the wrong lesson.
 func writeErr(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]string{"error": msg})
+	writeJSON(w, code, api.Error{Error: msg})
 }
 
 func atoi(s string, def int) int {

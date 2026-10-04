@@ -1,11 +1,14 @@
 package demoapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jsdrews/tuilib/demoapi/api"
 )
 
 // describe is the detail document: nested several levels deep, with arrays of
@@ -13,62 +16,51 @@ import (
 //
 // A flat map would exercise neither — both components exist for the shape
 // where a value is itself a document.
-func describe(a App, jobs []Job) map[string]any {
-	history := make([]any, 0, 5)
+func describe(a App, jobs []Job) api.AppDetail {
+	history := make([]api.AppDetail_Status_History, 0, 5)
 	for i, j := range jobs {
 		if i == 5 {
 			break
 		}
-		entry := map[string]any{
-			"id":      j.ID,
-			"kind":    j.Kind,
-			"status":  j.Status,
-			"started": j.Started.UTC().Format(time.RFC3339),
-		}
-		if !j.Finished.IsZero() {
-			entry["finished"] = j.Finished.UTC().Format(time.RFC3339)
-		}
-		history = append(history, entry)
+		history = append(history, api.AppDetail_Status_History{
+			Id:       j.ID,
+			Kind:     api.JobKind(j.Kind),
+			Status:   api.JobStatus(j.Status),
+			Started:  j.Started.UTC().Truncate(time.Second),
+			Finished: optionalTime(j.Finished.UTC().Truncate(time.Second)),
+		})
 	}
 
-	return map[string]any{
-		"metadata": map[string]any{
-			"id":     a.ID,
-			"name":   a.Name,
-			"region": a.Region,
-			"labels": map[string]any{
-				"app.kubernetes.io/name":       a.Name,
-				"app.kubernetes.io/managed-by": "demoapi",
-			},
-		},
-		"spec": map[string]any{
-			"source": map[string]any{
-				"repoURL":        "https://git.example.test/" + a.Name + ".git",
-				"path":           "deploy/overlays/" + a.Region,
-				"targetRevision": "main",
-			},
-			"destination": map[string]any{
-				"server":    "https://k8s." + a.Region + ".example.test",
-				"namespace": a.Name,
-			},
-			"syncPolicy": map[string]any{
-				"automated": map[string]any{"prune": true, "selfHeal": false},
-				"retry":     map[string]any{"limit": 3, "backoff": "5s"},
-			},
-		},
-		"status": map[string]any{
-			"sync":           map[string]any{"status": a.Sync, "revision": strconv.FormatInt(a.Rev, 10)},
-			"health":         map[string]any{"status": a.Health},
-			"operationState": map[string]any{"phase": a.Phase},
-			"reconciledAt":   a.ReconciledAt.UTC().Format(time.RFC3339),
-			"resources": []any{
-				map[string]any{"kind": "Deployment", "name": a.Name, "status": a.Sync},
-				map[string]any{"kind": "Service", "name": a.Name, "status": SyncSynced},
-				map[string]any{"kind": "ConfigMap", "name": a.Name + "-config", "status": a.Sync},
-			},
-			"history": history,
+	var d api.AppDetail
+	d.Metadata = api.AppDetail_Metadata{
+		Id: a.ID, Name: a.Name, Region: a.Region,
+		Labels: map[string]string{
+			"app.kubernetes.io/name":       a.Name,
+			"app.kubernetes.io/managed-by": "demoapi",
 		},
 	}
+	d.Spec.Source = api.AppDetail_Spec_Source{
+		RepoURL:        "https://git.example.test/" + a.Name + ".git",
+		Path:           "deploy/overlays/" + a.Region,
+		TargetRevision: "main",
+	}
+	d.Spec.Destination = api.AppDetail_Spec_Destination{
+		Server:    "https://k8s." + a.Region + ".example.test",
+		Namespace: a.Name,
+	}
+	d.Spec.SyncPolicy.Automated = api.AppDetail_Spec_SyncPolicy_Automated{Prune: true, SelfHeal: false}
+	d.Spec.SyncPolicy.Retry = api.AppDetail_Spec_SyncPolicy_Retry{Limit: 3, Backoff: "5s"}
+	d.Status.Sync = api.AppDetail_Status_Sync{Status: api.SyncStatus(a.Sync), Revision: strconv.FormatInt(a.Rev, 10)}
+	d.Status.Health.Status = a.Health
+	d.Status.OperationState.Phase = a.Phase
+	d.Status.ReconciledAt = a.ReconciledAt.UTC().Truncate(time.Second)
+	d.Status.Resources = []api.AppDetail_Status_Resources{
+		{Kind: "Deployment", Name: a.Name, Status: api.SyncStatus(a.Sync)},
+		{Kind: "Service", Name: a.Name, Status: SyncSynced},
+		{Kind: "ConfigMap", Name: a.Name + "-config", Status: api.SyncStatus(a.Sync)},
+	}
+	d.Status.History = history
+	return d
 }
 
 // logLines is what a job writes. Enough of them that a screen has to scroll.
@@ -93,44 +85,53 @@ var logLines = []string{
 	"sync operation complete",
 }
 
-// jobLog streams the job's output while it runs, then closes.
+// GetJobLog streams the job's output while it runs, then closes.
 //
 // Chunked and flushed per line, deliberately: it is the only endpoint whose
 // point is partial arrival. A screen consuming it has to handle lines showing
 // up over time, which is what logview's MaxLines cap and the chained-read
 // pattern of rule 12 are for — and what a buffered response would silently let
-// it skip.
-func (s *server) jobLog(w http.ResponseWriter, r *http.Request) {
-	j, ok := s.w.job(r.PathValue("id"))
+// it skip. The spec's generated text response is a whole string, so the stream
+// is its own response type.
+func (s *server) GetJobLog(ctx context.Context, r api.GetJobLogRequestObject) (api.GetJobLogResponseObject, error) {
+	j, ok := s.w.job(r.Id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "job "+strconv.Quote(r.PathValue("id"))+" not found")
-		return
+		return api.GetJobLogdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: notFound("job", r.Id)}, nil
 	}
-
-	rate := duration(r.URL.Query().Get("rate"))
+	rate := duration(deref(r.Params.Rate))
 	if rate <= 0 {
 		rate = 150 * time.Millisecond
 	}
+	return logStream{ctx: ctx, job: j, rate: rate}, nil
+}
 
+type logStream struct {
+	ctx  context.Context
+	job  Job
+	rate time.Duration
+}
+
+func (l logStream) VisitGetJobLogResponse(w http.ResponseWriter) error {
 	flusher, canFlush := w.(http.Flusher)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
 	for i, line := range logLines {
 		select {
-		case <-r.Context().Done():
-			return
-		case <-time.After(rate):
+		case <-l.ctx.Done():
+			return nil
+		case <-time.After(l.rate):
 		}
-		fmt.Fprintln(w, strings.ReplaceAll(line, "{app}", j.App))
+		fmt.Fprintln(w, strings.ReplaceAll(line, "{app}", l.job.App))
 		if canFlush {
 			flusher.Flush()
 		}
-		if i == len(logLines)-1 && j.fails {
-			fmt.Fprintf(w, "error: rpc error: application %q not found\n", j.App)
+		if i == len(logLines)-1 && l.job.fails {
+			fmt.Fprintf(w, "error: rpc error: application %q not found\n", l.job.App)
 			if canFlush {
 				flusher.Flush()
 			}
 		}
 	}
+	return nil
 }

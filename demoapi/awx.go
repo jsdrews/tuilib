@@ -1,13 +1,15 @@
 package demoapi
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jsdrews/tuilib/demoapi/api"
 )
 
 // # AWX job events
@@ -61,20 +63,6 @@ type awxJob struct {
 	live   bool
 }
 
-type awxEvent struct {
-	ID        int    `json:"id"`
-	Counter   int    `json:"counter"`
-	Event     string `json:"event"`
-	Stdout    string `json:"stdout"`
-	HostName  string `json:"host_name"`
-	Task      string `json:"task"`
-	Failed    bool   `json:"failed"`
-	Changed   bool   `json:"changed"`
-	StartLine int    `json:"start_line"`
-	EndLine   int    `json:"end_line"`
-	Created   string `json:"created"`
-}
-
 var (
 	awxHosts = []string{"web-1", "web-2", "db-1", "cache-1"}
 	awxTasks = []string{"Gathering Facts", "install packages", "render config", "restart service", "wait for health"}
@@ -89,8 +77,7 @@ func (s *server) awxJobs() []awxJob {
 	}
 }
 
-func (s *server) awxJob(id string) (awxJob, bool) {
-	n, _ := strconv.Atoi(strings.TrimSuffix(id, "/"))
+func (s *server) awxJob(n int) (awxJob, bool) {
 	for _, j := range s.awxJobs() {
 		if j.id == n {
 			return j, true
@@ -145,11 +132,11 @@ func (j awxJob) status(now time.Time) (status string, processed bool) {
 
 // awxEventOf is event n of job j: a task header every five, a result per
 // host otherwise, a failure now and then, and some with no output at all.
-func awxEventOf(j awxJob, n int) awxEvent {
+func awxEventOf(j awxJob, n int) api.AwxEvent {
 	task := awxTasks[(n/5)%len(awxTasks)]
 	host := awxHosts[n%len(awxHosts)]
-	e := awxEvent{ID: j.id*100000 + n, Counter: n, Task: task, HostName: host,
-		Created: j.emittedAt(n).UTC().Format(time.RFC3339Nano)}
+	e := api.AwxEvent{Id: j.id*100000 + n, Counter: n, Task: task, HostName: host,
+		Created: j.emittedAt(n).UTC()}
 	switch {
 	case n%5 == 0:
 		e.Event, e.HostName = "playbook_on_task_start", ""
@@ -174,65 +161,65 @@ func awxEventOf(j awxJob, n int) awxEvent {
 	return e
 }
 
-func (s *server) awxListJobs(w http.ResponseWriter, r *http.Request) {
+func (s *server) AwxListJobs(context.Context, api.AwxListJobsRequestObject) (api.AwxListJobsResponseObject, error) {
 	now := s.w.now()
-	var out []map[string]any
+	out := api.AwxListJobs200JSONResponse{Results: []api.AwxJob{}}
 	for _, j := range s.awxJobs() {
-		out = append(out, s.awxJobJSON(j, now))
+		out.Results = append(out.Results, j.wire(now))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"count": len(out), "next": nil, "previous": nil, "results": out})
+	out.Count = len(out.Results)
+	return out, nil
 }
 
-func (s *server) awxGetJob(w http.ResponseWriter, r *http.Request) {
-	j, ok := s.awxJob(r.PathValue("id"))
+func (s *server) AwxGetJob(_ context.Context, r api.AwxGetJobRequestObject) (api.AwxGetJobResponseObject, error) {
+	j, ok := s.awxJob(r.Id)
 	if !ok {
-		writeErr(w, http.StatusNotFound, "Not found.")
-		return
+		return api.AwxGetJobdefaultJSONResponse{StatusCode: http.StatusNotFound, Body: api.Error{Error: "Not found."}}, nil
 	}
-	writeJSON(w, http.StatusOK, s.awxJobJSON(j, s.w.now()))
+	return api.AwxGetJob200JSONResponse(j.wire(s.w.now())), nil
 }
 
-func (s *server) awxJobJSON(j awxJob, now time.Time) map[string]any {
+func (j awxJob) wire(now time.Time) api.AwxJob {
 	status, processed := j.status(now)
-	out := map[string]any{
-		"id": j.id, "name": j.name, "status": status,
-		"started":                   j.started.UTC().Format(time.RFC3339),
-		"event_processing_finished": processed,
+	out := api.AwxJob{
+		Id: j.id, Name: j.name, Status: api.AwxJobStatus(status),
+		Started:                 j.started.UTC().Truncate(time.Second),
+		EventProcessingFinished: processed,
 	}
 	if status != "running" {
-		out["finished"] = j.finishedAt().UTC().Format(time.RFC3339)
+		out.Finished = optionalTime(j.finishedAt().UTC().Truncate(time.Second))
 	}
 	return out
 }
 
-// awxEvents answers GET /api/v2/jobs/{id}/job_events/.
-func (s *server) awxEvents(w http.ResponseWriter, r *http.Request) {
-	j, ok := s.awxJob(r.PathValue("id"))
-	if !ok {
-		writeErr(w, http.StatusNotFound, "Not found.")
-		return
+// AwxListJobEvents answers GET /api/v2/jobs/{id}/job_events/.
+func (s *server) AwxListJobEvents(ctx context.Context, r api.AwxListJobEventsRequestObject) (api.AwxListJobEventsResponseObject, error) {
+	fail := func(code int, msg string) (api.AwxListJobEventsResponseObject, error) {
+		return api.AwxListJobEventsdefaultJSONResponse{StatusCode: code, Body: api.Error{Error: msg}}, nil
 	}
-	q := r.URL.Query()
+	j, ok := s.awxJob(r.Id)
+	if !ok {
+		return fail(http.StatusNotFound, "Not found.")
+	}
+	p := r.Params
 	now := s.w.now()
 
 	lo, hi := 1, j.emitted(now)
-	bound := func(key string, adj int, lower bool) {
-		if v := q.Get(key); v != "" {
-			n := atoi(v, 0) + adj
-			if lower {
-				lo = max(lo, n)
-			} else {
-				hi = min(hi, n)
-			}
-		}
+	if p.CounterGt != nil {
+		lo = max(lo, *p.CounterGt+1)
 	}
-	bound("counter__gt", 1, true)
-	bound("counter__gte", 0, true)
-	bound("counter__lt", -1, false)
-	bound("counter__lte", 0, false)
+	if p.CounterGte != nil {
+		lo = max(lo, *p.CounterGte)
+	}
+	if p.CounterLt != nil {
+		hi = min(hi, *p.CounterLt-1)
+	}
+	if p.CounterLte != nil {
+		hi = min(hi, *p.CounterLte)
+	}
 
-	match := awxFilter(q)
-	var hits []awxEvent
+	match := awxFilter(p)
+	var hits []api.AwxEvent
 	for n := lo; n <= hi; n++ {
 		if !j.saved(n, now) {
 			continue
@@ -241,61 +228,65 @@ func (s *server) awxEvents(w http.ResponseWriter, r *http.Request) {
 			hits = append(hits, e)
 		}
 	}
-	switch q.Get("order_by") {
-	case "-counter":
+	switch deref(p.OrderBy) {
+	case api.AwxListJobEventsParamsOrderByMinusCounter:
 		sort.Slice(hits, func(a, b int) bool { return hits[a].Counter > hits[b].Counter })
-	case "", "counter":
+	case "", api.AwxListJobEventsParamsOrderByCounter:
 	default:
 		// AWX's default order is start_line, which has ties; a client
 		// should always ask for counter. Anything else is refused here
 		// rather than silently ordered some other way.
-		writeErr(w, http.StatusBadRequest, "order_by: only counter and -counter are supported")
-		return
+		return fail(http.StatusBadRequest, "order_by: only counter and -counter are supported")
 	}
 
-	size := atoi(q.Get("page_size"), 25)
+	size := 25
+	if p.PageSize != nil {
+		size = *p.PageSize
+	}
 	size = max(1, min(size, awxMaxPageSize))
-	page := max(1, atoi(q.Get("page"), 1))
+	page := 1
+	if p.Page != nil {
+		page = max(1, *p.Page)
+	}
 	from := (page - 1) * size
 	if from > len(hits) && len(hits) > 0 {
-		writeErr(w, http.StatusNotFound, "Invalid page.")
-		return
+		return fail(http.StatusNotFound, "Invalid page.")
 	}
 	to := min(len(hits), from+size)
 	results := hits[min(from, to):to]
 	if results == nil {
-		results = []awxEvent{}
+		results = []api.AwxEvent{}
 	}
-	link := func(p int) any {
-		u := *r.URL
+	link := func(n int) *string {
+		u := requestURL(ctx)
 		v := u.Query()
-		v.Set("page", strconv.Itoa(p))
+		v.Set("page", strconv.Itoa(n))
 		u.RawQuery = v.Encode()
-		return u.String()
+		s := u.String()
+		return &s
 	}
-	var next, prev any
+	out := api.AwxListJobEvents200JSONResponse{Count: len(hits), Results: results}
 	if to < len(hits) {
-		next = link(page + 1)
+		out.Next = link(page + 1)
 	}
 	if page > 1 {
-		prev = link(page - 1)
+		out.Previous = link(page - 1)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"count": len(hits), "next": next, "previous": prev, "results": results})
+	return out, nil
 }
 
 // awxFilter builds the predicate for the query's event filters.
-func awxFilter(q url.Values) func(awxEvent) bool {
-	text := strings.ToLower(q.Get("stdout__icontains"))
-	task := strings.ToLower(q.Get("task__icontains"))
-	host := q.Get("host_name")
-	failed, changed := q.Get("failed"), q.Get("changed")
-	return func(e awxEvent) bool {
+func awxFilter(p api.AwxListJobEventsParams) func(api.AwxEvent) bool {
+	text := strings.ToLower(deref(p.StdoutIcontains))
+	task := strings.ToLower(deref(p.TaskIcontains))
+	host := deref(p.HostName)
+	return func(e api.AwxEvent) bool {
 		switch {
 		case text != "" && !strings.Contains(strings.ToLower(e.Stdout), text):
 		case task != "" && !strings.Contains(strings.ToLower(e.Task), task):
 		case host != "" && e.HostName != host:
-		case failed != "" && strconv.FormatBool(e.Failed) != strings.ToLower(failed):
-		case changed != "" && strconv.FormatBool(e.Changed) != strings.ToLower(changed):
+		case p.Failed != nil && e.Failed != *p.Failed:
+		case p.Changed != nil && e.Changed != *p.Changed:
 		default:
 			return true
 		}

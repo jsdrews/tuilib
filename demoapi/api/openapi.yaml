@@ -1,0 +1,718 @@
+openapi: 3.0.3
+info:
+  title: demoapi
+  version: 1.0.0
+  description: |
+    A fake API to build TUIs against. Applications shaped like Argo CD's,
+    jobs that run against them, AWX-shaped job events, and an
+    Elasticsearch-shaped log index. See the demoapi package doc.
+
+    Paging, filtering and sorting are plain parameters. Nothing here
+    declares how a client should page: that belongs to the client (for a
+    tuilib app, its design file), not to the spec.
+
+    Every operation honours the failure knobs ?latency=, ?fail= and
+    ?flaky=, applied before routing.
+
+    It is a fixture. It has no authentication. Do not deploy it.
+servers:
+  - url: http://127.0.0.1:8099
+
+paths:
+  /apps:
+    parameters:
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: listApps
+      summary: List applications, filtered, sorted and windowed.
+      description: |
+        Offset paging with the total in the body. `q` takes pkg/query's
+        grammar whole; a parameter named after a column scopes to it. Both
+        are AND-ed.
+      parameters:
+        - {name: q, in: query, schema: {type: string}, description: "pkg/query filter grammar: bare substrings, key:value column scopes, ~regex."}
+        - {name: name, in: query, schema: {type: string}}
+        - {name: region, in: query, schema: {type: string}}
+        - {name: sync, in: query, schema: {type: string}}
+        - {name: health, in: query, schema: {type: string}}
+        - {name: phase, in: query, schema: {type: string}}
+        - name: sort
+          in: query
+          description: Column to sort by (Name, Region, Sync, Health, Phase). Any prefix of a title, case-insensitive.
+          schema: {type: string}
+        - {name: desc, in: query, schema: {type: boolean}}
+        - {name: offset, in: query, schema: {type: integer, minimum: 0, default: 0}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 0, default: 100}, description: "0 means every remaining row."}
+        - $ref: "#/components/parameters/stale"
+      responses:
+        "200":
+          description: One window of the filtered, sorted set.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AppPage"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /apps/facets:
+    parameters:
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: listFacets
+      summary: Every distinct value of a column, across the whole set.
+      parameters:
+        - name: field
+          in: query
+          required: true
+          description: Column title or prefix.
+          schema: {type: string}
+      responses:
+        "200":
+          description: The distinct values, sorted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Facets"}
+        "400": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /apps/{id}:
+    parameters:
+      - $ref: "#/components/parameters/appID"
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: getApp
+      summary: One application's detail document, or a blocking refresh.
+      description: |
+        Without `refresh`, answers the nested detail document. With it,
+        holds the connection until the server has re-compared the app, then
+        answers the flat App — the shape activity.Held exists for.
+      parameters:
+        - name: refresh
+          in: query
+          description: Any non-empty value (Argo sends "normal") makes this a blocking refresh.
+          schema: {type: string}
+        - name: takes
+          in: query
+          description: How long a refresh holds the connection. Duration or bare milliseconds.
+          schema: {type: string}
+        - $ref: "#/components/parameters/stale"
+      responses:
+        "200":
+          description: AppDetail without refresh, App with it.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AppDetail"
+                  - $ref: "#/components/schemas/App"
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /apps/{id}/{action}:
+    parameters:
+      - $ref: "#/components/parameters/appID"
+      - name: action
+        in: path
+        required: true
+        schema: {type: string, enum: [sync, fail]}
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    post:
+      operationId: launchJob
+      summary: Start an operation against an application.
+      description: Fire-and-observe. Answers 202 with a job id at once; the app's phase says Running.
+      parameters:
+        - {name: reconcile, in: query, schema: {type: string}, description: "Delay before the app reports the job. Duration or bare milliseconds."}
+        - {name: blackhole, in: query, schema: {type: boolean}, description: "Accept, return an id, start nothing."}
+        - {name: say, in: query, schema: {type: string}, description: "The phase the app reports while the job runs."}
+        - name: phases
+          in: query
+          description: Phases walked in order across the job's duration.
+          style: form
+          explode: false
+          schema: {type: array, items: {type: string}}
+        - {name: takes, in: query, schema: {type: string}, description: "How long the work runs. Duration or bare milliseconds."}
+      responses:
+        "202":
+          description: Accepted.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Launched"}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /jobs:
+    parameters:
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: listJobs
+      summary: Jobs, newest first.
+      parameters:
+        - {name: app, in: query, schema: {type: string}, description: "Only this application's jobs."}
+        - name: status
+          in: query
+          schema: {$ref: "#/components/schemas/JobStatus"}
+      responses:
+        "200":
+          description: The jobs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/Job"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /jobs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/jobID"
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: getJob
+      summary: One job, by the id a launch returned.
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /jobs/{id}/log:
+    parameters:
+      - $ref: "#/components/parameters/jobID"
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: getJobLog
+      summary: The job's output, streamed a line at a time, then closed.
+      parameters:
+        - {name: rate, in: query, schema: {type: string}, description: "Delay between lines. Duration or bare milliseconds; default 150ms."}
+      responses:
+        "200":
+          description: Chunked plain text, flushed per line.
+          content:
+            text/plain:
+              schema: {type: string}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /api/v2/jobs/:
+    parameters:
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: awxListJobs
+      summary: AWX-shaped job list.
+      responses:
+        "200":
+          description: Every job, in one page.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AwxJobList"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /api/v2/jobs/{id}/:
+    parameters:
+      - $ref: "#/components/parameters/awxJobID"
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: awxGetJob
+      summary: One AWX-shaped job.
+      responses:
+        "200":
+          description: The job.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AwxJob"}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /api/v2/jobs/{id}/job_events/:
+    parameters:
+      - $ref: "#/components/parameters/awxJobID"
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    get:
+      operationId: awxListJobEvents
+      summary: A job's events, by counter range or by page.
+      description: |
+        Counter ranges are seekable: counters are gapless at the source, but
+        a running job saves some late, so a range read now can miss one the
+        next read has. The highest counter is the total; count is not.
+        Page mode is DRF's envelope, page_size capped at 200.
+      parameters:
+        - {name: counter__gt, in: query, schema: {type: integer}}
+        - {name: counter__gte, in: query, schema: {type: integer}}
+        - {name: counter__lt, in: query, schema: {type: integer}}
+        - {name: counter__lte, in: query, schema: {type: integer}}
+        - name: order_by
+          in: query
+          schema: {type: string, enum: [counter, -counter], default: counter}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: page_size, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 25}, description: "Larger is clamped to 200, not refused."}
+        - {name: stdout__icontains, in: query, schema: {type: string}}
+        - {name: task__icontains, in: query, schema: {type: string}}
+        - {name: host_name, in: query, schema: {type: string}}
+        - {name: failed, in: query, schema: {type: boolean}}
+        - {name: changed, in: query, schema: {type: boolean}}
+      responses:
+        "200":
+          description: One page of matching events.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AwxEventPage"}
+        "400": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /logs-app/_search:
+    parameters:
+      - $ref: "#/components/parameters/latency"
+      - $ref: "#/components/parameters/fail"
+      - $ref: "#/components/parameters/flaky"
+    post:
+      operationId: esSearch
+      summary: Elasticsearch-shaped search over one growing log index.
+      description: |
+        from + size past 10,000 is refused; deep data is reachable only with
+        search_after, which needs the @timestamp + _shard_doc sort.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/EsSearchRequest"}
+      responses:
+        "200":
+          description: One page of hits.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EsSearchResult"}
+        "400":
+          description: A request Elasticsearch would refuse.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EsError"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /chaos/down:
+    post:
+      operationId: chaosDown
+      summary: Refuse every read for a window. Exempt from the outage itself.
+      parameters:
+        - name: for
+          in: query
+          description: How long. Duration or bare milliseconds; 0 ends an outage early.
+          schema: {type: string}
+      responses:
+        "200":
+          description: The outage is set.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Down"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /chaos/delete/{id}:
+    parameters:
+      - $ref: "#/components/parameters/appID"
+    post:
+      operationId: chaosDelete
+      summary: Remove an application from the set.
+      responses:
+        "200":
+          description: Removed.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Deleted"}
+        "404": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+  /chaos/spawn:
+    post:
+      operationId: chaosSpawn
+      summary: Add an application.
+      parameters:
+        - {name: id, in: query, required: true, schema: {type: string}, description: "May reuse an id something else had."}
+        - {name: busy, in: query, schema: {type: boolean}, description: "Arrive already working."}
+      responses:
+        "201":
+          description: Added.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/App"}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        default: {$ref: "#/components/responses/Error"}
+
+components:
+  parameters:
+    latency:
+      name: latency
+      in: query
+      description: Hold the request this long before answering. Duration or bare milliseconds.
+      schema: {type: string}
+    fail:
+      name: fail
+      in: query
+      description: Answer with this status code (>= 400) instead.
+      schema: {type: integer}
+    flaky:
+      name: flaky
+      in: query
+      description: Probability (0–1) of answering 502.
+      schema: {type: number}
+    stale:
+      name: stale
+      in: query
+      description: Read as a replica lagging this far behind would. Duration or bare milliseconds.
+      schema: {type: string}
+    appID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    jobID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    awxJobID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer}
+
+  responses:
+    Error:
+      description: Any failure.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string}
+
+    App:
+      type: object
+      description: One application, shaped the way Argo CD reports one.
+      required: [id, name, region, sync, health, phase, reconciledAt, rev]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        region: {type: string}
+        sync:
+          $ref: "#/components/schemas/SyncStatus"
+        health: {type: string, description: "Healthy, Progressing or Degraded."}
+        phase:
+          type: string
+          description: |
+            The last operation's phase: empty before any, Running while one
+            runs, then Succeeded or Failed. Not an enum: ?say= and Vocab put
+            arbitrary values here on purpose.
+        reconciledAt: {type: string, format: date-time}
+        rev:
+          type: integer
+          format: int64
+          description: Moves whenever a job against this app completes.
+
+    SyncStatus:
+      type: string
+      description: A comparison, never an activity.
+      enum: [Synced, OutOfSync]
+
+    AppPage:
+      type: object
+      required: [total, offset, rows]
+      properties:
+        total: {type: integer, description: "Rows matching the filter, across every page."}
+        offset: {type: integer}
+        rows:
+          type: array
+          items: {$ref: "#/components/schemas/App"}
+
+    Facets:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: array
+          items: {type: string}
+
+    AppDetail:
+      type: object
+      description: The detail document, nested several levels deep.
+      required: [metadata, spec, status]
+      properties:
+        metadata:
+          type: object
+          required: [id, name, region, labels]
+          properties:
+            id: {type: string}
+            name: {type: string}
+            region: {type: string}
+            labels:
+              type: object
+              additionalProperties: {type: string}
+        spec:
+          type: object
+          required: [source, destination, syncPolicy]
+          properties:
+            source:
+              type: object
+              required: [repoURL, path, targetRevision]
+              properties:
+                repoURL: {type: string}
+                path: {type: string}
+                targetRevision: {type: string}
+            destination:
+              type: object
+              required: [server, namespace]
+              properties:
+                server: {type: string}
+                namespace: {type: string}
+            syncPolicy:
+              type: object
+              required: [automated, retry]
+              properties:
+                automated:
+                  type: object
+                  required: [prune, selfHeal]
+                  properties:
+                    prune: {type: boolean}
+                    selfHeal: {type: boolean}
+                retry:
+                  type: object
+                  required: [limit, backoff]
+                  properties:
+                    limit: {type: integer}
+                    backoff: {type: string}
+        status:
+          type: object
+          required: [sync, health, operationState, reconciledAt, resources, history]
+          properties:
+            sync:
+              type: object
+              required: [status, revision]
+              properties:
+                status: {$ref: "#/components/schemas/SyncStatus"}
+                revision: {type: string}
+            health:
+              type: object
+              required: [status]
+              properties:
+                status: {type: string}
+            operationState:
+              type: object
+              required: [phase]
+              properties:
+                phase: {type: string}
+            reconciledAt: {type: string, format: date-time}
+            resources:
+              type: array
+              items:
+                type: object
+                required: [kind, name, status]
+                properties:
+                  kind: {type: string}
+                  name: {type: string}
+                  status: {$ref: "#/components/schemas/SyncStatus"}
+            history:
+              type: array
+              description: The five most recent jobs, newest first.
+              items:
+                type: object
+                required: [id, kind, status, started]
+                properties:
+                  id: {type: string}
+                  kind: {$ref: "#/components/schemas/JobKind"}
+                  status: {$ref: "#/components/schemas/JobStatus"}
+                  started: {type: string, format: date-time}
+                  finished: {type: string, format: date-time}
+
+    JobKind:
+      type: string
+      enum: [sync, fail]
+
+    JobStatus:
+      type: string
+      enum: [running, succeeded, failed]
+
+    Job:
+      type: object
+      required: [id, app, kind, status, started]
+      properties:
+        id: {type: string}
+        app: {type: string}
+        kind: {$ref: "#/components/schemas/JobKind"}
+        status: {$ref: "#/components/schemas/JobStatus"}
+        started: {type: string, format: date-time}
+        finished: {type: string, format: date-time, description: "Absent while running."}
+
+    Launched:
+      type: object
+      required: [job]
+      properties:
+        job: {type: string, description: "The job's id, for GET /jobs/{id}."}
+
+    AwxJobStatus:
+      type: string
+      enum: [running, successful]
+
+    AwxJob:
+      type: object
+      required: [id, name, status, started, event_processing_finished]
+      properties:
+        id: {type: integer}
+        name: {type: string}
+        status: {$ref: "#/components/schemas/AwxJobStatus"}
+        started: {type: string, format: date-time}
+        finished: {type: string, format: date-time, description: "Absent while running."}
+        event_processing_finished:
+          type: boolean
+          description: Trails the job's status; events can still arrive after it finishes.
+
+    AwxJobList:
+      type: object
+      required: [count, next, previous, results]
+      properties:
+        count: {type: integer}
+        next: {type: string, nullable: true}
+        previous: {type: string, nullable: true}
+        results:
+          type: array
+          items: {$ref: "#/components/schemas/AwxJob"}
+
+    AwxEvent:
+      type: object
+      required: [id, counter, event, stdout, host_name, task, failed, changed, start_line, end_line, created]
+      properties:
+        id: {type: integer}
+        counter: {type: integer, description: "1-based, gapless at the source."}
+        event: {type: string, description: "playbook_on_task_start, runner_on_ok, runner_on_failed, runner_on_start, …"}
+        stdout: {type: string, description: "0–n lines; empty for some events."}
+        host_name: {type: string}
+        task: {type: string}
+        failed: {type: boolean}
+        changed: {type: boolean}
+        start_line: {type: integer}
+        end_line: {type: integer}
+        created: {type: string, format: date-time}
+
+    AwxEventPage:
+      type: object
+      required: [count, next, previous, results]
+      properties:
+        count: {type: integer, description: "Matching events saved so far — not the total for a running job."}
+        next: {type: string, nullable: true}
+        previous: {type: string, nullable: true}
+        results:
+          type: array
+          items: {$ref: "#/components/schemas/AwxEvent"}
+
+    EsSearchRequest:
+      type: object
+      properties:
+        size: {type: integer, description: "Default 10."}
+        from: {type: integer}
+        sort:
+          type: array
+          description: 'Exactly [{"@timestamp": order}, {"_shard_doc": order}], one direction.'
+          items:
+            type: object
+            additionalProperties: {}
+        search_after:
+          type: array
+          description: The sort values of the last hit.
+          items: {type: integer, format: int64}
+        query:
+          type: object
+          description: match_all, or query_string of terms joined by AND.
+          additionalProperties: {}
+        track_total_hits:
+          description: true counts exactly, false not at all, a number counts to it. Default 10,000.
+          oneOf:
+            - {type: boolean}
+            - {type: integer}
+
+    EsSearchResult:
+      type: object
+      required: [took, timed_out, hits]
+      properties:
+        took: {type: integer}
+        timed_out: {type: boolean}
+        hits:
+          type: object
+          required: [hits]
+          properties:
+            total:
+              type: object
+              required: [value, relation]
+              properties:
+                value: {type: integer}
+                relation: {type: string, enum: [eq, gte]}
+            hits:
+              type: array
+              items: {$ref: "#/components/schemas/EsHit"}
+
+    EsHit:
+      type: object
+      required: [_index, _id, _source, sort]
+      properties:
+        _index: {type: string}
+        _id: {type: string}
+        _source: {$ref: "#/components/schemas/LogDoc"}
+        sort:
+          type: array
+          items: {type: integer, format: int64}
+
+    LogDoc:
+      type: object
+      required: ["@timestamp", log.level, service.name, message]
+      properties:
+        "@timestamp": {type: string, format: date-time, x-go-name: Timestamp}
+        log.level: {type: string, x-go-name: Level}
+        service.name: {type: string, x-go-name: Service}
+        message: {type: string}
+
+    EsError:
+      type: object
+      required: [error, status]
+      properties:
+        error:
+          type: object
+          required: [type, reason]
+          properties:
+            type: {type: string}
+            reason: {type: string}
+        status: {type: integer}
+
+    Down:
+      type: object
+      required: [down_for]
+      properties:
+        down_for: {type: string}
+
+    Deleted:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: {type: string}

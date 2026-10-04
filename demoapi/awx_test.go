@@ -4,14 +4,11 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/jsdrews/tuilib/demoapi/api"
 )
 
-type awxPage struct {
-	Count    int        `json:"count"`
-	Next     *string    `json:"next"`
-	Previous *string    `json:"previous"`
-	Results  []awxEvent `json:"results"`
-}
+type awxPage = api.AwxEventPage
 
 func newAWX(t *testing.T) (*http.Client, *clock) {
 	t.Helper()

@@ -134,3 +134,29 @@ _Avoid_: tail, live mode, auto-scroll
 **Probe**:
 A follow poll made while the user is not following: it learns how much is new without fetching it into view.
 _Avoid_: peek, count query
+
+### Building apps
+
+**App**:
+What the skills produce: one binary the user owns, with a CLI over the data and a TUI that visualizes it, both reading through the same client.
+_Avoid_: project, tool, generated app
+
+**Design file**:
+The app's structured description of what its data is, where it comes from, and which component shows it. Every stage reads it and writes its own section. It is the only thing carried between stages.
+_Avoid_: config, spec, manifest
+
+**Origin**:
+Where an app's data comes from: an OpenAPI service, a REST service without a spec, a subprocess, or a Kubernetes cluster.
+_Avoid_: source (a `pkg/source` coordinator is something else), backend, provider
+
+**Sink**:
+The component an entity's data is shown in, chosen by the user from the components legal for the entity's shape.
+_Avoid_: view, widget, renderer
+
+**Stub**:
+A hand-written file the generator creates once and never touches again, holding the code only the app's author can know: a fetch body, a row mapping, a verb.
+_Avoid_: hook, override, user code
+
+**Golden app**:
+The hand-written reference for exactly what the generator should emit, which every generator change is checked against.
+_Avoid_: sample, example app

@@ -3,8 +3,9 @@
 Status: **implemented.** `demoapi` is in, with `cmd/demoapi` and `task
 server`; `examples/patterns/remote` and `examples/patterns/activity` are
 clients of it; and `internal/integration` holds the race tests that were the
-reason to build it. Stdlib only, plus `pkg/query` from this module, so `go.mod`
-gained nothing.
+reason to build it. Since #87 the wire contract is an OpenAPI spec,
+`demoapi/api/openapi.yaml`, served through oapi-codegen's strict server (see
+decision 2).
 
 The race tests were checked against deliberately broken code before being
 believed: removing `source.Deliver`'s generation check fails
@@ -85,6 +86,22 @@ it is reachable only by starting a process and talking to a port, which rules
 out the two uses that matter most — unit tests and examples.
 
 ### 2. Standard library only, and that is what keeps it in the main module.
+
+**Superseded by #87.** `demoapi` is now generated from
+`demoapi/api/openapi.yaml`: oapi-codegen writes package `api` (models, a typed
+client, and the strict server interface), and `demoapi` implements it. That
+costs one third-party import, `github.com/oapi-codegen/runtime` (plus
+`google/uuid` and `go-jsonmerge`), and it stays in the main module anyway,
+because the argument below overstates the cost. Since Go 1.17 the module graph
+is pruned. A program that imports tuilib but not `demoapi` never fetches,
+compiles or lists those modules: a scratch consumer importing only `pkg/table`
+has none of them in its `go.mod`, its `go.sum`, or `go list -deps`. At most, a
+consumer of a tagged release records their `go.mod` checksums. The generator
+runs through `go run …@v2.8.0` from a `//go:generate` line, so it is not a
+requirement at all. Regenerate with `task generate`, and CI fails when the
+generated code is stale.
+
+The original reasoning follows.
 
 The cost of a package in the main module is not compile time — Go builds only
 what is imported — and it is not binary size. It is **`go.mod`**. Anything

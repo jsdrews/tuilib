@@ -1,12 +1,14 @@
 package demoapi
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jsdrews/tuilib/demoapi/api"
 )
 
 // # Elasticsearch search
@@ -109,61 +111,46 @@ func (s *server) esCount(now time.Time) int {
 	return max(esSeeded, n)
 }
 
-type esRequest struct {
-	Size           *int             `json:"size"`
-	From           int              `json:"from"`
-	Sort           []map[string]any `json:"sort"`
-	SearchAfter    []float64        `json:"search_after"`
-	Query          map[string]any   `json:"query"`
-	TrackTotalHits any              `json:"track_total_hits"`
-}
-
-type esHit struct {
-	Index  string         `json:"_index"`
-	ID     string         `json:"_id"`
-	Source map[string]any `json:"_source"`
-	Sort   []int64        `json:"sort"`
-}
-
 func esErr(w http.ResponseWriter, code int, kind, reason string) {
-	writeJSON(w, code, map[string]any{
-		"error":  map[string]any{"type": kind, "reason": reason},
-		"status": code,
-	})
+	writeJSON(w, code, esError(code, kind, reason))
 }
 
-// esSearch answers POST /logs-app/_search.
-func (s *server) esSearch(w http.ResponseWriter, r *http.Request) {
-	var req esRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err.Error() != "EOF" {
-		esErr(w, http.StatusBadRequest, "parse_exception", err.Error())
-		return
+func esError(code int, kind, reason string) api.EsError {
+	e := api.EsError{Status: code}
+	e.Error.Type, e.Error.Reason = kind, reason
+	return e
+}
+
+// EsSearch answers POST /logs-app/_search.
+func (s *server) EsSearch(_ context.Context, r api.EsSearchRequestObject) (api.EsSearchResponseObject, error) {
+	refuse := func(kind, reason string) (api.EsSearchResponseObject, error) {
+		return api.EsSearch400JSONResponse(esError(http.StatusBadRequest, kind, reason)), nil
 	}
-	size := 10
+	var req api.EsSearchRequest
+	if r.Body != nil {
+		req = *r.Body
+	}
+	size, from := 10, deref(req.From)
 	if req.Size != nil {
 		size = *req.Size
 	}
-	if req.From+size > esMaxWindow {
-		esErr(w, http.StatusBadRequest, "illegal_argument_exception",
+	if from+size > esMaxWindow {
+		return refuse("illegal_argument_exception",
 			fmt.Sprintf("Result window is too large, from + size must be less than or equal to: [%d] but was [%d]. See the scroll or search_after api for a more efficient way to request large data sets.",
-				esMaxWindow, req.From+size))
-		return
+				esMaxWindow, from+size))
 	}
 
-	desc, ok := esParseSort(req.Sort)
+	desc, ok := esParseSort(deref(req.Sort))
 	if !ok {
-		esErr(w, http.StatusBadRequest, "illegal_argument_exception",
+		return refuse("illegal_argument_exception",
 			`sort must be [{"@timestamp": order}, {"_shard_doc": order}] in one direction: @timestamp alone is not unique, and search_after would skip or repeat documents at page edges`)
-		return
 	}
-	if req.SearchAfter != nil && len(req.SearchAfter) != 2 {
-		esErr(w, http.StatusBadRequest, "illegal_argument_exception", "search_after must have one value per sort field")
-		return
+	if req.SearchAfter != nil && len(*req.SearchAfter) != 2 {
+		return refuse("illegal_argument_exception", "search_after must have one value per sort field")
 	}
-	match, err := esParseQuery(req.Query)
+	match, err := esParseQuery(deref(req.Query))
 	if err != nil {
-		esErr(w, http.StatusBadRequest, "query_shard_exception", err.Error())
-		return
+		return refuse("query_shard_exception", err.Error())
 	}
 
 	now := s.w.now()
@@ -188,7 +175,7 @@ func (s *server) esSearch(w http.ResponseWriter, r *http.Request) {
 	})
 	total := len(matched)
 	if req.SearchAfter != nil {
-		at, as := int64(req.SearchAfter[0]), int64(req.SearchAfter[1])
+		at, as := (*req.SearchAfter)[0], (*req.SearchAfter)[1]
 		cut := sort.Search(len(matched), func(i int) bool {
 			t, sq := key(matched[i])
 			if desc {
@@ -198,39 +185,42 @@ func (s *server) esSearch(w http.ResponseWriter, r *http.Request) {
 		})
 		matched = matched[cut:]
 	}
-	from := min(req.From, len(matched))
+	from = min(from, len(matched))
 	page := matched[from:min(len(matched), from+size)]
 
-	hits := make([]esHit, 0, len(page))
+	out := api.EsSearch200JSONResponse{Took: 1}
+	out.Hits.Hits = make([]api.EsHit, 0, len(page))
 	for _, d := range page {
 		t, sq := key(d)
-		hits = append(hits, esHit{
-			Index: "logs-app", ID: fmt.Sprintf("doc-%d", d.seq),
-			Source: map[string]any{
-				"@timestamp": d.ts.UTC().Format(time.RFC3339Nano), "log.level": d.level,
-				"service.name": d.service, "message": d.msg,
+		out.Hits.Hits = append(out.Hits.Hits, api.EsHit{
+			UnderscoreIndex: "logs-app",
+			UnderscoreId:    fmt.Sprintf("doc-%d", d.seq),
+			UnderscoreSource: api.LogDoc{
+				Timestamp: d.ts.UTC(), Level: d.level, Service: d.service, Message: d.msg,
 			},
 			Sort: []int64{t, sq},
 		})
 	}
-	out := map[string]any{"took": 1, "timed_out": false, "hits": map[string]any{"hits": hits}}
-	switch track := req.TrackTotalHits.(type) {
-	case bool:
-		if track {
-			out["hits"].(map[string]any)["total"] = map[string]any{"value": total, "relation": "eq"}
+
+	// track_total_hits: absent counts to 10,000, true counts exactly, false
+	// not at all, and a number counts to it.
+	limit, exact := esTrackDefault, false
+	if req.TrackTotalHits != nil {
+		if track, err := req.TrackTotalHits.AsEsSearchRequestTrackTotalHits0(); err == nil {
+			if !track {
+				return out, nil
+			}
+			exact = true
+		} else if n, err := req.TrackTotalHits.AsEsSearchRequestTrackTotalHits1(); err == nil {
+			limit = n
 		}
-	default:
-		limit := esTrackDefault
-		if f, ok := track.(float64); ok {
-			limit = int(f)
-		}
-		rel := "eq"
-		if total > limit {
-			total, rel = limit, "gte"
-		}
-		out["hits"].(map[string]any)["total"] = map[string]any{"value": total, "relation": rel}
 	}
-	writeJSON(w, http.StatusOK, out)
+	rel := api.EsSearchResultHitsTotalRelationEq
+	if !exact && total > limit {
+		total, rel = limit, api.EsSearchResultHitsTotalRelationGte
+	}
+	out.Hits.Total = &api.EsSearchResult_Hits_Total{Value: total, Relation: rel}
+	return out, nil
 }
 
 // esParseSort accepts exactly @timestamp then _shard_doc, one direction.

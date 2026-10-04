@@ -49,6 +49,17 @@ tasks:
       - task: test
       - task: test:integration
 
+  generate:
+    desc: Regenerate demoapi/api from demoapi/api/openapi.yaml
+    cmds:
+      - go generate ./demoapi/api
+
+  generate:check:
+    desc: Fail if demoapi/api is stale against its spec
+    cmds:
+      - go generate ./demoapi/api
+      - git diff --exit-code -- demoapi/api
+
   tidy:
     desc: go mod tidy
     cmds:
