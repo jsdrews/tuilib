@@ -1149,17 +1149,17 @@ func (m *Model) logEntry(src, text, body string, lvl output.Level) {
 func (m *Model) logQuery(msg tea.Msg) {
 	switch e := msg.(type) {
 	case source.QueryAnsweredMsg:
-		m.logEntry("", fmt.Sprintf("%s → answered in %s", queryLabel(e.Query), roundElapsed(e.Elapsed)), "", output.LevelInfo)
+		m.logEntry("", fmt.Sprintf("%s%s → answered in %s", sourcePrefix(e.Name), queryLabel(e.Query), roundElapsed(e.Elapsed)), "", output.LevelInfo)
 	case source.QueryCancelledMsg:
-		m.logEntry("", fmt.Sprintf("%s → cancelled, superseded by %s", queryLabel(e.Query), queryLabel(e.By)), "", output.LevelInfo)
+		m.logEntry("", fmt.Sprintf("%s%s → cancelled, superseded by %s", sourcePrefix(e.Name), queryLabel(e.Query), queryLabel(e.By)), "", output.LevelInfo)
 	case source.QueryRecoveredMsg:
-		m.logEntry("", fmt.Sprintf("%s → polls recovered", queryLabel(e.Query)), "", output.LevelInfo)
+		m.logEntry("", fmt.Sprintf("%s%s → polls recovered", sourcePrefix(e.Name), queryLabel(e.Query)), "", output.LevelInfo)
 	case source.QueryFailedMsg:
 		what := queryLabel(e.Query)
 		if e.Window {
 			what = fmt.Sprintf("rows %d–%d of %s", e.Query.Offset+1, e.Query.Offset+e.Query.Limit, what)
 		}
-		text := fmt.Sprintf("%s failed after %s: %v", what, roundElapsed(e.Elapsed), e.Err)
+		text := fmt.Sprintf("%s%s failed after %s: %v", sourcePrefix(e.Name), what, roundElapsed(e.Elapsed), e.Err)
 		var chain []string
 		for err := e.Err; err != nil; err = errors.Unwrap(err) {
 			chain = append(chain, err.Error())
@@ -1171,6 +1171,15 @@ func (m *Model) logQuery(msg tea.Msg) {
 		m.sb.SetError(text)
 		m.logEntry("", text, body, output.LevelError)
 	}
+}
+
+// sourcePrefix labels a query-history line with the source's Name, when
+// it has one.
+func sourcePrefix(name string) string {
+	if name == "" {
+		return ""
+	}
+	return name + ": "
 }
 
 // queryLabel names a remote query the way the table's stale suffix does.

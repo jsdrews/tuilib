@@ -792,3 +792,29 @@ func TestGrowingDoesNotClampToTheStaleTotal(t *testing.T) {
 		t.Errorf("q = %+v — a growing set may already be past 150; ask for the whole page", got)
 	}
 }
+
+func TestHistoryCarriesName(t *testing.T) {
+	m := newSrc(t, Options{Name: "books"})
+	q := req(m.Init())
+	_, cmd := m.Deliver(Page{Gen: q.Gen, Offset: 0, Count: 100, Total: 1000})
+	if count[QueryAnsweredMsg](msgs(cmd)) != 1 {
+		t.Fatal("no answer reported")
+	}
+	for _, msg := range msgs(cmd) {
+		if e, ok := msg.(QueryAnsweredMsg); ok && e.Name != "books" {
+			t.Errorf("answered Name = %q, want books", e.Name)
+		}
+	}
+
+	a := newAnch(AnchoredOptions{Name: "events"})
+	q = req(a.Init())
+	_, cmd = a.Deliver(Page{Gen: q.Gen, Count: 100, More: true})
+	if count[QueryAnsweredMsg](msgs(cmd)) != 1 {
+		t.Fatal("no anchored answer reported")
+	}
+	for _, msg := range msgs(cmd) {
+		if e, ok := msg.(QueryAnsweredMsg); ok && e.Name != "events" {
+			t.Errorf("anchored answered Name = %q, want events", e.Name)
+		}
+	}
+}

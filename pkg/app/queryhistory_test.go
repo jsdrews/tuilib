@@ -63,3 +63,34 @@ func TestWindowFailureNamesTheRows(t *testing.T) {
 		t.Errorf("record = %q", got)
 	}
 }
+
+// Two sources on one screen are told apart by Name; an unnamed one keeps
+// the bare line.
+func TestQueryHistoryNamesTheSource(t *testing.T) {
+	m := newOutputApp(t, &stubScreen{name: "Apps"})
+	x := source.Query{Raw: "x"}
+
+	m = send(t, m, source.QueryAnsweredMsg{Name: "books", Query: x, Elapsed: 1200 * time.Millisecond})
+	m = send(t, m, source.QueryCancelledMsg{Name: "authors", Query: x, By: source.Query{}})
+	m = send(t, m, source.QueryRecoveredMsg{Name: "books", Query: x})
+	m = send(t, m, source.QueryFailedMsg{Name: "authors", Query: x, Err: errors.New("timeout"), Elapsed: time.Second})
+
+	want := []string{
+		"books: filter x → answered in 1.2s",
+		"authors: filter x → cancelled, superseded by all",
+		"books: filter x → polls recovered",
+		"authors: filter x failed after 1s: timeout",
+	}
+	recs := m.outBuf.Records()
+	if len(recs) != len(want) {
+		t.Fatalf("buffered %d records, want %d", len(recs), len(want))
+	}
+	for i, w := range want {
+		if recs[i].Text != w {
+			t.Errorf("record %d = %q, want %q", i, recs[i].Text, w)
+		}
+	}
+	if msg, _ := m.sb.Message(); !strings.HasPrefix(msg, "authors: ") {
+		t.Errorf("statusbar = %q, want the failure named", msg)
+	}
+}

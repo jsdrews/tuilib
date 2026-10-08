@@ -204,6 +204,7 @@ type Page struct {
 // QueryRecoveredMsg reports that follow polls are succeeding again after
 // failing. QueryFailedMsg reported the start of the outage, once.
 type QueryRecoveredMsg struct {
+	Name  string
 	Query Query
 }
 
@@ -211,6 +212,7 @@ type QueryRecoveredMsg struct {
 // or its first answer after failing. One per committed query, never one
 // per page.
 type QueryAnsweredMsg struct {
+	Name    string
 	Query   Query
 	Elapsed time.Duration
 }
@@ -219,6 +221,7 @@ type QueryAnsweredMsg struct {
 // waiting for it. Window is true when the query already had an answer and
 // only a page of it failed.
 type QueryFailedMsg struct {
+	Name    string
 	Query   Query
 	Err     error
 	Elapsed time.Duration
@@ -228,12 +231,17 @@ type QueryFailedMsg struct {
 // QueryCancelledMsg reports a committed query abandoned before it was
 // answered, because By was committed in its place.
 type QueryCancelledMsg struct {
+	Name  string
 	Query Query
 	By    Query
 }
 
 // Options configures a Model.
 type Options struct {
+	// Name labels this source's query history, so a screen with several
+	// sources can tell their lines apart ("books: filter x → answered").
+	// Empty leaves the lines unlabelled.
+	Name string
 	// Mode selects offset or cursor addressing. Defaults to ByOffset.
 	Mode Mode
 	// PageSize is how many rows one request asks for, and the boundary
@@ -359,7 +367,7 @@ func New(opts Options) Model {
 		opts.Follow = 0
 	}
 	return Model{
-		core:     core{id: nextID.Add(1), parent: opts.Context},
+		core:     core{id: nextID.Add(1), name: opts.Name, parent: opts.Context},
 		maxHeld:  max(0, opts.MaxHeld),
 		follow:   opts.Follow,
 		mode:     opts.Mode,
@@ -533,7 +541,7 @@ func (m *Model) SetQuery(raw string, terms []query.Term, sort string, desc bool)
 	if !abandoned {
 		return req
 	}
-	ev := QueryCancelledMsg{Query: prev, By: m.live}
+	ev := QueryCancelledMsg{Name: m.name, Query: prev, By: m.live}
 	return tea.Batch(func() tea.Msg { return ev }, req)
 }
 
@@ -573,7 +581,7 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 			}
 			m.pollsFailing = true
 		}
-		ev := QueryFailedMsg{Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
+		ev := QueryFailedMsg{Name: m.name, Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
 		if m.state != answered {
 			m.state = failed
 		}
@@ -592,7 +600,7 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 	var recovered tea.Cmd
 	if m.live.Poll && m.pollsFailing {
 		m.pollsFailing = false
-		ev := QueryRecoveredMsg{Query: m.live}
+		ev := QueryRecoveredMsg{Name: m.name, Query: m.live}
 		recovered = func() tea.Msg { return ev }
 	}
 
@@ -625,7 +633,7 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 	m.state = answered
 	m.last -= m.first
 	m.first = 0
-	ev := QueryAnsweredMsg{Query: m.live, Elapsed: elapsed}
+	ev := QueryAnsweredMsg{Name: m.name, Query: m.live, Elapsed: elapsed}
 	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest(), m.armPoll())
 }
 
@@ -775,6 +783,7 @@ func (m *Model) newQuery(start, limit int) Query {
 // flight at a time, each with its own generation and context.
 type core struct {
 	id     int64
+	name   string
 	parent context.Context
 
 	gen     int
