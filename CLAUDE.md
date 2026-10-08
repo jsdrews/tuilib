@@ -1623,7 +1623,9 @@ path.
   (`Options.Context` is the parent, `Cancel()` stops everything), and
   `Page.Err` reports a failed fetch through the same `Deliver`. The query
   history leaves as `QueryAnsweredMsg` / `QueryFailedMsg` /
-  `QueryCancelledMsg`, which `pkg/app` writes to the output console. It
+  `QueryCancelledMsg`, which `pkg/app` writes to the output console —
+  prefixed with `Options.Name` when set, so two sources on one screen
+  can be told apart ("books: filter x → answered in 1.2s"). It
   imports `pkg/query` (and `internal/tick` for its timers) and nothing
   else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the

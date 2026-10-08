@@ -42,7 +42,8 @@ type AnchoredOptions struct {
 	// edge the viewport must come before that edge is extended. Defaults to
 	// DefaultPageSize.
 	PageSize int
-	// ViewportDelay, Context and Follow mean what they do on Options.
+	// Name, ViewportDelay, Context and Follow mean what they do on Options.
+	Name          string
 	ViewportDelay time.Duration
 	Context       context.Context
 	Follow        time.Duration
@@ -103,6 +104,7 @@ type Anchored struct {
 // requested until Init.
 func NewAnchored(opts AnchoredOptions) Anchored {
 	m := New(Options{
+		Name:          opts.Name,
 		PageSize:      opts.PageSize,
 		ViewportDelay: opts.ViewportDelay,
 		Context:       opts.Context,
@@ -129,7 +131,7 @@ func (m *Anchored) SetQuery(raw string, terms []query.Term, sort string, desc bo
 	if !abandoned {
 		return req
 	}
-	ev := QueryCancelledMsg{Query: prev, By: m.live}
+	ev := QueryCancelledMsg{Name: m.name, Query: prev, By: m.live}
 	return tea.Batch(func() tea.Msg { return ev }, req)
 }
 
@@ -324,7 +326,7 @@ func (m *Anchored) Deliver(p Page) (bool, tea.Cmd) {
 			}
 			m.pollsFailing = true
 		}
-		ev := QueryFailedMsg{Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
+		ev := QueryFailedMsg{Name: m.name, Query: m.live, Err: p.Err, Elapsed: elapsed, Window: m.state == answered}
 		if m.state != answered {
 			m.state = failed
 		}
@@ -340,7 +342,7 @@ func (m *Anchored) Deliver(p Page) (bool, tea.Cmd) {
 	var recovered tea.Cmd
 	if m.live.Poll && m.pollsFailing {
 		m.pollsFailing = false
-		ev := QueryRecoveredMsg{Query: m.live}
+		ev := QueryRecoveredMsg{Name: m.name, Query: m.live}
 		recovered = func() tea.Msg { return ev }
 	}
 	if !m.live.Probe && !m.live.Poll {
@@ -354,7 +356,7 @@ func (m *Anchored) Deliver(p Page) (bool, tea.Cmd) {
 		return true, tea.Batch(recovered, m.maybeRequest(), m.armPoll())
 	}
 	m.state = answered
-	ev := QueryAnsweredMsg{Query: m.live, Elapsed: elapsed}
+	ev := QueryAnsweredMsg{Name: m.name, Query: m.live, Elapsed: elapsed}
 	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest(), m.armPoll())
 }
 
