@@ -9,7 +9,7 @@ import (
 
 // Eventlog is an eventlog bound to a remote source. Everything the
 // component offers is promoted from the embedded Model; Update, Init,
-// SetGrowing and Restyle are the binding's.
+// SetGrowing, SetAnchor and Restyle are the binding's.
 type Eventlog struct {
 	eventlog.Model
 	d *driver[eventlog.Item]
@@ -21,7 +21,11 @@ type Eventlog struct {
 func NewEventlog(opts eventlog.Options, s Shape[eventlog.Item]) *Eventlog {
 	d := newDriver[eventlog.Item](s, max(opts.MaxItems, eventlog.DefaultMaxItems))
 	opts.Anchored = d.anch != nil
-	return &Eventlog{Model: eventlog.New(opts), d: d}
+	e := &Eventlog{Model: eventlog.New(opts), d: d}
+	if d.anch != nil && d.anch.Anchor().IsOldest() {
+		e.SetFollow(false)
+	}
+	return e
 }
 
 // Init requests the first page.
@@ -32,6 +36,17 @@ func (e *Eventlog) Init() tea.Cmd { return e.d.init() }
 func (e *Eventlog) SetGrowing(b bool) tea.Cmd {
 	e.Model.SetGrowing(b)
 	return e.d.setGrowing(b)
+}
+
+// SetAnchor moves an Anchored view to a — a "jump to time" — replacing
+// what it holds once a's first page arrives. It does nothing on Seekable
+// data.
+func (e *Eventlog) SetAnchor(a source.Anchor) tea.Cmd {
+	if e.d.anch == nil {
+		return nil
+	}
+	e.Reanchor()
+	return e.d.anch.SetAnchor(a)
 }
 
 // Refresh refetches what is on screen under the same query — a retry.
@@ -112,6 +127,9 @@ func (e *Eventlog) apply(r result[eventlog.Item]) tea.Cmd {
 		e.Prepend(r.items, a)
 	default:
 		e.Append(r.items, a)
+	}
+	if e.d.landsAt(r) {
+		e.SetFollow(false)
 	}
 	if e.d.anch != nil {
 		e.SetMore(e.d.anch.More())

@@ -25,6 +25,10 @@
 //   - A search hit beyond the span re-anchors there — the span is replaced
 //     by the hit and its surroundings, Kibana's "surrounding documents" —
 //     and the binding does that part.
+//   - The action menu jumps: to the newest document, the oldest, or a
+//     time, each one SetAnchor. A time is a cursor no document has — the
+//     sort values just past it — so the view lands on the newest document
+//     at or before it.
 //
 // The gutter shows each document's @timestamp: the server's time for the
 // event, not the TUI's. Enter opens a document; L cycles latency.
@@ -43,16 +47,20 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/demoapi"
+	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/app"
 	elog "github.com/jsdrews/tuilib/pkg/eventlog"
+	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/help"
 	insp "github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/remote"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -86,7 +94,6 @@ type Screen struct {
 
 func (s *Screen) Title() string         { return "Anchored" }
 func (s *Screen) IsCapturingKeys() bool { return s.log.IsCapturingKeys() }
-func (s *Screen) OnEnter(any) tea.Cmd   { return nil }
 func (s *Screen) Layout() layout.Node   { return layout.Sized(s.log) }
 func (s *Screen) Help() []key.Binding   { return help.Flatten(s.HelpSections()) }
 
@@ -97,6 +104,33 @@ func (s *Screen) HelpSections() []help.Section {
 }
 
 func (s *Screen) Init() tea.Cmd { return tea.Batch(s.log.Init(), s.log.SetGrowing(true)) }
+
+// OnEnter takes the time the jump prompt popped with.
+func (s *Screen) OnEnter(result any) tea.Cmd {
+	at, ok := result.(time.Time)
+	if !ok {
+		return nil
+	}
+	return tea.Batch(s.log.SetAnchor(source.At(cursor([]int64{at.UnixMilli() + 1, -1}))),
+		app.Info("jumped to "+at.Format("15:04:05")))
+}
+
+func (s *Screen) Actions() action.Set {
+	return action.Set{
+		Target: "logs-*",
+		Actions: []action.Action{
+			{Label: "Jump to newest", Desc: "the tail, following", Do: func() tea.Cmd {
+				return s.log.SetAnchor(source.Newest())
+			}},
+			{Label: "Jump to oldest", Desc: "the first document", Do: func() tea.Cmd {
+				return s.log.SetAnchor(source.Oldest())
+			}},
+			{Label: "Jump to time…", Desc: "the newest document at or before it", Do: func() tea.Cmd {
+				return screen.Push(newJump(s.t))
+			}},
+		},
+	}
+}
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	if s.log.IsActivate(msg) {
@@ -267,6 +301,66 @@ func itemOf(h hit) elog.Item {
 		data[k] = v
 	}
 	return elog.Item{Key: cursor(h.Sort), Mark: mark, Lines: []string{line}, Data: data}
+}
+
+// jump prompts for a time and pops with it: "30m" ago, or a clock time
+// today.
+type jump struct{ form form.Model }
+
+func newJump(t theme.Theme) screen.Screen {
+	j := &jump{}
+	j.SetTheme(t)
+	return j
+}
+
+func (j *jump) Title() string         { return "Jump to time" }
+func (j *jump) Init() tea.Cmd         { return tea.Batch(textinput.Blink, j.form.Init()) }
+func (j *jump) OnEnter(any) tea.Cmd   { return nil }
+func (j *jump) IsCapturingKeys() bool { return j.form.IsCapturingKeys() }
+func (j *jump) Layout() layout.Node   { return layout.Sized(&j.form) }
+func (j *jump) Help() []key.Binding   { return help.Flatten(j.HelpSections()) }
+
+func (j *jump) HelpSections() []help.Section { return help.SectionsOf(&j.form) }
+
+func (j *jump) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
+	switch m := msg.(type) {
+	case form.SubmittedMsg:
+		at, _ := parseWhen(fmt.Sprint(m.Values["when"]), time.Now())
+		return j, screen.Pop(at)
+	case form.CancelledMsg:
+		return j, screen.Pop(nil)
+	}
+	var cmd tea.Cmd
+	j.form, cmd = j.form.Update(msg)
+	return j, cmd
+}
+
+func (j *jump) SetTheme(t theme.Theme) {
+	opts := t.Form()
+	opts.Fields = []form.Field{form.Text(form.TextOptions{
+		Key: "when", Label: "Time", Placeholder: "30m, or 14:05", Required: true,
+		Validate: func(v any) error {
+			_, err := parseWhen(fmt.Sprint(v), time.Now())
+			return err
+		},
+	})}
+	j.form = form.New(opts)
+}
+
+// parseWhen reads a duration ago ("30m", "1h15m") or a clock time today
+// ("14:05", "14:05:30").
+func parseWhen(s string, now time.Time) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if d, err := time.ParseDuration(s); err == nil {
+		return now.Add(-d), nil
+	}
+	for _, layout := range []string{"15:04:05", "15:04"} {
+		if c, err := time.ParseInLocation(layout, s, now.Location()); err == nil {
+			y, mo, d := now.Date()
+			return time.Date(y, mo, d, c.Hour(), c.Minute(), c.Second(), 0, now.Location()), nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("want 30m or 14:05")
 }
 
 // detail shows one document's fields.

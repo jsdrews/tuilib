@@ -1604,7 +1604,9 @@ path.
   the committed `Filter`), run off the UI goroutine under a context the
   binding cancels when superseded. The screen calls `Init`, forwards
   `Update`, and swaps themes with `Restyle`; `SetGrowing` and `Refresh`
-  are the only other verbs. `pkg/source`, `pkg/table` and `pkg/eventlog`
+  are the only other verbs, plus `SetAnchor` for Anchored data, which
+  starts wherever `Anchored.Anchor` says (`source.Newest()` by default,
+  `Oldest()`, or `At(cursor)`, which lands on that item). `pkg/source`, `pkg/table` and `pkg/eventlog`
   stay public for anything it doesn't cover.
 - **Large remote data in general:** `docs/remote-data.md` classifies each
   source we build TUIs for (Prefect, AWX, Elasticsearch, pod logs, generic

@@ -17,6 +17,9 @@ func (m *Model) addSpan(rows []KeyedRow, answered Answer, front bool) {
 	if m.remote() {
 		fresh = m.rq.st.SetAnswer(answered, m.committed())
 	}
+	if m.reanchor {
+		fresh, m.reanchor = true, false
+	}
 	if fresh {
 		m.span.Clear()
 	}
@@ -51,6 +54,11 @@ func (m Model) spanRows() (int, []KeyedRow) {
 	}
 	return start, out
 }
+
+// Reanchor says the source is re-anchoring (source.Anchored.SetAnchor):
+// the next page replaces the span instead of extending it. The rows on
+// screen stay until then.
+func (m *Model) Reanchor() { m.reanchor = m.span != nil }
 
 // SetMore sets whether each edge of the span has more beyond it — from the
 // source's page.More after each page.

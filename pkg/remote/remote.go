@@ -29,7 +29,8 @@
 // Each shape of data (CLAUDE.md rule 34) has its own request type:
 // Seekable data is asked for by Window (offset and limit), Anchored data by
 // Edge (a direction and the cursor to walk from), and both can answer a
-// Find. Growing data is one call: SetGrowing.
+// Find. Growing data is one call: SetGrowing. Anchored data starts at
+// Anchored.Anchor and moves with SetAnchor.
 //
 // The views embed their component, so everything else — Selected,
 // IsActivate, focus, help, SetRect — is the component's own. pkg/source,
@@ -124,6 +125,10 @@ type Anchored[T any] struct {
 	// on source.AnchoredOptions. There is no Prefetch: an edge is extended
 	// once the viewport comes within PageSize of it, which is already a
 	// page of lookahead.
+	// Anchor is where the view starts: source.Newest() (the zero value),
+	// source.Oldest(), or source.At(cursor), which lands on that item.
+	Anchor source.Anchor
+
 	Name          string
 	PageSize      int
 	Follow        time.Duration
@@ -167,7 +172,7 @@ func newDriver[T any](s Shape[T], maxHeld int) *driver[T] {
 	case Anchored[T]:
 		src := source.NewAnchored(source.AnchoredOptions{
 			Name: sh.Name, PageSize: sh.PageSize, Follow: sh.Follow,
-			ViewportDelay: sh.ViewportDelay, Context: sh.Context,
+			ViewportDelay: sh.ViewportDelay, Context: sh.Context, Anchor: sh.Anchor,
 		})
 		d.anch, d.edge, d.findKey = &src, sh.Edge, sh.Find
 	}
@@ -217,6 +222,17 @@ func (d *driver[T]) refresh() tea.Cmd {
 		return d.seek.Refresh()
 	}
 	return d.anch.Refresh()
+}
+
+// landsAt reports whether r's page starts a view anchored on an item —
+// source.At — which the view lands on rather than following: the newest
+// item of that first page, the anchor itself unless a filter excludes it.
+func (d *driver[T]) landsAt(r result[T]) bool {
+	if d.anch == nil || !r.q.FromAnchor || r.page.Err != nil {
+		return false
+	}
+	_, at := d.anch.Anchor().Cursor()
+	return at
 }
 
 func (d *driver[T]) deliver(p source.Page) (bool, tea.Cmd) {
