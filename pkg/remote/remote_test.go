@@ -285,3 +285,30 @@ func TestSeekableTable(t *testing.T) {
 		t.Errorf("filter should refetch from the top: %+v", last)
 	}
 }
+
+func TestSeekablePrefetchReachesTheSource(t *testing.T) {
+	reach := func(prefetch int) int {
+		var mu sync.Mutex
+		end := 0
+		page := func(_ context.Context, w Window) ([]table.KeyedRow, int, error) {
+			mu.Lock()
+			end = max(end, w.Offset+w.Limit)
+			mu.Unlock()
+			var rows []table.KeyedRow
+			for i := w.Offset; i < min(500, w.Offset+w.Limit); i++ {
+				rows = append(rows, table.KeyedRow{Key: strconv.Itoa(i), Cells: []string{fmt.Sprint("app-", i)}})
+			}
+			return rows, 500, nil
+		}
+		tb := NewTable(table.Options{Title: "apps", Columns: []table.Column{{Title: "Name", Width: 12}}},
+			Seekable[table.KeyedRow]{Page: page, PageSize: 20, Prefetch: prefetch, ViewportDelay: -1, Follow: -1})
+		tb.SetRect(geom.New(0, 0, 40, 14))
+		pump(t, tb.Init(), tb)
+		keys(t, tb, strings.Split(strings.Repeat("j", 25), "")...)
+		return end
+	}
+	without, with := reach(0), reach(2)
+	if with < without+40 {
+		t.Errorf("Prefetch 2 fetched through row %d, without it %d — want two more pages", with, without)
+	}
+}
