@@ -101,10 +101,11 @@ type Seekable[T any] struct {
 	// one. Nil searches only what is loaded.
 	Find func(ctx context.Context, f Find) (at int, found bool, err error)
 
-	// Name, PageSize, Follow, ViewportDelay and Context mean what they do
-	// on source.Options.
+	// Name, PageSize, Prefetch, Follow, ViewportDelay and Context mean
+	// what they do on source.Options.
 	Name          string
 	PageSize      int
+	Prefetch      int
 	Follow        time.Duration
 	ViewportDelay time.Duration
 	Context       context.Context
@@ -119,6 +120,10 @@ type Anchored[T any] struct {
 	// one. The view re-anchors there. Nil searches only what is loaded.
 	Find func(ctx context.Context, f Find) (cursor string, found bool, err error)
 
+	// Name, PageSize, Follow, ViewportDelay and Context mean what they do
+	// on source.AnchoredOptions. There is no Prefetch: an edge is extended
+	// once the viewport comes within PageSize of it, which is already a
+	// page of lookahead.
 	Name          string
 	PageSize      int
 	Follow        time.Duration
@@ -155,8 +160,8 @@ func newDriver[T any](s Shape[T], maxHeld int) *driver[T] {
 	switch sh := s.(type) {
 	case Seekable[T]:
 		src := source.New(source.Options{
-			Name: sh.Name, PageSize: sh.PageSize, MaxHeld: maxHeld, Follow: sh.Follow,
-			ViewportDelay: sh.ViewportDelay, Context: sh.Context,
+			Name: sh.Name, PageSize: sh.PageSize, Prefetch: sh.Prefetch, MaxHeld: maxHeld,
+			Follow: sh.Follow, ViewportDelay: sh.ViewportDelay, Context: sh.Context,
 		})
 		d.seek, d.page, d.findAt = &src, sh.Page, sh.Find
 	case Anchored[T]:
