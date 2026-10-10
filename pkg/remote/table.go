@@ -36,6 +36,16 @@ func (t *Table) Init() tea.Cmd { return t.d.init() }
 // source polls.
 func (t *Table) SetGrowing(b bool) tea.Cmd { return t.d.setGrowing(b) }
 
+// SetAnchor moves an Anchored table to a, replacing its rows once a's
+// first page arrives. It does nothing on Seekable data.
+func (t *Table) SetAnchor(a source.Anchor) tea.Cmd {
+	if t.d.anch == nil {
+		return nil
+	}
+	t.Reanchor()
+	return t.d.anch.SetAnchor(a)
+}
+
 // Refresh refetches what is on screen under the same query — a retry.
 func (t *Table) Refresh() tea.Cmd { return t.d.refresh() }
 
@@ -89,6 +99,9 @@ func (t *Table) apply(r result[table.KeyedRow]) tea.Cmd {
 		t.PrependRows(r.items, a)
 	default:
 		t.AppendRows(r.items, a)
+	}
+	if t.d.landsAt(r) {
+		t.SetCursor(len(r.items) - 1)
 	}
 	if t.d.anch != nil {
 		t.SetMore(t.d.anch.More())

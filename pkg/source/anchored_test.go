@@ -30,6 +30,18 @@ func TestAnchoredNewestLoadsOlderFromTheTail(t *testing.T) {
 	}
 }
 
+func TestAnchoredStartsAtOptionsAnchor(t *testing.T) {
+	m := newAnch(AnchoredOptions{Anchor: Oldest()})
+	q := req(m.Init())
+	if q == nil || q.Dir != Newer || q.Cursor != "" || !q.FromAnchor {
+		t.Fatalf("q = %+v, want newer from the oldest item", q)
+	}
+	m = newAnch(AnchoredOptions{Anchor: At("c-7")})
+	if q := req(m.Init()); q == nil || q.Cursor != "c-7" || !q.Inclusive {
+		t.Fatalf("q = %+v, want older from the anchor, inclusive", q)
+	}
+}
+
 func TestAnchoredAtIsInclusiveThenExtendsNewer(t *testing.T) {
 	m := newAnch(AnchoredOptions{})
 	q := req(m.SetAnchor(At("hit-42")))

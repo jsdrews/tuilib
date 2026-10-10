@@ -629,6 +629,9 @@ type Model struct {
 	// span holds an Anchored table's rows; nil otherwise.
 	span     *remoteview.Range[KeyedRow]
 	maxItems int
+	// reanchor makes the next span page replace the span rather than
+	// merge into it.
+	reanchor bool
 
 	// Windowing. When windowed, rows holds only [winStart, winStart+len)
 	// of a logical set winTotal long (-1 when the source can't say), and

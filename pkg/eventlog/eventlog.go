@@ -417,8 +417,8 @@ func (m *Model) Prepend(items []Item, answered Answer) {
 
 func (m *Model) addToSpan(items []Item, answered Answer, front bool) {
 	had := m.st.HasAnswer
-	fresh := m.st.SetAnswer(answered, m.committed())
-	if fresh || m.replace {
+	fresh := m.st.SetAnswer(answered, m.committed()) || m.replace
+	if fresh {
 		m.rng.Clear()
 		m.arrivals = nil
 		m.cursor, m.top = 0, 0
@@ -449,7 +449,9 @@ func (m *Model) addToSpan(items []Item, answered Answer, front bool) {
 		// began at the oldest.
 		m.following = front
 	}
-	m.afterData(fresh, before)
+	// An empty span's first items land as a fresh answer does: where
+	// follow says, not shifted by everything inserted before index 0.
+	m.afterData(fresh || oldLen == 0, before)
 }
 
 // Reanchor says the source is re-anchoring (source.Anchored.SetAnchor):

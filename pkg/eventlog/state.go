@@ -13,7 +13,8 @@ import "github.com/jsdrews/tuilib/internal/remoteview"
 //	s.log.Restore(st)
 //
 // A search or a hit still on its way is not carried: the rebuild answers
-// neither, and a press after it asks again.
+// neither, and a press after it asks again. A re-anchor waiting for its
+// page is, so the page still replaces the span.
 type State struct {
 	// built is false for a State taken from a zero Model — a screen's
 	// first SetTheme — so restoring it leaves the new Options alone.
@@ -30,6 +31,7 @@ type State struct {
 	term       string
 	matchTotal int
 	xoff       int
+	replace    bool
 }
 
 // State captures the eventlog's state. See State.
@@ -47,6 +49,7 @@ func (m Model) State() State {
 		term:       m.term,
 		matchTotal: m.matchTotal,
 		xoff:       m.body.XOffset(),
+		replace:    m.replace,
 	}
 }
 
@@ -67,6 +70,7 @@ func (m *Model) Restore(s State) {
 	m.SetValue(s.qRaw)
 	m.SetTerm(s.term)
 	m.matchTotal = s.matchTotal
+	m.replace = s.replace
 	m.refresh()
 	m.body.SetXOffset(s.xoff)
 }

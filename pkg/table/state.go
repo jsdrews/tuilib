@@ -27,6 +27,7 @@ type State struct {
 	winStart int
 	winTotal int
 	span     *remoteview.Range[KeyedRow]
+	reanchor bool
 
 	value    string
 	sortCol  int
@@ -72,7 +73,7 @@ func (m Model) State() State {
 	}
 	if m.span != nil {
 		sp := *m.span
-		s.span = &sp
+		s.span, s.reanchor = &sp, m.reanchor
 	}
 	return s
 }
@@ -89,7 +90,7 @@ func (m *Model) Restore(s State) {
 	switch {
 	case s.span != nil && m.span != nil:
 		sp := *s.span
-		m.span = &sp
+		m.span, m.reanchor = &sp, s.reanchor
 		_, held := m.spanRows()
 		m.setKeyedRows(held)
 	case s.windowed:

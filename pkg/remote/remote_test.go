@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/internal/cmdtest"
 	"github.com/jsdrews/tuilib/pkg/eventlog"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/table"
 )
 
@@ -228,6 +229,82 @@ func TestAnchoredEventlog(t *testing.T) {
 	keys(t, l, "/", "e", "v", "e", "n", "t", " ", "1", "2", "3", "enter", "N")
 	if it, ok := l.Selected(); !ok || it.Key != "123" {
 		t.Errorf("a find past the span should re-anchor on the hit: %+v %v", it, ok)
+	}
+}
+
+func newAnchoredLog(t *testing.T, job *fakeJob, a source.Anchor) *Eventlog {
+	t.Helper()
+	l := NewEventlog(eventlog.Options{Title: "logs", Searchable: true, NewFor: -1},
+		Anchored[eventlog.Item]{Edge: job.edge, Find: job.findKey, Anchor: a, PageSize: 100, ViewportDelay: -1, Follow: -1})
+	l.SetRect(geom.New(0, 0, 60, 14))
+	return l
+}
+
+func TestAnchoredEventlogStartsAtItsAnchor(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		anchor source.Anchor
+		want   string
+	}{
+		{"oldest", source.Oldest(), "0"},
+		{"at", source.At("500"), "500"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newAnchoredLog(t, &fakeJob{n: 1000}, tc.anchor)
+			pump(t, l.Init(), l)
+			if it, ok := l.Selected(); !ok || it.Key != tc.want {
+				t.Errorf("selected %+v %v, want item %s", it, ok, tc.want)
+			}
+			if l.Following() {
+				t.Error("a view that starts away from the newest item must not follow")
+			}
+		})
+	}
+}
+
+func TestAnchoredEventlogSetAnchor(t *testing.T) {
+	l := newAnchoredLog(t, &fakeJob{n: 1000}, source.Anchor{})
+	pump(t, l.Init(), l)
+	pump(t, l.SetAnchor(source.Oldest()), l)
+	if it, ok := l.Selected(); !ok || it.Key != "0" {
+		t.Fatalf("SetAnchor(Oldest) should land on the oldest item: %+v %v", it, ok)
+	}
+	if _, newer := l.Edges(); newer == "999" {
+		t.Error("the re-anchored page should replace the span, not extend it")
+	}
+	pump(t, l.SetAnchor(source.At("300")), l)
+	if it, ok := l.Selected(); !ok || it.Key != "300" {
+		t.Errorf("SetAnchor(At) should land on its item: %+v %v", it, ok)
+	}
+	pump(t, l.SetAnchor(source.Newest()), l)
+	if it, ok := l.Selected(); !ok || it.Key != "999" || !l.Following() {
+		t.Errorf("SetAnchor(Newest) should land on the newest item, following: %+v %v", it, ok)
+	}
+}
+
+func TestAnchoredTableSetAnchor(t *testing.T) {
+	job := &fakeJob{n: 1000}
+	edge := func(ctx context.Context, e Edge) ([]table.KeyedRow, bool, error) {
+		items, more, err := job.edge(ctx, e)
+		rows := make([]table.KeyedRow, len(items))
+		for i, it := range items {
+			rows[i] = table.KeyedRow{Key: it.Key, Cells: []string{it.Key}}
+		}
+		return rows, more, err
+	}
+	tb := NewTable(table.Options{Title: "rows", Columns: []table.Column{{Title: "ID", Width: 8}}},
+		Anchored[table.KeyedRow]{Edge: edge, Anchor: source.At("400"), PageSize: 100, ViewportDelay: -1, Follow: -1})
+	tb.SetRect(geom.New(0, 0, 40, 14))
+	pump(t, tb.Init(), tb)
+	if row, ok := tb.Selected(); !ok || row[0] != "400" {
+		t.Fatalf("an At anchor should land on its row: %v %v", row, ok)
+	}
+	pump(t, tb.SetAnchor(source.Oldest()), tb)
+	if row, ok := tb.Selected(); !ok || row[0] != "0" {
+		t.Errorf("SetAnchor(Oldest) should land on the oldest row: %v %v", row, ok)
+	}
+	if older, _ := tb.Edges(); older != "0" {
+		t.Errorf("older edge %q, want the re-anchored span", older)
 	}
 }
 

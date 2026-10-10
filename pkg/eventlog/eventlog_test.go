@@ -270,6 +270,15 @@ func TestFoundAtLandsWhenTheItemArrives(t *testing.T) {
 	}
 }
 
+func TestSpanNotFollowingLandsOnTheFirstItem(t *testing.T) {
+	m := newLog(t, Options{Anchored: true})
+	m.SetFollow(false)
+	m.Append(items(0, 20), Answer{})
+	if it, _ := m.Selected(); it.Key != "0" || m.Following() {
+		t.Errorf("selected %q following %v, want the first item", it.Key, m.Following())
+	}
+}
+
 func TestTrimAtMaxItems(t *testing.T) {
 	m := newLog(t, Options{Anchored: true, MaxItems: 30})
 	m.Append(items(0, 20), Answer{})

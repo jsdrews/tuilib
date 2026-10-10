@@ -36,6 +36,13 @@ func At(c string) Anchor { return Anchor{kind: anchorAt, cursor: c} }
 // IsNewest reports whether a is the Newest anchor.
 func (a Anchor) IsNewest() bool { return a.kind == anchorNewest }
 
+// IsOldest reports whether a is the Oldest anchor.
+func (a Anchor) IsOldest() bool { return a.kind == anchorOldest }
+
+// Cursor returns the cursor an At anchor names, and false for Newest and
+// Oldest.
+func (a Anchor) Cursor() (string, bool) { return a.cursor, a.kind == anchorAt }
+
 // AnchoredOptions configures an Anchored source.
 type AnchoredOptions struct {
 	// PageSize is how many items one request asks for, and how close to an
@@ -47,6 +54,8 @@ type AnchoredOptions struct {
 	ViewportDelay time.Duration
 	Context       context.Context
 	Follow        time.Duration
+	// Anchor is where the view starts. The zero value is Newest.
+	Anchor Anchor
 }
 
 // Anchored coordinates a view over Anchored data — items reachable only by
@@ -100,8 +109,8 @@ type Anchored struct {
 	pollsFailing bool
 }
 
-// NewAnchored constructs an Anchored source anchored at Newest. Nothing is
-// requested until Init.
+// NewAnchored constructs an Anchored source anchored at opts.Anchor.
+// Nothing is requested until Init.
 func NewAnchored(opts AnchoredOptions) Anchored {
 	m := New(Options{
 		Name:          opts.Name,
@@ -115,6 +124,7 @@ func NewAnchored(opts AnchoredOptions) Anchored {
 		pageSize: m.pageSize,
 		delay:    m.delay,
 		follow:   m.follow,
+		anchor:   opts.Anchor,
 	}
 }
 
