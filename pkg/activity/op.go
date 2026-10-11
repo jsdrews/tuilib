@@ -74,12 +74,33 @@ type UnobservedMsg struct {
 	Changed bool
 }
 
+// DispatchOptions adjusts one Dispatch away from the Set's defaults.
+type DispatchOptions struct {
+	// Settle overrides Options.Settle for this operation's claims. Nil keeps
+	// the Set's value.
+	//
+	// Verbs on one component can face different servers: a sync handed to a
+	// reconciler may need two reads before the work shows, while an inline
+	// operation needs none. One value per Set would make the fast verb's
+	// claim linger through reads that already showed nothing happened.
+	Settle *int
+}
+
 // Dispatch opens a claim on keys for work the screen is about to request.
 //
 // Each key's status as of the last observation is recorded with the claim; a
 // later read reporting a different one is how the Set notices the server
 // acted. The returned command is the animation's first tick.
 func (s *Set) Dispatch(keys []string, label string, mode Mode) (Op, tea.Cmd) {
+	return s.DispatchWith(keys, label, mode, DispatchOptions{})
+}
+
+// DispatchWith is Dispatch with per-operation options.
+func (s *Set) DispatchWith(keys []string, label string, mode Mode, opts DispatchOptions) (Op, tea.Cmd) {
+	spare := s.settle
+	if opts.Settle != nil {
+		spare = *opts.Settle
+	}
 	op := Op{id: opSeq.Add(1), Keys: append([]string(nil), keys...), Mode: mode}
 	if s.expected == nil {
 		s.expected = map[string]claim{}
@@ -92,7 +113,7 @@ func (s *Set) Dispatch(keys []string, label string, mode Mode) (Op, tea.Cmd) {
 		s.expected[k] = claim{
 			st:    State{Label: label, Since: now},
 			at:    s.statuses[k],
-			spare: s.settle,
+			spare: spare,
 			op:    op.id,
 			mode:  mode,
 		}

@@ -1036,7 +1036,9 @@ example in `examples/`.
 
     An `Observed` spinner ends when a read taken after `Done` reports the work
     over, or after `Options.Activity.Settle` reads that repeat the pre-dispatch
-    status (0 for an API that sets status inline; 1–2 for a reconciler). A
+    status (0 for an API that sets status inline; 1–2 for a reconciler;
+    per verb with `DispatchWith` / `DispatchEachWith` and
+    `activity.DispatchOptions{Settle: &n}` when verbs face different servers). A
     `Held` spinner ignores reads and ends at `Done`. If a read reports the key
     busy, the server's own label replaces the claim's in either mode.
 

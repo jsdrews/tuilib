@@ -31,6 +31,7 @@ type claimable interface {
 	count() int
 
 	expect(keys []string, label string)
+	expectWith(key, label string, opts activity.DispatchOptions)
 	retract(keys ...string)
 	retractAll()
 }
@@ -60,6 +61,9 @@ func (d *listClaim) expect(keys []string, label string) {
 	for _, k := range keys {
 		d.ops[k] = dispatched(&d.m, k, label)
 	}
+}
+func (d *listClaim) expectWith(k, label string, opts activity.DispatchOptions) {
+	d.ops[k] = dispatchedWith(&d.m, k, label, opts)
 }
 func (d *listClaim) retract(keys ...string) {
 	for _, k := range keys {
@@ -96,6 +100,9 @@ func (d *tableClaim) expect(keys []string, label string) {
 		d.ops[k] = dispatched(&d.m, k, label)
 	}
 }
+func (d *tableClaim) expectWith(k, label string, opts activity.DispatchOptions) {
+	d.ops[k] = dispatchedWith(&d.m, k, label, opts)
+}
 func (d *tableClaim) retract(keys ...string) {
 	for _, k := range keys {
 		d.m.Done(d.ops[k], errRefused)
@@ -106,12 +113,20 @@ func (d *tableClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefus
 // dispatcher is the operation surface all three components share.
 type dispatcher interface {
 	Dispatch(keys []string, label string, mode activity.Mode) (activity.Op, tea.Cmd)
+	DispatchWith(keys []string, label string, mode activity.Mode, opts activity.DispatchOptions) (activity.Op, tea.Cmd)
 	Done(op activity.Op, err error) activity.Outcome
 }
 
 // dispatched is an acknowledged Observed claim on one key.
 func dispatched(m dispatcher, key, label string) activity.Op {
 	op, _ := m.Dispatch([]string{key}, label, activity.Observed)
+	m.Done(op, nil)
+	return op
+}
+
+// dispatchedWith is dispatched with per-operation options.
+func dispatchedWith(m dispatcher, key, label string, opts activity.DispatchOptions) activity.Op {
+	op, _ := m.DispatchWith([]string{key}, label, activity.Observed, opts)
 	m.Done(op, nil)
 	return op
 }
@@ -141,6 +156,9 @@ func (d *treeClaim) expect(keys []string, label string) {
 	for _, k := range keys {
 		d.ops[k] = dispatched(&d.m, d.path(k), label)
 	}
+}
+func (d *treeClaim) expectWith(k, label string, opts activity.DispatchOptions) {
+	d.ops[k] = dispatchedWith(&d.m, d.path(k), label, opts)
 }
 func (d *treeClaim) retract(keys ...string) {
 	for _, k := range keys {
@@ -234,6 +252,25 @@ func TestSettleSpendsOnlyUninformativeObservations(t *testing.T) {
 		c.observe(statusOf(nil))
 		if _, ok := c.state("web"); ok {
 			t.Error("claim outlived its allowance")
+		}
+	})
+}
+
+// Two verbs on one component can face different servers. A per-dispatch
+// Settle lets the inline one retire on the first read that shows nothing,
+// while the reconciled one keeps the component's allowance.
+func TestADispatchCanCarryItsOwnSettle(t *testing.T) {
+	eachClaimable(t, 2, func(t *testing.T, c claimable) {
+		zero := 0
+		c.expectWith("web", "Syncing", activity.DispatchOptions{Settle: &zero})
+		c.expect([]string{"api"}, "Syncing")
+		c.observe(statusOf(nil))
+
+		if _, ok := c.state("web"); ok {
+			t.Error("the Settle-0 claim survived an observation that said nothing new")
+		}
+		if _, ok := c.state("api"); !ok {
+			t.Error("the default claim lost the component's allowance")
 		}
 	})
 }

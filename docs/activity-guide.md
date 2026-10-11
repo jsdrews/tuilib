@@ -277,7 +277,7 @@ shows the row's own value, which already says `Failed` in your app's colours.
 | `Column.Width` on that column | content-auto | always; the indicator never widens a column |
 | `BusyWhen` | none | always |
 | `Revision` | none | your API has a value that moves when an operation *finishes* (Argo `operationState.finishedAt`). Without it, a sync that starts and ends at the same status (Succeeded → Succeeded) waits out `Settle` and reports `Changed: false`. |
-| `Activity.Settle` | 0 | the server reports new work after a lag (a reconciler such as a real Argo controller): 1–2. Leave it at 0 when the server reports the work inline, as demoapi does; the examples leave it at 0. It counts reads that repeat the pre-dispatch status before the claim gives up. It's a number of reads, not a duration. |
+| `Activity.Settle` | 0 | the server reports new work after a lag (a reconciler such as a real Argo controller): 1–2. Leave it at 0 when the server reports the work inline, as demoapi does; the examples leave it at 0. It counts reads that repeat the pre-dispatch status before the claim gives up. It's a number of reads, not a duration. A verb facing a different server than the rest overrides it for its own claims: `DispatchWith` / `DispatchEachWith` with `activity.DispatchOptions{Settle: &n}`. |
 
 ## Messages and methods
 
