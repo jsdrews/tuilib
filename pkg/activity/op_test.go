@@ -99,6 +99,36 @@ func TestAnUnobservedSyncIsReported(t *testing.T) {
 	}
 }
 
+// A per-dispatch Settle overrides the Set's for that operation alone, in
+// either direction.
+func TestDispatchWithOverridesSettle(t *testing.T) {
+	s := New(Options{Settle: 1})
+	zero, two := 0, 2
+	fast, _ := s.DispatchWith([]string{"fast"}, "Syncing", Observed, DispatchOptions{Settle: &zero})
+	slow, _ := s.DispatchWith([]string{"slow"}, "Syncing", Observed, DispatchOptions{Settle: &two})
+	def, _ := s.Dispatch([]string{"def"}, "Syncing", Observed)
+	for _, op := range []Op{fast, slow, def} {
+		s.Done(op, nil)
+	}
+
+	alive := func() (out []string) {
+		for _, k := range []string{"fast", "def", "slow"} {
+			if _, ok := s.expected[k]; ok {
+				out = append(out, k)
+			}
+		}
+		return out
+	}
+	for i, want := range []string{"def slow", "slow", ""} {
+		rd := s.BeginRead()
+		s.Accept(rd, nil)
+		s.observe(nil, nil)
+		if got := strings.Join(alive(), " "); got != want {
+			t.Errorf("after read %d: claims = %q, want %q", i+1, got, want)
+		}
+	}
+}
+
 // A status that moved while nobody looked is the work having happened.
 func TestAChangedStatusIsReportedAsChanged(t *testing.T) {
 	s := New(Options{})

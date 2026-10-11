@@ -53,7 +53,14 @@ func (m *Model) observe() {
 // ends: activity.Observed (the server's status) or activity.Held (the request,
 // or a job it returned).
 func (m *Model) Dispatch(paths []string, label string, mode activity.Mode) (activity.Op, tea.Cmd) {
-	op, cmd := m.act.Dispatch(paths, label, mode)
+	return m.DispatchWith(paths, label, mode, activity.DispatchOptions{})
+}
+
+// DispatchWith is Dispatch with per-operation options — a Settle for this verb
+// alone, when it faces a slower or faster server than Options.Activity.Settle
+// was chosen for.
+func (m *Model) DispatchWith(paths []string, label string, mode activity.Mode, opts activity.DispatchOptions) (activity.Op, tea.Cmd) {
+	op, cmd := m.act.DispatchWith(paths, label, mode, opts)
 	m.refresh()
 	return op, cmd
 }
@@ -68,9 +75,16 @@ func (m *Model) Dispatch(paths []string, label string, mode activity.Mode) (acti
 // directly only when one request acts on several keys at once.
 func (m *Model) DispatchEach(paths []string, label string, mode activity.Mode,
 	request func(op activity.Op, key string) tea.Cmd) tea.Cmd {
+	return m.DispatchEachWith(paths, label, mode, activity.DispatchOptions{}, request)
+}
+
+// DispatchEachWith is DispatchEach with per-operation options, applied to
+// every key's operation.
+func (m *Model) DispatchEachWith(paths []string, label string, mode activity.Mode, opts activity.DispatchOptions,
+	request func(op activity.Op, key string) tea.Cmd) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, 2*len(paths))
 	for _, k := range paths {
-		op, spin := m.Dispatch([]string{k}, label, mode)
+		op, spin := m.DispatchWith([]string{k}, label, mode, opts)
 		cmds = append(cmds, spin, request(op, k))
 	}
 	return tea.Batch(cmds...)
