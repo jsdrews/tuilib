@@ -1,0 +1,106 @@
+[project]
+site_name = "tuilib"
+site_description = "A component library for building Bubble Tea terminal UIs quickly and reliably."
+site_url = "https://jsdrews.github.io/tuilib/"
+repo_url = "https://github.com/jsdrews/tuilib"
+repo_name = "jsdrews/tuilib"
+edit_uri = "edit/main/docs/"
+docs_dir = "docs"
+site_dir = "site"
+
+nav = [
+  { "Home" = "index.md" },
+  { "Quick start" = "quickstart.md" },
+  { "Architecture" = "architecture.md" },
+  { "Guide" = [
+    { "The app shell" = "guide/app-shell.md" },
+    { "Screens and navigation" = "guide/screens.md" },
+    { "Layout" = "guide/layout.md" },
+    { "Theming and state" = "guide/theming.md" },
+    { "Keys, focus and mouse" = "guide/input.md" },
+    { "Help and key hints" = "guide/help.md" },
+    { "Feedback and the console" = "guide/feedback.md" },
+    { "Verbs and multi-select" = "guide/actions.md" },
+    { "Remote data" = "guide/remote.md" },
+    { "Auto-refresh and row activity" = "guide/refresh.md" },
+    { "Running subprocesses" = "guide/subprocesses.md" },
+  ] },
+  { "Components" = [
+    "components/index.md",
+    { "Pane" = "components/pane.md" },
+    { "List" = "components/list.md" },
+    { "Table" = "components/table.md" },
+    { "Tree" = "components/tree.md" },
+    { "Inspector" = "components/inspector.md" },
+    { "TextView" = "components/textview.md" },
+    { "LogView" = "components/logview.md" },
+    { "Eventlog" = "components/eventlog.md" },
+    { "Filter" = "components/filter.md" },
+    { "Input" = "components/input.md" },
+    { "Toggle" = "components/toggle.md" },
+    { "Form" = "components/form.md" },
+    { "Confirm" = "components/confirm.md" },
+    { "Alert" = "components/alert.md" },
+    { "Action menu" = "components/action-menu.md" },
+    { "Tabs" = "components/tabs.md" },
+    { "Breadcrumb and statusbar" = "components/bars.md" },
+    { "Metrics" = "components/metrics.md" },
+  ] },
+  { "Reference" = [
+    { "Packages" = "reference/packages.md" },
+    { "Default key bindings" = "reference/keys.md" },
+    { "Theme tokens" = "reference/theme.md" },
+    { "Library rules" = "reference/rules.md" },
+  ] },
+  { "Examples" = "examples.md" },
+  { "Design notes" = [
+    { "Remote data shapes" = "remote-data.md" },
+    { "Row activity guide" = "activity-guide.md" },
+    { "Row activity v2" = "activity-v2.md" },
+    { "Row activity v1 (superseded)" = "activity.md" },
+    { "Actions and reserved keys" = "actions.md" },
+    { "Output log" = "output-log.md" },
+    { "Demo API" = "demoapi.md" },
+  ] },
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.tabs.link",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to light mode"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.highlight = {}
+pymdownx.inlinehilite = {}
+pymdownx.superfences = {}
+pymdownx.tabbed.alternate_style = true
+# Code included from real files compiles in CI, so the quick start can't rot.
+pymdownx.snippets.base_path = ["."]
+pymdownx.snippets.check_paths = true

@@ -6,6 +6,10 @@ component is a small, well-documented `pkg/` with an `Options` struct, a
 methods. A central `theme` package collapses the color palette into one struct
 so every component renders in the same palette without drift.
 
+**Documentation: <https://jsdrews.github.io/tuilib/>**: install, quick start,
+architecture, and a reference for every component. Build it locally with
+`task docs:serve`.
+
 ## Quickstart
 
 The fastest path to a working TUI is `pkg/app` + one `screen.Screen`. The
