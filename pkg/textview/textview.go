@@ -12,7 +12,7 @@
 //
 // Behavior:
 //   - SetContent replaces the buffer and resets scroll to the top.
-//   - Wrap is on by default: long lines wrap to the pane's inner width
+//   - Wrap is on via theme.TextView(): long lines wrap to the pane's inner width
 //     (ANSI-aware via x/ansi.Wrap). Toggle at runtime with `w`. Wrap-off
 //     mode falls back to pane's own truncation + horizontal scroll (rule 16).
 //   - "/" focuses an embedded filter input; typing highlights case-
@@ -52,9 +52,9 @@ type Options struct {
 	Title string
 	// Content is the initial body text. Replace at runtime via SetContent.
 	Content string
-	// Wrap enables word-wrapping to the pane's inner width. Default is
-	// true; when false the pane's built-in truncation + horizontal scroll
-	// handles overflow (rule 16).
+	// Wrap enables word-wrapping to the pane's inner width. theme.TextView()
+	// turns it on; the zero value is off, and then the pane's built-in
+	// truncation + horizontal scroll handles overflow (rule 16).
 	Wrap bool
 	// Searchable embeds a filter.Model above the body pane (three rows).
 	// When false, "/" is ignored and the full height is used for content.

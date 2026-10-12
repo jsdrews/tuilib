@@ -171,6 +171,28 @@ tasks:
     cmds:
       - go run ./demoapi/cmd/demoapi --addr {{.DEMO_ADDR}}
 
+  docs:serve:
+    desc: Serve the docs site at http://127.0.0.1:8000 with live reload
+    deps: [docs:venv]
+    cmds:
+      - .venv-docs/bin/zensical serve
+
+  docs:build:
+    desc: Build the docs site into ./site, failing on broken links or snippets (what CI runs)
+    deps: [docs:venv]
+    cmds:
+      - .venv-docs/bin/zensical build --strict
+
+  docs:venv:
+    internal: true
+    cmds:
+      - python3 -m venv .venv-docs
+      - .venv-docs/bin/pip install -q -r docs-requirements.txt
+    sources:
+      - docs-requirements.txt
+    generates:
+      - .venv-docs/bin/zensical
+
   list:
     desc: List available tasks
     cmds:
