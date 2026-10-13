@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Sizing caps. A menu is a picker, not a document: it takes only the width
@@ -105,6 +106,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// MultiReason and RunningReason override the stock text the menu fills
 	// into Disabled for a non-Multi action under a multi-selection, and for
@@ -167,6 +172,7 @@ func New(opts Options) Menu {
 		Focused:        true,
 		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
+		Surface:        opts.Surface,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,

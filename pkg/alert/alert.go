@@ -68,6 +68,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Autosize sizing caps. Width is capped at 80% of the outer bounds (with
@@ -123,6 +124,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// Autosize enables message-content sizing. When true, SetRect
 	// treats the rect as the outer bounds (typically the terminal size).
@@ -176,6 +181,7 @@ func New(opts Options) Model {
 		Focused:        true,
 		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
+		Surface:        opts.Surface,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
@@ -468,9 +474,10 @@ func (m *Model) recomputeAutosize() {
 		maxH = m.outerH
 	}
 
-	// pane reserves 2 border cols + 1 scrollbar col; inner content width
-	// is outer - 3 (see pkg/pane SetRect).
-	const paneChromeW = 3
+	// The pane's edge and its scrollbar column surround the message.
+	edge := m.pane.Insets()
+	paneChromeW := edge.Left + edge.Right + pane.ScrollbarWidth
+	paneChromeH := edge.Top + edge.Bottom
 	innerW := maxW - paneChromeW
 	if innerW < 1 {
 		innerW = 1
@@ -500,15 +507,15 @@ func (m *Model) recomputeAutosize() {
 	if n > 0 {
 		contentRows = n + 1 + 1
 	}
-	m.modalH = contentRows + 2
+	m.modalH = contentRows + paneChromeH
 	if m.modalH > maxH {
 		m.modalH = maxH
 	}
-	if m.modalH < 3 {
-		m.modalH = 3
+	if m.modalH < paneChromeH+1 {
+		m.modalH = paneChromeH + 1
 	}
 
-	innerH := m.modalH - 2
+	innerH := m.modalH - paneChromeH
 	if n == 0 {
 		m.viewportRows = 0
 	} else {

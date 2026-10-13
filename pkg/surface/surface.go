@@ -338,3 +338,22 @@ func accented(bar string, blocks bool) Surface {
 func Builtins() []Surface {
 	return []Surface{Outlined, Filled, Banded, Elevated, Accented}
 }
+
+// Lined reports whether s is a single ring of lines around an unfilled body —
+// Outlined and its variants — and returns that ring as a lipgloss.Border. A
+// pane draws a lined surface as the line border it always drew, so Outlined
+// stays byte-identical to the look before surfaces existed.
+func (s Surface) Lined() (lipgloss.Border, bool) {
+	if s.Filled() || len(s.Rings) != 1 {
+		return lipgloss.Border{}, false
+	}
+	r := s.Rings[0]
+	if !r.Top.Drawn() || !r.Bottom.Drawn() || !r.Left.Drawn() || !r.Right.Drawn() {
+		return lipgloss.Border{}, false
+	}
+	return lipgloss.Border{
+		Top: r.Top.Glyph, Bottom: r.Bottom.Glyph, Left: r.Left.Glyph, Right: r.Right.Glyph,
+		TopLeft: r.TopLeft.Glyph, TopRight: r.TopRight.Glyph,
+		BottomLeft: r.BottomLeft.Glyph, BottomRight: r.BottomRight.Glyph,
+	}, true
+}

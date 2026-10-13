@@ -61,6 +61,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // DefaultMaxItems is the resident cap when Options.MaxItems is zero.
@@ -175,9 +176,13 @@ type Options struct {
 	InactiveBorder lipgloss.Border
 	Glyphs         glyph.Set
 	SlotBrackets   pane.SlotBracketStyle
-	HScrollbar     bool
-	SpinnerStyle   lipgloss.Style
-	LoadingLabel   string
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface      surface.Resolved
+	HScrollbar   bool
+	SpinnerStyle lipgloss.Style
+	LoadingLabel string
 
 	// Filter styles both the filter and the search field.
 	Filter filter.Options
@@ -351,20 +356,23 @@ func New(opts Options) Model {
 	m.ruleActive = lipgloss.NewStyle().Foreground(opts.ActiveColor)
 	m.ruleInactive = lipgloss.NewStyle().Foreground(opts.InactiveColor)
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         opts.Height,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.ruleInactive,
+		DividerActiveStyle: m.ruleActive,
+		Width:              opts.Width,
+		Height:             opts.Height,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -1001,7 +1009,7 @@ func (m *Model) SetRect(r geom.Rect) {
 	m.body.SetRect(r)
 	if m.hasHeader() {
 		m.placeHeader(r)
-		m.body.SetHeader(m.header())
+		m.body.SetDividedHeader(m.header(), m.headerInput())
 		m.placeHeader(r)
 	}
 	m.refresh()
@@ -1011,7 +1019,7 @@ func (m Model) hasHeader() bool { return m.filterable || m.searchable }
 
 func (m *Model) placeHeader(r geom.Rect) {
 	inner := m.body.ContentRect()
-	row := geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen}
+	row := geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen}
 	if m.filterable {
 		m.filter.SetInlineRect(row)
 	}
@@ -1020,20 +1028,19 @@ func (m *Model) placeHeader(r geom.Rect) {
 	}
 }
 
-// header is one input row plus a rule: whichever field has input, or a
-// summary of both when neither does.
+// header is the input row above the pane's divider: whichever field has
+// input, or a summary of both when neither does.
 func (m Model) header() string {
 	w := m.body.ContentRect().W
 	if w <= 0 {
 		return ""
 	}
-	rule := m.ruleInactive
 	var row string
 	switch {
 	case m.filterable && m.filter.Focused():
-		row, rule = m.filter.InlineView(), m.ruleActive
+		row = m.filter.InlineView()
 	case m.searchable && m.search.Focused():
-		row, rule = m.search.InlineView(), m.ruleActive
+		row = m.search.InlineView()
 	default:
 		var parts []string
 		if m.filterable {
@@ -1048,7 +1055,12 @@ func (m Model) header() string {
 		}
 		row = strings.Join(parts, "   ")
 	}
-	return xansi.Truncate(row, w, "…") + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, w))
+	return xansi.Truncate(row, w, "…")
+}
+
+// headerInput reports whether a field in the header holds the keys.
+func (m Model) headerInput() bool {
+	return (m.filterable && m.filter.Focused()) || (m.searchable && m.search.Focused())
 }
 
 // height is how many lines item i draws as — never fewer than one.
@@ -1146,7 +1158,7 @@ func (m Model) missing() remoteview.Missing {
 func (m *Model) refresh() {
 	m.adjustTop()
 	if m.hasHeader() {
-		m.body.SetHeader(m.header())
+		m.body.SetDividedHeader(m.header(), m.headerInput())
 	}
 	if cmd := m.body.SetLoading(m.st.Loading()); cmd != nil {
 		m.loadCmd = cmd
@@ -1525,7 +1537,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	if !m.body.Rect().Hit(e.X, e.Y) {
 		return m, nil
 	}
-	if m.hasHeader() && e.Y == m.body.Rect().Y+1 {
+	if m.hasHeader() && e.Y == m.body.InnerRect().Y {
 		if e.IsPointPress() {
 			if m.searchable && !m.filterable {
 				return m, tea.Batch(m.FocusSearch(), focus.RequestSelf(m.token), m.flush())

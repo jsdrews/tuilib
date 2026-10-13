@@ -26,6 +26,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Options configures a new toggle. Zero-value fields fall back to defaults.
@@ -60,6 +61,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 }
 
 // Model is the toggle's exported state. Focus state lives on both the
@@ -96,6 +101,7 @@ func New(opts Options) Model {
 		Title:          opts.Title,
 		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
+		Surface:        opts.Surface,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,

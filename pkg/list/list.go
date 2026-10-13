@@ -26,6 +26,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Options configures a new list. Zero-value fields fall back to sane defaults
@@ -51,6 +52,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// HScrollbar reserves a row at the bottom of the list pane for a
 	// horizontal scrollbar and lets ←/h and →/l scroll long rows
@@ -341,20 +346,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -424,7 +432,7 @@ func (m *Model) refresh() {
 		b.WriteString("\n")
 	}
 	if m.filterable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	m.body.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.body.EnsureVisible(m.cursor)
@@ -854,10 +862,10 @@ func (m *Model) SetRect(r geom.Rect) {
 		// so place the pane, measure, then fill the header and let the pane
 		// re-measure.
 		inner := m.body.ContentRect()
-		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
-		m.body.SetHeader(m.filterHeader())
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, Gen: r.Gen, H: 1})
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		inner = m.body.ContentRect()
-		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, Gen: r.Gen, H: 1})
 	}
 	m.refresh()
 }
@@ -868,11 +876,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // SetItems replaces the item set, re-applies the current filter, and redraws.
@@ -985,7 +989,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.filterable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -1004,7 +1008,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -1015,7 +1019,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetTitle updates the title rendered on the body pane's top border.

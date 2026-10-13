@@ -102,6 +102,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Column declares one column's title, width (in visible cells), and cell
@@ -343,6 +344,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// HScrollbar reserves a row at the bottom of the body pane and lets
 	// ←/h and →/l scroll wide tables horizontally. theme.Table() enables
@@ -777,20 +782,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.recomputeWidths()
 	m.refresh()
@@ -994,7 +1002,7 @@ func (m *Model) SetRect(r geom.Rect) {
 		// it reads as belonging to what it filters. Placing the pane first
 		// gives the header its width; setting the header then re-measures.
 		m.placeInlineFilter(r)
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		m.placeInlineFilter(r)
 	}
 	m.recomputeWidths()
@@ -1004,7 +1012,7 @@ func (m *Model) SetRect(r geom.Rect) {
 // placeInlineFilter puts the filter on the pane's first inner row.
 func (m *Model) placeInlineFilter(r geom.Rect) {
 	inner := m.body.ContentRect()
-	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the filter row plus a rule separating it from the content.
@@ -1013,11 +1021,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // rowCount is the number of rows the cursor can reach — the logical total
@@ -1266,7 +1270,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.filterable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -1285,7 +1289,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -1296,7 +1300,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetActiveColor / SetInactiveColor update the body pane's border colors.
@@ -2265,7 +2269,7 @@ func (m *Model) refresh() {
 		}
 	}
 	if m.filterable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	if m.remote() && m.rq.st.Failed && !m.rq.st.HasAnswer {
 		m.body.SetContent(m.failedBody())

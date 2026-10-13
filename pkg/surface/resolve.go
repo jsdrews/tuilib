@@ -113,3 +113,6 @@ func (r Resolved) Overlay() Resolved {
 
 // Colours are the colours the surface was resolved against.
 func (r Resolved) Colours() Colours { return r.c }
+
+// IsZero reports whether r was never resolved — a pane given no surface.
+func (r Resolved) IsZero() bool { return !r.resolved }

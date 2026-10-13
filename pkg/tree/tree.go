@@ -44,6 +44,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Node is the minimal contract a caller's data must satisfy. Label is the
@@ -115,7 +116,11 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
-	HScrollbar   bool
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface    surface.Resolved
+	HScrollbar bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// tree is in its loading state (see SetLoading). Pass via theme.Tree()
@@ -374,20 +379,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 
 	if opts.Root != nil {
@@ -690,7 +698,7 @@ func (m *Model) SetRect(r geom.Rect) {
 		// it reads as belonging to what it filters. Placing the pane first
 		// gives the header its width; setting the header then re-measures.
 		m.placeInlineFilter(r)
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		m.placeInlineFilter(r)
 	}
 	m.refresh()
@@ -699,7 +707,7 @@ func (m *Model) SetRect(r geom.Rect) {
 // placeInlineFilter puts the filter on the pane's first inner row.
 func (m *Model) placeInlineFilter(r geom.Rect) {
 	inner := m.body.ContentRect()
-	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the filter row plus a rule separating it from the content.
@@ -708,11 +716,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // SetTitle sets the pane's top-left title.
@@ -739,7 +743,7 @@ func (m *Model) Blur() {
 	m.body.SetFocused(false)
 	if m.searchable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -758,7 +762,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -769,7 +773,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetActiveColor updates the body pane's active border color.
@@ -1032,7 +1036,7 @@ func (m *Model) refresh() {
 	}
 
 	if m.searchable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	m.body.SetContent(m.renderContent())
 	m.body.EnsureVisible(m.cursor)
@@ -1318,7 +1322,7 @@ func (m *Model) formatRow(r row, current bool) string {
 	b.WriteString(ansi.RenderFill(base.Render, gutter+indent+glyph))
 	b.WriteString(m.renderHighlightedSegments(label, base, matchOnRow))
 
-	inner := max(0, m.body.Width()-2-pane.ScrollbarWidth)
+	inner := m.body.ContentRect().W
 	if pad := inner - lipgloss.Width(b.String()); pad > 0 {
 		b.WriteString(ansi.RenderFill(base.Render, strings.Repeat(" ", pad)))
 	}
