@@ -61,7 +61,9 @@ Imports point one way: `pane → surface`, `palette → surface`, and
   `Resolve`, and the resolved type. All colour maths lives here.
 - **`pkg/palette`** (leaf, imports `surface`): `Palette`, the 19 named palettes
   (`palette.Dark()`, `palette.FromBase16`, `palette.Terminal()`, `palette.All()`),
-  `ByName`, `Resolve`.
+  `ByName`. `Resolve` (picking the starting palette from config) stays in
+  `pkg/theme` for now: it reads `pkg/config`, which would make `palette` depend
+  on more than `surface`. Where it lands is decided in step 6.
 - **`pkg/theme`** keeps `Theme` = palette + surface + glyphs, and the
   `th.Component()` builders, which need all three. It is not renamed.
 
@@ -75,9 +77,10 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
 
 - **Name**, for config matching and pickers.
 - **Edges per side:** glyphs, the cells each side takes, and where each glyph's
-  background comes from: the **card**, the **parent** (whatever contains the
-  surface), or **reversed** (Textual's `BORDER_LOCATIONS`; it is what makes
-  half-block edges expressible).
+  background comes from: the **card** (the `Fill` role), or the **parent**
+  (whatever contains the surface; the `Parent` role). Textual's "reversed"
+  placement needs no third value: a half-block lip is a glyph in `Fill` on
+  `Parent`, which is what makes half-block edges expressible.
 - **Text rows:** every surface has a top and a bottom text row, so all five
   slots (title, top-right, bottom-left, bottom-middle, bottom-right) exist on
   every surface. The surface decides how each row looks: a line with text
@@ -133,7 +136,7 @@ white.
 | `Screen` | behind and between surfaces | `Background` | `Background` |
 | `Card` | surface fill | lift 8% | toward white 70% |
 | `CardRaised` | focused fill | lift 13% | toward white 90% |
-| `Band` | Banded's header, Filled's divider step | lift 18% | darken 6% |
+| `Band` | Banded's header, Filled's divider step | lift 18% | darken `Card` 6% |
 | `Overlay` | overlay-form fill | lift 16% | white |
 | `Shadow` | Elevated's shadow | darken `Screen` 60% | darken `Screen` 22% |
 | `Selection` | focused selected row | `Card` mixed 45% toward `EdgeActive` | same |

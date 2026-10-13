@@ -1,10 +1,10 @@
-package theme
+package palette
 
 import "github.com/charmbracelet/lipgloss"
 
 // Base16 is Chris Kempson's 16-color scheme format (github.com/chriskempson/
 // base16). Each slot has a well-defined semantic role, which is what makes it
-// clean to map onto our Theme struct.
+// clean to map onto Palette.
 //
 // Slot reference (abridged):
 //
@@ -31,8 +31,10 @@ type Base16 struct {
 	Base08, Base09, Base0A, Base0B, Base0C, Base0D, Base0E, Base0F string
 }
 
-// FromBase16 maps a Base16 palette onto a Theme. The mapping is opinionated:
+// FromBase16 maps a Base16 scheme onto a Palette. The mapping is opinionated:
 //
+//	Background base00 default background — the screen
+//	Foreground base05 default foreground — text on a filled surface
 //	BarBG   base01   lighter bg — the canonical status-bar surface
 //	BarFG   base05   default fg
 //	Current base06   light fg for emphasis (bolded by the crumb style)
@@ -45,11 +47,13 @@ type Base16 struct {
 //
 // If the resulting theme reads wrong for a specific palette (some base16
 // schemes have an unusually bright base04 or near-identical base01/base00),
-// derive a one-off Theme by hand instead of using this converter.
-func FromBase16(name string, p Base16) Theme {
+// derive a one-off Palette by hand instead of using this converter.
+func FromBase16(name string, p Base16) Palette {
 	hex := func(s string) lipgloss.Color { return lipgloss.Color("#" + s) }
-	return Theme{
+	return Palette{
 		Name:           name,
+		Background:     hex(p.Base00),
+		Foreground:     hex(p.Base05),
 		BarBG:          hex(p.Base01),
 		BarFG:          hex(p.Base05),
 		Current:        hex(p.Base06),
@@ -71,7 +75,7 @@ func FromBase16(name string, p Base16) Theme {
 // file.
 
 // Base16Ocean — Chris Kempson's "ocean" scheme, blue-grey neutral.
-func Base16Ocean() Theme {
+func Base16Ocean() Palette {
 	return FromBase16("base16-ocean", Base16{
 		Base00: "2b303b", Base01: "343d46", Base02: "4f5b66", Base03: "65737e",
 		Base04: "a7adba", Base05: "c0c5ce", Base06: "dfe1e8", Base07: "eff1f5",
@@ -81,7 +85,7 @@ func Base16Ocean() Theme {
 }
 
 // Base16Eighties — Chris Kempson, bright retro palette.
-func Base16Eighties() Theme {
+func Base16Eighties() Palette {
 	return FromBase16("base16-eighties", Base16{
 		Base00: "2d2d2d", Base01: "393939", Base02: "515151", Base03: "747369",
 		Base04: "a09f93", Base05: "d3d0c8", Base06: "e8e6df", Base07: "f2f0ec",
@@ -91,7 +95,7 @@ func Base16Eighties() Theme {
 }
 
 // Base16Railscasts — warm muted palette derived from the classic TextMate theme.
-func Base16Railscasts() Theme {
+func Base16Railscasts() Palette {
 	return FromBase16("base16-railscasts", Base16{
 		Base00: "2b2b2b", Base01: "272935", Base02: "3a4055", Base03: "5a647e",
 		Base04: "d4cfc9", Base05: "e6e1dc", Base06: "f4f1ed", Base07: "f9f7f3",
@@ -101,7 +105,7 @@ func Base16Railscasts() Theme {
 }
 
 // Base16TomorrowNight — Chris Kempson's "tomorrow-night". Balanced dark.
-func Base16TomorrowNight() Theme {
+func Base16TomorrowNight() Palette {
 	return FromBase16("base16-tomorrow-night", Base16{
 		Base00: "1d1f21", Base01: "282a2e", Base02: "373b41", Base03: "969896",
 		Base04: "b4b7b4", Base05: "c5c8c6", Base06: "e0e0e0", Base07: "ffffff",

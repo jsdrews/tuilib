@@ -1,17 +1,19 @@
-package theme
+package palette
 
 import "github.com/charmbracelet/lipgloss"
 
 // This file holds hand-curated themes. Each constructor maps a published
-// palette's canonical hex values onto our semantic Theme slots. When a
+// palette's canonical hex values onto our semantic Palette slots. When a
 // palette's upstream role doesn't match ours exactly (e.g. base16 has no
 // "key hint" color), the constructor makes a judgment call — tweak the
 // field if it reads wrong on your terminal.
 
 // CatppuccinMocha — catppuccin.com, dark "mocha" flavor.
-func CatppuccinMocha() Theme {
-	return Theme{
+func CatppuccinMocha() Palette {
+	return Palette{
 		Name:           "catppuccin-mocha",
+		Background:     lipgloss.Color("#1e1e2e"),
+		Foreground:     lipgloss.Color("#cdd6f4"),
 		BarBG:          lipgloss.Color("#313244"), // surface0
 		BarFG:          lipgloss.Color("#cdd6f4"), // text
 		Current:        lipgloss.Color("#cdd6f4"),
@@ -29,9 +31,11 @@ func CatppuccinMocha() Theme {
 }
 
 // CatppuccinLatte — catppuccin.com, light "latte" flavor.
-func CatppuccinLatte() Theme {
-	return Theme{
+func CatppuccinLatte() Palette {
+	return Palette{
 		Name:           "catppuccin-latte",
+		Background:     lipgloss.Color("#eff1f5"),
+		Foreground:     lipgloss.Color("#4c4f69"),
 		BarBG:          lipgloss.Color("#ccd0da"), // surface0
 		BarFG:          lipgloss.Color("#4c4f69"), // text
 		Current:        lipgloss.Color("#4c4f69"),
@@ -49,9 +53,11 @@ func CatppuccinLatte() Theme {
 }
 
 // TokyoNight — enkia/tokyo-night, "night" variant.
-func TokyoNight() Theme {
-	return Theme{
+func TokyoNight() Palette {
+	return Palette{
 		Name:           "tokyo-night",
+		Background:     lipgloss.Color("#1a1b26"),
+		Foreground:     lipgloss.Color("#c0caf5"),
 		BarBG:          lipgloss.Color("#292e42"), // bg_highlight
 		BarFG:          lipgloss.Color("#c0caf5"), // fg
 		Current:        lipgloss.Color("#c0caf5"),
@@ -70,9 +76,11 @@ func TokyoNight() Theme {
 
 // RosePine — rosepinetheme.com, main "moon" is excluded; this is the dark
 // default.
-func RosePine() Theme {
-	return Theme{
+func RosePine() Palette {
+	return Palette{
 		Name:           "rose-pine",
+		Background:     lipgloss.Color("#191724"),
+		Foreground:     lipgloss.Color("#e0def4"),
 		BarBG:          lipgloss.Color("#1f1d2e"), // surface
 		BarFG:          lipgloss.Color("#e0def4"), // text
 		Current:        lipgloss.Color("#e0def4"),
@@ -90,9 +98,11 @@ func RosePine() Theme {
 }
 
 // RosePineDawn — rosepinetheme.com, light variant.
-func RosePineDawn() Theme {
-	return Theme{
+func RosePineDawn() Palette {
+	return Palette{
 		Name:           "rose-pine-dawn",
+		Background:     lipgloss.Color("#faf4ed"),
+		Foreground:     lipgloss.Color("#575279"),
 		BarBG:          lipgloss.Color("#fffaf3"), // surface
 		BarFG:          lipgloss.Color("#575279"), // text
 		Current:        lipgloss.Color("#575279"),
@@ -110,9 +120,11 @@ func RosePineDawn() Theme {
 }
 
 // OneDark — Atom's classic "One Dark" palette.
-func OneDark() Theme {
-	return Theme{
+func OneDark() Palette {
+	return Palette{
 		Name:           "one-dark",
+		Background:     lipgloss.Color("#282c34"),
+		Foreground:     lipgloss.Color("#abb2bf"),
 		BarBG:          lipgloss.Color("#21252b"), // bar bg (common in atom)
 		BarFG:          lipgloss.Color("#abb2bf"), // fg
 		Current:        lipgloss.Color("#ffffff"),
@@ -130,9 +142,11 @@ func OneDark() Theme {
 }
 
 // Monokai — the classic Sublime Text / TextMate palette.
-func Monokai() Theme {
-	return Theme{
+func Monokai() Palette {
+	return Palette{
 		Name:           "monokai",
+		Background:     lipgloss.Color("#272822"),
+		Foreground:     lipgloss.Color("#f8f8f2"),
 		BarBG:          lipgloss.Color("#3e3d32"),
 		BarFG:          lipgloss.Color("#f8f8f2"),
 		Current:        lipgloss.Color("#f8f8f2"),
@@ -150,9 +164,11 @@ func Monokai() Theme {
 }
 
 // EverforestDark — sainnhe/everforest, medium-contrast dark.
-func EverforestDark() Theme {
-	return Theme{
+func EverforestDark() Palette {
+	return Palette{
 		Name:           "everforest-dark",
+		Background:     lipgloss.Color("#2d353b"),
+		Foreground:     lipgloss.Color("#d3c6aa"),
 		BarBG:          lipgloss.Color("#343f44"), // bg1
 		BarFG:          lipgloss.Color("#d3c6aa"), // fg
 		Current:        lipgloss.Color("#d3c6aa"),
