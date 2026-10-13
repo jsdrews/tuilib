@@ -191,3 +191,56 @@ func assertSlice(t *testing.T, got, want []int) {
 		}
 	}
 }
+
+// zstackRows composites overlay rows over a base of dots and returns each
+// row with escapes stripped, so a test reads what is on screen.
+func zstackRows(overlay []string) []string {
+	base := strings.Repeat(strings.Repeat(".", 10)+"\n", len(overlay)-1) + strings.Repeat(".", 10)
+	r := geom.New(0, 0, 10, len(overlay))
+	out := ZStack(
+		RenderFunc(func(geom.Rect) string { return base }),
+		RenderFunc(func(geom.Rect) string { return strings.Join(overlay, "\n") }),
+	).Render(r)
+	return strings.Split(stripANSI(out), "\n")
+}
+
+const bg = "\x1b[48;2;1;2;3m"
+
+// A filled overlay's blank rows and padding are painted, so they cover the
+// base. Before, a row of spaces counted as empty and the base showed through
+// the middle of a filled modal.
+func TestZStackPaintedSpacesCover(t *testing.T) {
+	got := zstackRows([]string{
+		"  " + bg + " card " + "\x1b[0m",
+		"  " + bg + "      " + "\x1b[0m",
+	})
+	want := []string{".. card ..", "..      .."}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// Plain spaces — Center's padding, a margin drawn on the parent — stay
+// transparent.
+func TestZStackPlainSpacesStayTransparent(t *testing.T) {
+	got := zstackRows([]string{
+		"   ab     ",
+		"          ",
+	})
+	if got[0] != "...ab....." || got[1] != ".........." {
+		t.Errorf("rows = %q", got)
+	}
+}
+
+// A zero operand in a truecolor foreground isn't a reset: the cells after it
+// keep the background they had.
+func TestZStackColourOperandIsNotAReset(t *testing.T) {
+	got := zstackRows([]string{
+		"  " + bg + "\x1b[38;2;255;0;0m" + "x   " + "\x1b[0m",
+	})
+	if got[0] != "..x   ...." {
+		t.Errorf("row = %q, want the painted spaces after x to cover the base", got[0])
+	}
+}

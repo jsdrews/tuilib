@@ -39,31 +39,70 @@ func TestMain(m *testing.M) {
 func TestOutlinedFramesAreByteIdentical(t *testing.T) {
 	for _, e := range entries {
 		t.Run(e.name, func(t *testing.T) {
-			got := outlinedFrame(e)
 			path := filepath.Join("testdata", "outlined", goldenName(e)+".golden")
-			if *update {
-				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				return
-			}
-			want, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("no golden frame (run with -update to capture one): %v", err)
-			}
-			if got != string(want) {
-				t.Errorf("frame differs from %s\n%s", path, firstDiff(string(want), got))
-			}
+			compareGolden(t, path, outlinedFrame(e))
 		})
 	}
 }
 
-// outlinedFrame renders e's first frame inside the app shell, configured as
-// the launcher configures it.
-func outlinedFrame(e entry) string {
+// TestOutlinedOverlayFramesAreByteIdentical does the same with an overlay up:
+// the help overlay, the actions menu, an alert and a confirm. Each is composited
+// over the screen by layout.ZStack, so these frames are what hold Outlined
+// modals byte-identical when compositing changes.
+func TestOutlinedOverlayFramesAreByteIdentical(t *testing.T) {
+	down, enter := tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter}
+	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	for _, sc := range []struct {
+		name, dir string
+		keys      []tea.KeyMsg
+	}{
+		{"help", "components/list", []tea.KeyMsg{runes("?")}},
+		{"actions", "patterns/actions", []tea.KeyMsg{runes("a")}},
+		{"alert", "patterns/modals", []tea.KeyMsg{down, down, enter}},
+		{"confirm", "patterns/modals", []tea.KeyMsg{down, down, down, down, enter}},
+	} {
+		t.Run(sc.name, func(t *testing.T) {
+			e, ok := entryIn(sc.dir)
+			if !ok {
+				t.Fatalf("no launcher entry in %s", sc.dir)
+			}
+			compareGolden(t, filepath.Join("testdata", "outlined", "overlay_"+sc.name+".golden"), outlinedFrame(e, sc.keys...))
+		})
+	}
+}
+
+func entryIn(dir string) (entry, bool) {
+	for _, e := range entries {
+		if e.dir == dir {
+			return e, true
+		}
+	}
+	return entry{}, false
+}
+
+func compareGolden(t *testing.T, path, got string) {
+	t.Helper()
+	if *update {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("no golden frame (run with -update to capture one): %v", err)
+	}
+	if got != string(want) {
+		t.Errorf("frame differs from %s\n%s", path, firstDiff(string(want), got))
+	}
+}
+
+// outlinedFrame renders e inside the app shell, configured as the launcher
+// configures it, after keys.
+func outlinedFrame(e entry, keys ...tea.KeyMsg) string {
 	m := app.New(app.Options{
 		Root:       e.build(theme.Dark()),
 		Themes:     []theme.Theme{theme.Dark()},
@@ -76,6 +115,9 @@ func outlinedFrame(e entry) string {
 	})
 	m.Init()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	for _, k := range keys {
+		next, _ = next.Update(k)
+	}
 	return next.View()
 }
 

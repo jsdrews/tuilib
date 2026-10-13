@@ -7,9 +7,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
+	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/eventlog"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/inspector"
+	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/palette"
@@ -108,6 +110,37 @@ func TestComponentsDrawEverySurfaceAtTheirRectSize(t *testing.T) {
 					}
 				}
 			})
+		}
+	}
+}
+
+// TestFilledModalCoversTheBase composites a confirm drawn in Banded's
+// overlay form over a screen of ░. Every row of the card must cover the
+// base; before ZStack decided opacity by painted cells, a filled modal's
+// blank rows showed the screen through it.
+func TestFilledModalCoversTheBase(t *testing.T) {
+	th := theme.Dark()
+	o := th.Confirm()
+	o.Surface = resolvedSurface(surface.Banded).Overlay()
+	o.Title, o.Message = "Delete?", "Gone for good."
+	m := confirm.New(o)
+
+	const w, h, mw, mh = 50, 15, 30, 9
+	base := strings.TrimSuffix(strings.Repeat(strings.Repeat("░", w)+"\n", h), "\n")
+	frame := layout.ZStack(
+		layout.RenderFunc(func(geom.Rect) string { return base }),
+		layout.Center(mw, mh, layout.Sized(&m)),
+	).Render(geom.New(0, 0, w, h))
+
+	lines := strings.Split(ansi.Strip(frame), "\n")
+	top, left := (h-mh)/2, (w-mw)/2
+	in := o.Surface.Insets()
+	for y := top; y < top+mh-in.Bottom+1; y++ { // the last row is the margin
+		row := []rune(lines[y])
+		for x := left; x < left+mw-in.Right; x++ {
+			if row[x] == '░' {
+				t.Fatalf("base shows through the modal at (%d,%d):\n%s", x, y, strings.Join(lines, "\n"))
+			}
 		}
 	}
 }
