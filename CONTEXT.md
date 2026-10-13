@@ -134,3 +134,64 @@ _Avoid_: tail, live mode, auto-scroll
 **Probe**:
 A follow poll made while the user is not following: it learns how much is new without fetching it into view.
 _Avoid_: peek, count query
+
+### Surfaces
+
+**Surface**:
+How a component's edge and body are drawn: whether it has a line, a fill, a header band or a shadow. Independent of the palette, so any palette can be drawn with any surface.
+_Avoid_: theme (a palette plus chrome), style (a lipgloss.Style), skin, card style
+
+**Outlined**:
+The surface of a line border around an unfilled body. It is today's look.
+
+**Filled**:
+The surface of a solid fill whose half-block rows are its own edge, with no line.
+
+**Banded**:
+The surface of a fill under a header band that carries the title, where focus colours the band.
+
+**Elevated**:
+The surface of a fill with a drop shadow below and to the right.
+
+**Accented**:
+The surface of an unfilled body with a one-cell bar down its left edge, coloured when focused.
+
+**Palette**:
+The colours an app is drawn in: the chrome colours, the `Background` and `Foreground` seeds, and any surface-role overrides. One of two independent axes the user picks, the other being the surface.
+_Avoid_: theme, when only the colours are meant
+
+**Theme**:
+What components are built from: the current palette and surface together with the glyphs. The shell assembles it and hands it to `SetTheme`; nobody picks a theme directly.
+_Avoid_: palette, skin
+
+**Screen background**:
+The tone painted behind and between surfaces, so that a filled surface reads as raised against it.
+_Avoid_: terminal background (the terminal's own default, which no filled surface relies on)
+
+**Edge**:
+What a surface draws on one side of its rect: glyphs, the background each glyph sits on, and the cells it takes. A shadow is edge too, because a surface never draws outside its rect.
+_Avoid_: border (only Outlined's edge is a line), frame, inset
+
+**Role**:
+A named colour slot a surface refers to (`Screen`, `Card`, `Band`, `Shadow`, …), resolved against the palette when the theme builds a component. A surface never holds a literal colour.
+_Avoid_: token, when the surface's view is meant
+
+**Text row**:
+The top or bottom row of a surface's edge that carries the pane's slots: the title, counters, hints and errors. Every surface has both.
+_Avoid_: border line, footer
+
+**Divider**:
+The row the pane draws under a pinned header, as the surface describes it: a line on Outlined, possibly a tone step on a filled surface.
+_Avoid_: rule, separator
+
+**Seed**:
+A palette colour that surface roles are derived from: `Background` (which the screen is) and `Foreground` (which body text on a filled surface is). Every other surface role is derived from these unless the palette overrides it.
+_Avoid_: base colour, primary
+
+**Margin**:
+The part of a surface's edge, on its right and bottom, that separates it from its neighbours. It is drawn on the parent's background, so whatever contains the surface paints it. Outlined has none.
+_Avoid_: gutter (the visible gap, which margins produce), gap, padding
+
+**Fallback**:
+The surface a surface becomes when the terminal can't meet what it needs (colour depth, block glyphs), followed as a chain that always ends at Outlined.
+_Avoid_: degrade mode, compatibility mode

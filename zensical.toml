@@ -60,6 +60,7 @@ nav = [
     { "Row activity v1 (superseded)" = "activity.md" },
     { "Actions and reserved keys" = "actions.md" },
     { "Output log" = "output-log.md" },
+    { "Surfaces" = "surfaces.md" },
     { "Demo API" = "demoapi.md" },
   ] },
 ]

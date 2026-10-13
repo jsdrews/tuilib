@@ -193,6 +193,11 @@ tasks:
     generates:
       - .venv-docs/bin/zensical
 
+  prototype:surfaces:
+    desc: PROTOTYPE — card/surface theming variants (throwaway)
+    cmds:
+      - go run ./cmd/prototype-surfaces
+
   list:
     desc: List available tasks
     cmds:
