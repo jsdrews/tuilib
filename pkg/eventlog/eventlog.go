@@ -52,6 +52,7 @@ import (
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/internal/tick"
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -1299,7 +1300,12 @@ func (m Model) render() string {
 			if len(out) >= rows {
 				break
 			}
-			row := style.Render(m.highlight(l))
+			var row string
+			if i == m.cursor {
+				row = m.selectedRow(m.highlight(l), style, width)
+			} else {
+				row = style.Render(m.highlight(l))
+			}
 			if width > 0 {
 				label := ""
 				if n == 0 {
@@ -1311,6 +1317,19 @@ func (m Model) render() string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// selectedRow paints the cursor item's line with style across the whole
+// content width, through any styling the line carries itself.
+func (m Model) selectedRow(line string, style lipgloss.Style, gutter int) string {
+	w := m.body.ContentRect().W
+	if gutter > 0 {
+		w -= xansi.StringWidth(m.gutterCell("", gutter, false, false))
+	}
+	if pad := w - xansi.StringWidth(line); pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	return tuiansi.RenderFill(style.Render, line)
 }
 
 // label is what the gutter shows for item i: its Mark, else its position

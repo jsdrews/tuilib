@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/activity"
+	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -409,15 +410,17 @@ func (m *Model) refresh() {
 		var row string
 		switch {
 		case i == m.cursor:
-			// One styled run over the whole row: a nested mark style would
-			// close the highlight at its first reset (rule 19).
-			row = m.selectedStyle.Render(m.prefixFor(i) + it)
+			row = m.withBadge(i, m.prefixFor(i)+it)
+			if pad := m.body.ContentRect().W - lipgloss.Width(row); pad > 0 {
+				row += strings.Repeat(" ", pad)
+			}
+			row = ansi.RenderFill(m.selectedStyle.Render, row)
 		case m.markable && m.isMarkedAt(i):
-			row = " " + m.markStyle.Render(m.glyphs.Mark) + " " + it
+			row = m.withBadge(i, " "+m.markStyle.Render(m.glyphs.Mark)+" "+it)
 		default:
-			row = m.prefixFor(i) + it
+			row = m.withBadge(i, m.prefixFor(i)+it)
 		}
-		b.WriteString(m.withBadge(i, row))
+		b.WriteString(row)
 		b.WriteString("\n")
 	}
 	if m.filterable {

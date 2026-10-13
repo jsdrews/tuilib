@@ -35,6 +35,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -648,18 +649,18 @@ func (m *Model) formatLine(line string, spans []matchPos, current bool) string {
 	cursor := 0
 	for _, sp := range spans {
 		if sp.start > cursor {
-			b.WriteString(base.Render(line[cursor:sp.start]))
+			b.WriteString(tuiansi.RenderFill(base.Render, line[cursor:sp.start]))
 		}
-		b.WriteString(matchOnRow.Render(line[sp.start:sp.end]))
+		b.WriteString(tuiansi.RenderFill(matchOnRow.Render, line[sp.start:sp.end]))
 		cursor = sp.end
 	}
 	if cursor < len(line) {
-		b.WriteString(base.Render(line[cursor:]))
+		b.WriteString(tuiansi.RenderFill(base.Render, line[cursor:]))
 	}
 
 	inner := max0(m.body.Width() - 2 - pane.ScrollbarWidth)
 	if pad := inner - lipgloss.Width(b.String()); pad > 0 {
-		b.WriteString(base.Render(strings.Repeat(" ", pad)))
+		b.WriteString(tuiansi.RenderFill(base.Render, strings.Repeat(" ", pad)))
 	}
 	return b.String()
 }

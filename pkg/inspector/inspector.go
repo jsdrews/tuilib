@@ -33,6 +33,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -1022,7 +1023,7 @@ func (m *Model) draw() {
 	// spans the whole visible band rather than ending at the cursor row's
 	// natural text width.
 	if cur := m.cursor - start; cur >= 0 && cur < len(lines) {
-		lines[cur] = m.currentLineStyle.Render(padToWidth(lines[cur], maxW))
+		lines[cur] = tuiansi.RenderFill(m.currentLineStyle.Render, padToWidth(lines[cur], maxW))
 	}
 	if m.filterable {
 		m.body.SetHeader(m.filterHeader())

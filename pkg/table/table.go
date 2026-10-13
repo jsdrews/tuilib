@@ -93,6 +93,7 @@ import (
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/pkg/activity"
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -2251,10 +2252,11 @@ func (m *Model) refresh() {
 		}
 		switch {
 		case i == m.cursor:
-			// One styled run over the whole row, gutter included: a nested
-			// mark style would close the highlight at its first reset and
-			// punch a hole in the selected row's background (rule 19).
-			b.WriteString(sel.Render(m.gutterFor(i) + row))
+			line := m.gutterFor(i) + row
+			if pad := m.body.ContentRect().W - ansi.StringWidth(line); pad > 0 {
+				line += strings.Repeat(" ", pad)
+			}
+			b.WriteString(tuiansi.RenderFill(sel.Render, line))
 		case m.markable && m.isMarkedAt(i):
 			b.WriteString(m.markStyle.Render(m.glyphs.Mark) +
 				cell.Render(" "+m.actGutterFor(i)+row))
