@@ -30,10 +30,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/output"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -43,8 +45,31 @@ type Options struct {
 	Root screen.Screen
 
 	// Themes is the list the user cycles through. At least one entry is
-	// required; Themes[0] is the initial theme.
+	// required; Themes[0] is the initial theme. Ignored when Palettes is
+	// set.
 	Themes []theme.Theme
+
+	// Palettes and Surfaces are the two axes a user picks independently:
+	// the colours, and how components' edges and bodies are drawn. Setting
+	// Palettes switches the shell to them: ThemeKey cycles palettes,
+	// SurfaceKey cycles surfaces, and every screen is themed with the pair
+	// composed (theme.Compose). Surfaces defaults to [surface.Outlined],
+	// which draws exactly what Themes does. See docs/surfaces.md.
+	Palettes []palette.Palette
+	Surfaces []surface.Surface
+
+	// SurfaceKey cycles Surfaces. Opt-in like ThemeKey: leave it zero and
+	// the app stays on its first surface (or the user's config choice).
+	SurfaceKey key.Binding
+
+	// PaletteEnvVar and SurfaceEnvVar name environment variables consulted
+	// for the starting palette and surface, before the user's config file.
+	PaletteEnvVar, SurfaceEnvVar string
+
+	// Capabilities pins what the terminal is assumed to offer — colour
+	// profile and block glyphs — instead of detecting it. For tests and
+	// screenshots; leave nil.
+	Capabilities *surface.Caps
 
 	// Version is rendered on the right side of the statusbar.
 	Version string
@@ -315,6 +340,12 @@ type Model struct {
 	themeIdx int
 	version  string
 
+	// ax is the palette × surface state when the app was built from
+	// Options.Palettes; nil for an app built from Themes.
+	ax           *axes
+	surfaceKey   key.Binding
+	lastFallback string
+
 	stack screen.Stack
 
 	quitKey, themeKey, helpKey key.Binding
@@ -437,10 +468,15 @@ func New(opts Options) Model {
 	if opts.Root == nil {
 		panic("app.New: Options.Root is required")
 	}
+	var ax *axes
+	if len(opts.Palettes) > 0 {
+		ax = newAxes(opts)
+		opts.Themes = []theme.Theme{ax.theme}
+	}
 	if len(opts.Themes) == 0 {
 		opts.Themes = []theme.Theme{theme.Dark()}
 	}
-	if !opts.SkipConfig {
+	if ax == nil && !opts.SkipConfig {
 		opts.Themes = theme.Resolve(opts.Themes, opts.ThemeEnvVar)
 	}
 	if opts.QuitKey.Keys() == nil {
@@ -482,6 +518,8 @@ func New(opts Options) Model {
 		stack:       screen.NewStack(opts.Root),
 		quitKey:     opts.QuitKey,
 		themeKey:    opts.ThemeKey,
+		surfaceKey:  opts.SurfaceKey,
+		ax:          ax,
 		helpKey:     opts.HelpKey,
 		suspendKey:  opts.SuspendKey,
 		helpMinimal: !opts.HelpVerbose,
@@ -504,6 +542,7 @@ func New(opts Options) Model {
 		m.outBuf = output.NewBuffer(m.outOpts.MaxRecords)
 	}
 	m.apply()
+	m.logFallback()
 	return m
 }
 
@@ -558,7 +597,12 @@ func (m Model) Init() tea.Cmd {
 }
 
 // theme returns the currently-active palette.
-func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
+func (m Model) theme() theme.Theme {
+	if m.ax != nil {
+		return m.ax.theme
+	}
+	return m.themes[m.themeIdx]
+}
 
 // retheme pushes the current palette through the stack and the console, then
 // rebuilds the chrome.
@@ -588,6 +632,7 @@ func (m *Model) retheme() {
 		}
 	}
 	m.apply()
+	m.logFallback()
 }
 
 // apply rebuilds breadcrumb + statusbar from the current theme and stack.
@@ -913,6 +958,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case SetThemeMsg:
+		if m.ax != nil {
+			if m.ax.selectPalette(msg.Name) {
+				m.retheme()
+			}
+			return m, nil
+		}
 		for i, t := range m.themes {
 			if t.Name == msg.Name {
 				m.themeIdx = i
@@ -1064,7 +1115,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.themeKey.Keys() != nil && key.Matches(msg, m.themeKey) {
-				m.themeIdx = (m.themeIdx + 1) % len(m.themes)
+				if m.ax != nil {
+					m.ax.nextPalette()
+				} else {
+					m.themeIdx = (m.themeIdx + 1) % len(m.themes)
+				}
+				m.retheme()
+				return m, nil
+			}
+			if m.ax != nil && m.surfaceKey.Keys() != nil && key.Matches(msg, m.surfaceKey) {
+				m.ax.nextSurface()
 				m.retheme()
 				return m, nil
 			}
@@ -1418,11 +1478,11 @@ func (m Model) View() string {
 		body = layout.ZStack(body, layout.Sized(m.helpOv))
 	}
 
-	return layout.VStack(
+	return m.screenPass(layout.VStack(
 		layout.Fixed(1, layout.Bar(&m.bc)),
-		layout.Flex(1, body),
+		layout.Flex(1, m.surfaceBody(body)),
 		layout.Fixed(1, layout.Bar(&m.sb)),
-	).Render(geom.New(0, 0, m.w, m.h))
+	).Render(geom.New(0, 0, m.w, m.h)))
 }
 
 // Theme exposes the app's current palette for screens that need it outside
@@ -1500,6 +1560,9 @@ func (m Model) helpSections() []help.Section {
 	}
 	if m.themeKey.Keys() != nil {
 		globals = append(globals, m.themeKey)
+	}
+	if m.ax != nil && m.surfaceKey.Keys() != nil {
+		globals = append(globals, m.surfaceKey)
 	}
 	if m.autoEscPop && m.stack.Depth() > 1 {
 		globals = append(globals, key.NewBinding(

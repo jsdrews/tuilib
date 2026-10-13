@@ -61,9 +61,9 @@ Imports point one way: `pane → surface`, `palette → surface`, and
   `Resolve`, and the resolved type. All colour maths lives here.
 - **`pkg/palette`** (leaf, imports `surface`): `Palette`, the 19 named palettes
   (`palette.Dark()`, `palette.FromBase16`, `palette.Terminal()`, `palette.All()`),
-  `ByName`. `Resolve` (picking the starting palette from config) stays in
-  `pkg/theme` for now: it reads `pkg/config`, which would make `palette` depend
-  on more than `surface`. Where it lands is decided in step 6.
+  `ByName`. Picking the starting palette and surface from env and config lives
+  in the app shell, which already reads `pkg/config`, so `palette` depends on
+  nothing but `surface`.
 - **`pkg/theme`** keeps `Theme` = palette + surface + glyphs, and the
   `th.Component()` builders, which need all three. It is not renamed.
 
@@ -94,6 +94,11 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
 - **Selection treatment** (see [Selection](#selection)).
 - **Bar role:** which role the breadcrumb and statusbar sit on.
 - **Overlay form:** another surface value for modals (see [Overlays](#overlays)).
+- **Field form:** another surface value for single-line components — input,
+  filter, toggle — which screens place in three-row slots, so it takes at
+  most one cell of edge per side. Nil derives it: a lined surface is its own
+  field, and anything else draws an outlined field (Material's outlined text
+  field). Theme builders hand `Input()`, `Filter()` and `Toggle()` this form.
 - **Needs and fallback:** minimum colour depth, whether it uses block glyphs, and
   the `Fallback` surface (see [Degraded terminals](#degraded-terminals)).
 

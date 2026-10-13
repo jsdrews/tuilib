@@ -45,6 +45,12 @@ type Surface struct {
 	// Overlay is the form this surface takes for modals. Nil derives it: the
 	// same surface with its body in the Overlay tone.
 	Overlay *Surface
+	// Field is the form this surface takes for single-line components —
+	// input, filter, toggle — which screens place in three-row slots. It
+	// must take at most one cell of edge on each side. Nil derives it: a
+	// lined surface is its own field, and anything else draws an outlined
+	// field, Material's outlined text field.
+	Field *Surface
 
 	// Needs is what the terminal must offer to draw this surface, and
 	// Fallback is drawn instead when it doesn't. Nil ends the chain.
@@ -159,6 +165,19 @@ func (s Surface) overlayForm() Surface {
 		o.Fill, o.FillFocused = Overlay, Overlay
 	}
 	return o
+}
+
+// fieldForm is s.Field, or s itself when s is lined, or an outlined field.
+func (s Surface) fieldForm() Surface {
+	if s.Field != nil {
+		return *s.Field
+	}
+	if _, lined := s.Lined(); lined {
+		return s
+	}
+	f := OutlinedWith(lipgloss.NormalBorder())
+	f.Name = s.Name + "-field"
+	return f
 }
 
 // lineRing is a ring of box-drawing lines in Edge, lit in EdgeActive while
@@ -356,4 +375,15 @@ func (s Surface) Lined() (lipgloss.Border, bool) {
 		TopLeft: r.TopLeft.Glyph, TopRight: r.TopRight.Glyph,
 		BottomLeft: r.BottomLeft.Glyph, BottomRight: r.BottomRight.Glyph,
 	}, true
+}
+
+// Margined reports whether s keeps a margin on its right and bottom — an
+// outermost ring drawn on the parent there. The app shell pads the screen's
+// left and top edges to match when the current surface does.
+func (s Surface) Margined() bool {
+	if _, lined := s.Lined(); lined || len(s.Rings) == 0 {
+		return false
+	}
+	r := s.Rings[0]
+	return r.Right.Drawn() && r.Right.BG == Parent && r.Bottom.Drawn() && r.Bottom.BG == Parent
 }

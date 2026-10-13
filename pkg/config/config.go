@@ -37,6 +37,21 @@ type Config struct {
 	// theme.Theme.Name by theme.Resolve. Empty string disables the lookup.
 	Theme string `yaml:"theme"`
 
+	// Palette names the palette to start in, for apps that choose palette
+	// and surface separately. Theme is read as an alias when it is unset.
+	Palette string `yaml:"palette"`
+
+	// Surface names the surface to start in — outlined, filled, banded,
+	// elevated, accented, or one the app defines. Ignored when the app
+	// offers only one.
+	Surface string `yaml:"surface"`
+
+	// BlockGlyphs says whether the terminal draws block elements (▄ ▀ ▌)
+	// without seams. Unset, it is assumed off for terminals known to draw
+	// them from the font (macOS Terminal) and on everywhere else; surfaces
+	// that need block glyphs fall back when it is off.
+	BlockGlyphs *bool `yaml:"block_glyphs"`
+
 	// DoubleClickMs is the window, in milliseconds, in which a second press
 	// in the same cell counts as a double click. Comfortable timing varies
 	// a lot between people and input devices, which is why it lives here

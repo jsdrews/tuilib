@@ -192,6 +192,10 @@ _Avoid_: base colour, primary
 The part of a surface's edge, on its right and bottom, that separates it from its neighbours. It is drawn on the parent's background, so whatever contains the surface paints it. Outlined has none.
 _Avoid_: gutter (the visible gap, which margins produce), gap, padding
 
+**Field form**:
+The surface a single-line component (input, filter, toggle) is drawn in, taking at most one cell of edge per side so it fits a three-row slot. An outlined field unless the surface says otherwise.
+_Avoid_: compact surface, input style
+
 **Fallback**:
 The surface a surface becomes when the terminal can't meet what it needs (colour depth, block glyphs), followed as a chain that always ends at Outlined.
 _Avoid_: degrade mode, compatibility mode

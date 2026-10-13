@@ -279,3 +279,17 @@ func TestOverlayForms(t *testing.T) {
 		t.Error("an overlay form keeps its surface's shape")
 	}
 }
+
+// A field fits a three-row slot: at most one cell of edge on each side.
+func TestFieldFormsFitThreeRows(t *testing.T) {
+	for _, s := range append(Builtins(), accentedLine) {
+		f := resolved(s, rich).Field()
+		in := f.Insets()
+		if in.Top > 1 || in.Bottom > 1 || in.Left > 1 || in.Right > 1 {
+			t.Errorf("%s field insets %+v exceed one cell", s.Name, in)
+		}
+	}
+	if resolved(Outlined, rich).Field().Name() != "outlined" {
+		t.Error("Outlined should be its own field")
+	}
+}

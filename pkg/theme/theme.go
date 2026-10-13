@@ -38,8 +38,10 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/toggle"
@@ -106,7 +108,33 @@ type Theme struct {
 	// Accent is a bold highlight for body content (not used by chrome).
 	// Exposed here so screens can reach for it without redeclaring a color.
 	Accent lipgloss.TerminalColor
+
+	// Surface is how components' edges and bodies are drawn, resolved
+	// against this theme's palette and the terminal. Zero draws the line
+	// border every component drew before surfaces. Compose sets it; the
+	// builders hand each component the form it needs — the surface itself,
+	// its overlay form for modals, its field form for single-line inputs.
+	Surface surface.Resolved
 }
+
+// Compose builds the theme for one palette drawn with one surface, on a
+// terminal offering caps. The shell calls it whenever the user changes
+// either axis.
+func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
+	t := FromPalette(p)
+	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
+	if bar := t.Surface.Colour(t.Surface.Surface().Bar, false); bar != nil {
+		t.BarBG = bar
+	}
+	return t
+}
+
+// Resolve resolves s against this theme's palette and terminal — how a
+// screen pins one component to a surface other than the app's:
+//
+//	opts := t.Logview()
+//	opts.Surface = t.Resolve(surface.Outlined)
+func (t Theme) Resolve(s surface.Surface) surface.Resolved { return t.Surface.With(s) }
 
 // ---- Per-component Options builders ----------------------------------------
 
@@ -114,25 +142,55 @@ type Theme struct {
 // shapes, falling back to the library defaults when a palette leaves them
 // zero. Every builder goes through these so there is exactly one place that
 // decides what an unset shape means.
+//
+// An unset shape follows the surface when it is lined (Outlined drawn
+// rounded, say), and the library default otherwise.
 func (t Theme) shapeActive() lipgloss.Border {
-	if (t.BorderShapeActive == lipgloss.Border{}) {
-		return lipgloss.NormalBorder()
+	if (t.BorderShapeActive != lipgloss.Border{}) {
+		return t.BorderShapeActive
 	}
-	return t.BorderShapeActive
+	if b, lined := t.Surface.Surface().Lined(); lined {
+		return b
+	}
+	return lipgloss.NormalBorder()
 }
 
 func (t Theme) shapeInactive() lipgloss.Border {
-	if (t.BorderShapeInactive == lipgloss.Border{}) {
-		return lipgloss.NormalBorder()
+	if (t.BorderShapeInactive != lipgloss.Border{}) {
+		return t.BorderShapeInactive
 	}
-	return t.BorderShapeInactive
+	if b, lined := t.Surface.Surface().Lined(); lined {
+		return b
+	}
+	return lipgloss.NormalBorder()
 }
 
 func (t Theme) shapeOverlay() lipgloss.Border {
-	if (t.BorderShapeOverlay == lipgloss.Border{}) {
-		return lipgloss.ThickBorder()
+	if (t.BorderShapeOverlay != lipgloss.Border{}) {
+		return t.BorderShapeOverlay
 	}
-	return t.BorderShapeOverlay
+	if b, lined := t.Surface.Overlay().Surface().Lined(); lined {
+		return b
+	}
+	return lipgloss.ThickBorder()
+}
+
+// selection is a selected row's style: legacy, the component's own, while
+// the surface keeps the theme's selection (Outlined does); otherwise the
+// surface's Selection tone under its Text colour.
+func (t Theme) selection(legacy lipgloss.Style) lipgloss.Style {
+	sel := t.Surface.Surface().Selection
+	if t.Surface.IsZero() || sel.FromTheme {
+		return legacy
+	}
+	st := lipgloss.NewStyle()
+	if bg := t.Surface.Colour(sel.BG, true); bg != nil {
+		st = st.Background(bg)
+	}
+	if fg := t.Surface.Colour(sel.FG, true); fg != nil {
+		st = st.Foreground(fg)
+	}
+	return st
 }
 
 // glyphs resolves the theme's glyph set against the library defaults. Every
@@ -235,7 +293,7 @@ func (t Theme) Help() help.Options {
 // statusbar and has to match its band, the overlay draws on the pane's own
 // ground.
 func (t Theme) HelpOverlay() help.OverlayOptions {
-	return help.OverlayOptions{
+	o := help.OverlayOptions{
 		KeyStyle:           lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
 		DescStyle:          lipgloss.NewStyle().Foreground(t.BarFG),
 		SectionStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -251,6 +309,8 @@ func (t Theme) HelpOverlay() help.OverlayOptions {
 		Filter:             t.Filter(),
 		Keys:               help.DefaultOverlayKeys(),
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Pane returns pane.Options with only the color tokens applied. Border shape,
@@ -258,7 +318,7 @@ func (t Theme) HelpOverlay() help.OverlayOptions {
 // a SpinnerStyle so panes set into a loading state render the spinner in the
 // theme's accent color.
 func (t Theme) Pane() pane.Options {
-	return pane.Options{
+	o := pane.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
@@ -267,6 +327,8 @@ func (t Theme) Pane() pane.Options {
 		SlotBrackets:   t.SlotBrackets,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 	}
+	o.Surface = t.Surface
+	return o
 }
 
 // Filter returns filter.Options pre-filled with theme colors — prompt in
@@ -274,7 +336,7 @@ func (t Theme) Pane() pane.Options {
 // colors matching pane. Set Width and override anything else on the returned
 // value before passing to filter.New.
 func (t Theme) Filter() filter.Options {
-	return filter.Options{
+	o := filter.Options{
 		PromptStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
 		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
@@ -286,6 +348,8 @@ func (t Theme) Filter() filter.Options {
 		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // List returns list.Options pre-filled from the theme, including nested
@@ -294,7 +358,7 @@ func (t Theme) Filter() filter.Options {
 // Height, Title, Items, Filterable, and any placeholder via
 // Filter.Placeholder.
 func (t Theme) List() list.Options {
-	return list.Options{
+	o := list.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
@@ -309,6 +373,9 @@ func (t Theme) List() list.Options {
 		Filter:         t.Filter(),
 		Keys:           list.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // Input returns input.Options pre-filled from the theme — text in BarFG,
@@ -316,7 +383,7 @@ func (t Theme) List() list.Options {
 // Set Width, Title (the field's label), and any placeholder before passing
 // to input.New.
 func (t Theme) Input() input.Options {
-	return input.Options{
+	o := input.Options{
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
 		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
 		CursorColor:      t.Accent,
@@ -327,13 +394,15 @@ func (t Theme) Input() input.Options {
 		Glyphs:           t.glyphs(),
 		SlotBrackets:     t.SlotBrackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // Toggle returns toggle.Options pre-filled from the theme — selected side in
 // Accent (bold), unselected in Muted, border colors matching pane. Set
 // Width, Title (the field's question), and Initial as needed.
 func (t Theme) Toggle() toggle.Options {
-	return toggle.Options{
+	o := toggle.Options{
 		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
 		ActiveColor:     t.BorderActive,
@@ -343,6 +412,8 @@ func (t Theme) Toggle() toggle.Options {
 		Glyphs:          t.glyphs(),
 		SlotBrackets:    t.SlotBrackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // Confirm returns confirm.Options pre-filled from the theme — selected
@@ -350,7 +421,7 @@ func (t Theme) Toggle() toggle.Options {
 // border colors matching pane. Set Width, Height, Title, Message,
 // Confirm/Cancel labels, and Initial as needed.
 func (t Theme) Confirm() confirm.Options {
-	return confirm.Options{
+	o := confirm.Options{
 		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
 		MessageStyle:    lipgloss.NewStyle().Foreground(t.BarFG),
@@ -361,6 +432,8 @@ func (t Theme) Confirm() confirm.Options {
 		Glyphs:          t.glyphs(),
 		SlotBrackets:    t.SlotBrackets,
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Alert returns alert.Options pre-filled from the theme — OK button in
@@ -370,7 +443,7 @@ func (t Theme) Confirm() confirm.Options {
 // t.ErrorBG) after this builder. Set Width, Height, Title, Message, and
 // OK label as needed before passing to alert.New.
 func (t Theme) Alert() alert.Options {
-	return alert.Options{
+	o := alert.Options{
 		OKStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		MessageStyle:   lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:    t.BorderActive,
@@ -380,6 +453,8 @@ func (t Theme) Alert() alert.Options {
 		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.SlotBrackets,
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Actions returns action.Options pre-filled from the theme — the label in
@@ -392,7 +467,7 @@ func (t Theme) Alert() alert.Options {
 // is a plain component rather than a screen.Screen, so pkg/action never
 // imports pkg/screen and there is no import cycle to invert.
 func (t Theme) Actions() action.Options {
-	return action.Options{
+	o := action.Options{
 		LabelStyle:     lipgloss.NewStyle().Foreground(t.BarFG),
 		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
 		KeyStyle:       lipgloss.NewStyle().Foreground(t.KeyFG),
@@ -406,6 +481,8 @@ func (t Theme) Actions() action.Options {
 		SlotBrackets:   t.SlotBrackets,
 		Keys:           action.DefaultKeys(),
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Table returns table.Options pre-filled from the theme — header bold +
@@ -415,7 +492,7 @@ func (t Theme) Actions() action.Options {
 // Height, Title, Columns, Rows, Filterable, and any Filter.Placeholder
 // before passing to table.New.
 func (t Theme) Table() table.Options {
-	return table.Options{
+	o := table.Options{
 		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -435,6 +512,9 @@ func (t Theme) Table() table.Options {
 		},
 		Keys: table.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // Logview returns logview.Options pre-filled from the theme — match
@@ -443,7 +523,7 @@ func (t Theme) Table() table.Options {
 // Searchable, MaxLines, and any Filter.Placeholder before passing to
 // logview.New.
 func (t Theme) Logview() logview.Options {
-	return logview.Options{
+	o := logview.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		GutterStyle:      lipgloss.NewStyle().Foreground(t.Muted),
@@ -458,6 +538,9 @@ func (t Theme) Logview() logview.Options {
 		Filter:           t.Filter(),
 		Keys:             logview.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Eventlog returns eventlog.Options pre-filled from the theme — the
@@ -465,7 +548,7 @@ func (t Theme) Logview() logview.Options {
 // the logview's, border colors matching pane. Set Title, Anchored,
 // Filterable and Searchable on the returned value before eventlog.New.
 func (t Theme) Eventlog() eventlog.Options {
-	return eventlog.Options{
+	o := eventlog.Options{
 		MatchStyle:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
 		GutterStyle:    lipgloss.NewStyle().Foreground(t.Muted),
@@ -481,6 +564,9 @@ func (t Theme) Eventlog() eventlog.Options {
 		Filter:         t.Filter(),
 		Keys:           eventlog.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // TextView returns textview.Options pre-filled from the theme — match
@@ -489,7 +575,7 @@ func (t Theme) Eventlog() eventlog.Options {
 // theme.Filter(). Set Width, Height, Title, Content, Wrap, and
 // Searchable on the returned value before passing to textview.New.
 func (t Theme) TextView() textview.Options {
-	return textview.Options{
+	o := textview.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
@@ -503,6 +589,9 @@ func (t Theme) TextView() textview.Options {
 		Keys:             textview.DefaultKeys(),
 		Wrap:             true,
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Tree returns tree.Options pre-filled from the theme — match highlight
@@ -511,7 +600,7 @@ func (t Theme) TextView() textview.Options {
 // Set Width, Height, Title, Root, Searchable, and InitialDepth before
 // passing to tree.New.
 func (t Theme) Tree() tree.Options {
-	return tree.Options{
+	o := tree.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
@@ -527,12 +616,15 @@ func (t Theme) Tree() tree.Options {
 		Filter:           t.Filter(),
 		Keys:             tree.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Inspector returns inspector.Options pre-filled with theme colors. Set
 // Title, Fields, Filterable, and InitialDepth on the returned value.
 func (t Theme) Inspector() inspector.Options {
-	return inspector.Options{
+	o := inspector.Options{
 		// Labels use Muted (semantic "secondary text"), not Subtle —
 		// CurrentLineStyle below sets bg=Subtle for the cursor row, and
 		// dimming labels to Subtle too would make them invisible on that
@@ -552,6 +644,9 @@ func (t Theme) Inspector() inspector.Options {
 		Filter:           t.Filter(),
 		Keys:             inspector.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Form returns form.Options pre-filled with theme colors. Set Width, Height,

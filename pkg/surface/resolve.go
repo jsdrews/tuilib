@@ -111,6 +111,16 @@ func (r Resolved) Overlay() Resolved {
 	return Resolve(r.Surface().overlayForm(), r.c, r.caps)
 }
 
+// Field is the drawn surface's form for single-line components, resolved
+// against the same colours and capabilities.
+func (r Resolved) Field() Resolved {
+	return Resolve(r.Surface().fieldForm(), r.c, r.caps)
+}
+
+// With resolves s against the same colours and capabilities as r — how a
+// screen pins one component to a different surface from the app's.
+func (r Resolved) With(s Surface) Resolved { return Resolve(s, r.c, r.caps) }
+
 // Colours are the colours the surface was resolved against.
 func (r Resolved) Colours() Colours { return r.c }
 
