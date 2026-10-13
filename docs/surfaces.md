@@ -3,8 +3,7 @@
 Status: **specified, not built.** Every decision here was made on the map
 [Map: surfaces — card-style theming](https://github.com/jsdrews/tuilib/issues/111),
 and each section links the ticket that holds its reasoning. The vocabulary is in
-`CONTEXT.md` § Surfaces. To see the look, run `task prototype:surfaces` (a
-throwaway prototype that paints every cell by hand).
+`CONTEXT.md` § Surfaces.
 
 ## The model
 
