@@ -7,7 +7,7 @@
 //
 // Use input as the building block for any text-entry need:
 //
-//	in := input.New(theme.Dark().Input())
+//	in := input.New(theme.New(palette.Dark()).Input())
 //	in.SetTitle("Name")
 //	// in your screen's Update: in, cmd = in.Update(msg)
 //	// in your screen's View:   string := in.View()

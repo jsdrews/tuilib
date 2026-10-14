@@ -16,8 +16,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// axes is the app's palette × surface state, when it is built from
-// Options.Palettes: the two lists, where the user is in each, the terminal's
+// axes is the app's palette × surface state: the two lists, where the user is in each, the terminal's
 // capabilities, and the theme composed from the current pair.
 type axes struct {
 	palettes []palette.Palette
@@ -145,9 +144,6 @@ func (a *axes) fallbackNote() string {
 // distinct fallback, so a user whose chosen surface didn't take can see why
 // and which setting changes it.
 func (m *Model) logFallback() {
-	if m.ax == nil {
-		return
-	}
 	note := m.ax.fallbackNote()
 	if note == "" || note == m.lastFallback {
 		m.lastFallback = note
@@ -161,7 +157,7 @@ func (m *Model) logFallback() {
 // cell of screen to their right and below, so the screen's left and top
 // edges get one too.
 func (m Model) surfaceBody(body layout.Node) layout.Node {
-	if m.ax == nil || !m.ax.theme.Surface.Surface().Margined() {
+	if !m.ax.theme.Surface.Surface().Margined() {
 		return body
 	}
 	blank := layout.RenderFunc(func(r geom.Rect) string {
@@ -182,9 +178,6 @@ func (m Model) surfaceBody(body layout.Node) layout.Node {
 // container gets the container's colour — and at the top level that is the
 // screen.
 func (m Model) screenPass(frame string) string {
-	if m.ax == nil {
-		return frame
-	}
 	r := m.ax.theme.Surface
 	if _, lined := r.Surface().Lined(); lined {
 		return frame

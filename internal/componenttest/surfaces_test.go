@@ -33,7 +33,7 @@ func resolvedSurface(s surface.Surface) surface.Resolved {
 // a hard-coded width-2, an inline filter at Y+1 — draws a frame of the wrong
 // size, or puts its filter on the wrong row, under any surface but Outlined.
 func TestComponentsDrawEverySurfaceAtTheirRectSize(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	const w, h = 40, 14
 	r := func() geom.Rect { return geom.New(0, 0, w, h) }
 
@@ -119,7 +119,7 @@ func TestComponentsDrawEverySurfaceAtTheirRectSize(t *testing.T) {
 // base; before ZStack decided opacity by painted cells, a filled modal's
 // blank rows showed the screen through it.
 func TestFilledModalCoversTheBase(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	o := th.Confirm()
 	o.Surface = resolvedSurface(surface.Banded).Overlay()
 	o.Title, o.Message = "Delete?", "Gone for good."

@@ -17,6 +17,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -115,7 +116,7 @@ func (s *cityDetail) SetTheme(t theme.Theme) {
 func main() {
 	m := app.New(app.Options{
 		Root:     &cityList{},
-		Themes:   theme.All(),
+		Palettes: palette.All(),
 		ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
 		Mouse:    app.MouseClick,
 		Version:  "quickstart",

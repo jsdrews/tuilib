@@ -238,13 +238,14 @@ affordance and the inline hints take the bar's role as their background.
 - **Config:** `config.yaml` gains `palette:` (with `theme:` read as an alias),
   `surface:` (matched by name from what the app offers, ignored when it offers
   one) and `block_glyphs:`.
-- **Env:** `ThemeEnvVar` becomes `PaletteEnvVar`, plus a new `SurfaceEnvVar`.
+- **Env:** `PaletteEnvVar` (was `ThemeEnvVar`) and `SurfaceEnvVar`.
+- **Live preview:** `app.SetPalette(name)` (was `SetTheme`).
 - **Screens need nothing new.** A swap is a new `Theme` through the existing
   `SetTheme` path, and rule 4's `State`/`Restore` covers it.
 - **Chrome moves:** `BorderShapeActive`/`Inactive` become Outlined's edge glyphs
   (`surface.OutlinedWith(lipgloss.RoundedBorder())` for a variant).
-  `SlotBrackets` become text-row data. `Glyphs` stay on `Theme`, except
-  `Glyphs.Rule`, which is the divider now.
+  `SlotBrackets` become `Surface.Brackets`. `Glyphs` stay on `Theme`, except
+  `Glyphs.Rule`, which is `Surface.Divider.Glyph` now.
 
 ### Per-component overrides
 
@@ -312,22 +313,36 @@ Downstream apps get the same assertions as a `pkg/screentest` rule,
 
 ## Migration
 
-This is a clean break in one minor version. There are no Go shims.
+This is a clean break in one minor version. There are no Go shims. The one
+thing kept is the config key: users' config files are outside any app's
+control, so `theme:` is still read when `palette:` is unset.
 
 | Before | After |
 |---|---|
-| `theme.Dark()` (and every named palette) | `palette.Dark()` |
-| `theme.All()`, `theme.ByName`, `theme.Resolve` | `palette.All()`, `palette.ByName`, `palette.Resolve` |
-| `app.Options.Themes` | `app.Options.Palettes` |
+| `theme.Dark()` (and every named palette), as a `Theme` | `theme.New(palette.Dark())`; as a palette, `palette.Dark()` |
+| `theme.All()` | `palette.All()` |
+| `theme.ByName(themes, name)` | `palette.ByName(palettes, name)` |
+| `theme.Resolve(themes, envVar)` | gone: `app.New` picks the start from `PaletteEnvVar` and the config file |
+| `theme.FromBase16`, `theme.Base16` | `palette.FromBase16`, `palette.Base16` |
+| `theme.Terminal()` | `palette.Terminal()` |
+| a `Theme` literal | a `palette.Palette` literal; `Theme` embeds it, so `t.Accent` still reads |
+| `app.Options.Themes: []theme.Theme{…}` | `app.Options.Palettes: []palette.Palette{…}` |
 | `app.Options.ThemeEnvVar` | `app.Options.PaletteEnvVar` |
-| `Theme.BorderShapeActive/Inactive` | a surface: `surface.OutlinedWith(shape)` |
-| `Theme.BorderShapeOverlay` | the surface's `Overlay` form |
-| `Theme.SlotBrackets` | text-row data on the surface |
-| `Glyphs.Rule` | the surface's divider |
+| `app.SetTheme(name)`, `app.SetThemeMsg` | `app.SetPalette(name)`, `app.SetPaletteMsg` |
+| `Theme.BorderShapeActive/Inactive` | a surface: `t.Surface = t.Resolve(surface.OutlinedWith(shape))` |
+| `Theme.BorderShapeOverlay` | the surface's `Overlay` form: `s.Overlay = &overlay` |
+| `Theme.SlotBrackets` | `Surface.Brackets` (`pane.SlotBracketStyle` is now `surface.Brackets`) |
+| `Glyphs.Rule` | `Surface.Divider.Glyph` |
 | `config.yaml` `theme:` | `palette:` (`theme:` still read) |
 
-Six local modules need migrating: tui-builder, tuiquery, tuiquery_old,
-tuilib-skills and its golden app, and tuilib-detailed-progress.
+`Options.Surfaces` defaults to `[surface.Outlined]`, so an app that migrates
+these calls and nothing else draws exactly what it drew before; the Outlined
+goldens hold that.
+
+The local modules that use tuilib — tui-builder (v0.35.0), tuiquery (v0.21.0)
+and tuiquery_old — pin released versions, so they migrate when a release
+carries this change. tuilib-skills and tuilib-detailed-progress are other
+checkouts of tuilib itself, not consumers.
 
 ## Out of scope
 

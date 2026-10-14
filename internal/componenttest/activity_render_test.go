@@ -21,6 +21,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -47,7 +48,7 @@ func rowWidths(view string) []int {
 // column, and one predicate. Nothing else.
 func derivedTable(t *testing.T, statusWidth int, opts ...func(*table.Options)) table.Model {
 	t.Helper()
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Columns = []table.Column{
 		{Title: "Name", Width: 14},
 		{Title: "Status", Width: statusWidth},
@@ -295,7 +296,7 @@ func TestTheIndicatorDoesNotBreakTheSelectedRowBackground(t *testing.T) {
 // Setting only a predicate used to build derived state, animate a tick chain
 // forever, and render nothing at all — invisible, and not free.
 func TestAPredicateWithNoColumnStillDraws(t *testing.T) {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 12}}
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
 		c := r.Cells
@@ -342,7 +343,7 @@ func TestEveryRowBusyAtOnce(t *testing.T) {
 
 // Settled treats an empty value as settled: a blank cell is not work.
 func TestABlankStatusIsNotBusy(t *testing.T) {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 12}}
 	o.ActivityColumn = "Status"
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
@@ -361,7 +362,7 @@ func TestABlankStatusIsNotBusy(t *testing.T) {
 
 // A label wider than one cell per rune must be measured, not counted.
 func TestAWideCharacterLabelIsMeasuredNotCounted(t *testing.T) {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 14}, {Title: "Status", Width: 10}}
 	o.ActivityColumn = "Status"
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) { return activity.Busy("同期中")(r.Cells[1]) }

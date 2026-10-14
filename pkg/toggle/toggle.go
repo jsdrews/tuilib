@@ -8,7 +8,7 @@
 //
 // While focused, left/right/h/l/space toggle, and y/n set explicitly:
 //
-//	tg := toggle.New(theme.Dark().Toggle())
+//	tg := toggle.New(theme.New(palette.Dark()).Toggle())
 //	tg.SetTitle("Send notifications?")
 //	// in your screen's Update: tg, _ = tg.Update(msg)
 //	// later: send := tg.Value()

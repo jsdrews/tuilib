@@ -1,11 +1,12 @@
-// Package chrome demonstrates theme-owned border shape: the two slots a
-// Theme carries for chrome, and the fact that changing one re-skins every
-// component drawn from that theme without touching any component.
+// Package chrome demonstrates surface-owned border shape: an Outlined
+// surface drawn with any lipgloss border, and the overlay form it carries
+// for modals. Changing either re-skins every component drawn from the theme
+// without touching any component.
 //
-// The left column picks Theme.BorderShapeActive/Inactive (ordinary
-// components) and Theme.BorderShapeOverlay (things that float above content).
-// Everything on screen — the pickers included — is rebuilt from the modified
-// theme, so what you are looking at is the same code path any app gets.
+// The left column picks the shape of the surface (ordinary components) and
+// of its overlay form (things that float above content). Everything on
+// screen — the pickers included — is rebuilt from the modified theme, so
+// what you are looking at is the same code path any app gets.
 //
 // The two slots are deliberately separate: an overlay reads as raised because
 // its border differs from the pane it covers. Set both pickers to the same
@@ -27,6 +28,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 )
@@ -40,16 +42,16 @@ var glyphSets = []struct {
 	{"Default", glyph.Set{}},
 	{"ASCII", glyph.Set{
 		Cursor: ">", Mark: "*", ExpandOpen: "v", ExpandClosed: ">",
-		Rule: "-", ScrollThumb: "#", ScrollTrack: ".",
+		ScrollThumb: "#", ScrollTrack: ".",
 		SortAsc: "^", SortDesc: "v", ColumnSep: "|", Placeholder: ".",
 	}},
 	{"Heavy", glyph.Set{
 		Cursor: "➤", Mark: "✔", ExpandOpen: "▼", ExpandClosed: "▶",
-		Rule: "━", ScrollThumb: "▓", ScrollTrack: "▒",
+		ScrollThumb: "▓", ScrollTrack: "▒",
 	}},
 	{"Minimal", glyph.Set{
 		Cursor: "·", Mark: "+", ExpandOpen: "-", ExpandClosed: "+",
-		Rule: "┈", ScrollThumb: "│", ScrollTrack: " ",
+		ScrollThumb: "│", ScrollTrack: " ",
 	}},
 }
 
@@ -118,14 +120,15 @@ func (s *Screen) Init() tea.Cmd { return s.focus.Init() }
 
 func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
 
-// themed returns the base theme with the two shape slots set from the
-// pickers. This is the whole feature: four lines, and every builder below
-// picks it up.
+// themed returns the base theme drawn with an Outlined surface built from
+// the pickers: the component shape, and an overlay form in the overlay
+// shape. Every builder below picks it up.
 func (s *Screen) themed() theme.Theme {
 	t := s.base
-	t.BorderShapeActive = shapes[s.component].border
-	t.BorderShapeInactive = shapes[s.component].border
-	t.BorderShapeOverlay = shapes[s.overlay].border
+	sf := surface.OutlinedWith(shapes[s.component].border)
+	ov := surface.OutlinedWith(shapes[s.overlay].border)
+	sf.Overlay = &ov
+	t.Surface = t.Resolve(sf)
 	t.Glyphs = glyphSets[s.glyphs].set
 	return t
 }

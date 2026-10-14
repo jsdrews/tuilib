@@ -27,6 +27,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
 
@@ -213,7 +214,7 @@ type rootScreen struct {
 
 func newRoot() *rootScreen {
 	s := &rootScreen{}
-	s.SetTheme(shellthemes.Themes()[1]) // start on Dark (index 0 is Terminal())
+	s.SetTheme(theme.New(shellthemes.Palettes()[1])) // start on Dark (index 0 is Terminal())
 	return s
 }
 
@@ -321,11 +322,13 @@ func entryNames() []string {
 
 func main() {
 	m := app.New(app.Options{
-		Root:        newRoot(),
-		Themes:      shellthemes.Themes(),
-		ThemeEnvVar: "TUILIB_THEME",
-		Version:     "examples",
-		ThemeKey:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Root:          newRoot(),
+		Palettes:      shellthemes.Palettes(),
+		Surfaces:      surface.Builtins(),
+		PaletteEnvVar: "TUILIB_THEME",
+		Version:       "examples",
+		ThemeKey:      key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "palette")),
+		SurfaceKey:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "surface")),
 		// Mouse is opt-in per app, and app.Options is the only place it is
 		// configured — the shell enables reporting from Init, so
 		// tea.NewProgram below needs no mouse option of its own. Turning it

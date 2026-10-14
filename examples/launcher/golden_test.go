@@ -14,6 +14,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -104,8 +105,8 @@ func compareGolden(t *testing.T, path, got string) {
 // configures it, after keys.
 func outlinedFrame(e entry, keys ...tea.KeyMsg) string {
 	m := app.New(app.Options{
-		Root:       e.build(theme.Dark()),
-		Themes:     []theme.Theme{theme.Dark()},
+		Root:       e.build(theme.New(palette.Dark())),
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Version:    "examples",
 		ThemeKey:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),

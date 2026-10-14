@@ -31,8 +31,9 @@ type Surface struct {
 	TitleBold           bool
 	// Slot colours the other slots: counters, hints, errors.
 	Slot Role
-	// Brackets are drawn either side of slot text set into a line, as
-	// "┤ title ├". Empty for surfaces whose text rows aren't lines.
+	// Brackets controls how slot text set into a line meets it — inline,
+	// "┐ title ┌" or "┤ title ├". Only a lined surface has a line to set
+	// text into; the rest ignore it.
 	Brackets Brackets
 
 	// Divider is the row the pane draws under a pinned header.
@@ -94,8 +95,19 @@ type Cell struct {
 // Drawn reports whether the cell has a glyph.
 func (c Cell) Drawn() bool { return c.Glyph != "" }
 
-// Brackets frame slot text set into a line.
-type Brackets struct{ Left, Right string }
+// Brackets is how slot text meets the line it is set into.
+type Brackets int
+
+const (
+	// BracketsNone runs the line straight through, so text sits inline on
+	// it: ── text ──.
+	BracketsNone Brackets = iota
+	// BracketsCorners flanks the text with inverted corners, like a tab
+	// dipping into the pane: ┐ text ┌.
+	BracketsCorners
+	// BracketsTees flanks it with junction tees: ─┤ text ├─.
+	BracketsTees
+)
 
 // DividerStyle is the row under a pinned header. FGActive applies while the header
 // has input, which is how the filter shows it holds the keys.

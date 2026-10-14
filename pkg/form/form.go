@@ -10,7 +10,7 @@
 //
 // Usage:
 //
-//	f := form.New(theme.Dark().Form().With([]form.Field{
+//	f := form.New(theme.New(palette.Dark()).Form().With([]form.Field{
 //	    form.Text(form.TextOptions{Key: "name", Label: "Name"}),
 //	    form.Password(form.PasswordOptions{Key: "pass", Label: "Password"}),
 //	    form.Select(form.SelectOptions{Key: "role", Label: "Role",
@@ -113,7 +113,7 @@ type Options struct {
 }
 
 // With returns a copy of opts with Fields replaced — handy when chaining
-// from a theme builder: `theme.Dark().Form().With([]Field{…})`.
+// from a theme builder: `theme.New(palette.Dark()).Form().With([]Field{…})`.
 func (opts Options) With(fields []Field) Options {
 	opts.Fields = fields
 	return opts

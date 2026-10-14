@@ -23,14 +23,15 @@ import (
 	"github.com/jsdrews/tuilib/demoapi"
 	demoactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
 // Press the verb and the row says so, without waiting for a poll to agree.
 func TestTheExampleClaimsTheRowOnDispatch(t *testing.T) {
 	m := app.New(app.Options{
-		Root:       demoactivity.New(theme.Dark()),
-		Themes:     []theme.Theme{theme.Dark()},
+		Root:       demoactivity.New(theme.New(palette.Dark())),
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Mouse:      app.MouseClick,
 		ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions")),

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jsdrews/tuilib/examples/patterns/treeactions"
 	"github.com/jsdrews/tuilib/pkg/action"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -16,7 +17,7 @@ import (
 
 func newTreeActions(t *testing.T) screen.Screen {
 	t.Helper()
-	s := treeactions.New(theme.Dark())
+	s := treeactions.New(theme.New(palette.Dark()))
 	s.Init()
 	s.OnEnter(nil)
 	render(s)

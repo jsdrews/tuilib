@@ -10,6 +10,7 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -25,7 +26,7 @@ func at(hh, mm, ss int) time.Time {
 	return time.Date(2026, 8, 12, hh, mm, ss, 0, time.UTC)
 }
 
-func themed() Options { return OptionsFrom(theme.Dark()) }
+func themed() Options { return OptionsFrom(theme.New(palette.Dark())) }
 
 // The prefix is repeated on every line — including continuation lines — so
 // that logview's filter mode can hide non-matching lines without orphaning a

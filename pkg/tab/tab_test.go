@@ -9,6 +9,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -52,7 +53,7 @@ func newTabs(t theme.Theme, pos StripPos, bodies ...*stubBody) Model {
 }
 
 func TestStripTopByDefault(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "AAA"}
 	b := &stubBody{label: "BBB"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "One", Body: a}, {Label: "Two", Body: b}}})
@@ -71,7 +72,7 @@ func TestStripTopByDefault(t *testing.T) {
 }
 
 func TestStripBottomPlacesStripOnLastRow(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "AAA"}
 	b := &stubBody{label: "BBB"}
 	m := newTabs(th, StripBottom, a, b)
@@ -101,7 +102,7 @@ func TestStripBottomPlacesStripOnLastRow(t *testing.T) {
 }
 
 func TestStripBottomBodyGetsSameHeightAsTop(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "A"}
 	top := newTabs(th, StripTop, a, &stubBody{label: "B"})
 	bot := newTabs(th, StripBottom, a, &stubBody{label: "B"})
@@ -114,7 +115,7 @@ func TestStripBottomBodyGetsSameHeightAsTop(t *testing.T) {
 }
 
 func TestSwitchToNextRunsOnEnter(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "A"}
 	b := &stubBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
@@ -131,7 +132,7 @@ func TestSwitchToNextRunsOnEnter(t *testing.T) {
 }
 
 func TestNumberKeyJumpsToTab(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "A"}
 	b := &stubBody{label: "B"}
 	c := &stubBody{label: "C"}
@@ -144,7 +145,7 @@ func TestNumberKeyJumpsToTab(t *testing.T) {
 }
 
 func TestKeyMsgRoutesToActiveBodyOnly(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &countingBody{label: "A"}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
@@ -160,7 +161,7 @@ func TestKeyMsgRoutesToActiveBodyOnly(t *testing.T) {
 }
 
 func TestNonKeyMsgFansOutToAllBodies(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &countingBody{label: "A"}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
@@ -173,7 +174,7 @@ func TestNonKeyMsgFansOutToAllBodies(t *testing.T) {
 }
 
 func TestIsCapturingKeysFollowsActiveBody(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &stubBody{label: "A", capturing: true}
 	b := &stubBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
@@ -189,7 +190,7 @@ func TestIsCapturingKeysFollowsActiveBody(t *testing.T) {
 }
 
 func TestSwitchKeysSuppressedWhileCapturing(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	a := &countingBody{label: "A", capturing: true}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})

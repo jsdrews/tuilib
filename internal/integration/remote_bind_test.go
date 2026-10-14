@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/examples/patterns/eventlog"
 	"github.com/jsdrews/tuilib/examples/patterns/remote"
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -40,8 +41,8 @@ func bRows(h *harness) (map[int]string, int, string) {
 // round trip — checked end to end rather than through its own fakes.
 
 func bApp(t *testing.T, mk func(theme.Theme) screen.Screen) *harness {
-	th := theme.Dark()
-	return newAppHarness(t, app.New(app.Options{Root: mk(th), Themes: []theme.Theme{th}, SkipConfig: true}))
+	th := theme.New(palette.Dark())
+	return newAppHarness(t, app.New(app.Options{Root: mk(th), Palettes: []palette.Palette{th.Palette}, SkipConfig: true}))
 }
 
 func TestRemoteBindFollowsAfterG(t *testing.T) {

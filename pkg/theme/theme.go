@@ -4,14 +4,14 @@
 //
 // Usage:
 //
-//	th := theme.Dark()
+//	th := theme.New(palette.Dark())
 //	bc := breadcrumb.New(th.Breadcrumb())                     // header
 //	h  := help.New(th.Help())                                 // inline hints
 //	sb := statusbar.New(th.Statusbar(h.ShortView(), "v0.1.0")) // footer
 //	p  := pane.New(th.Pane())                                 // body
 //
-// Theme fills in the chrome tokens — colors, border shape, slot brackets —
-// so every component drawn from one palette agrees. Anything you need to
+// Theme fills in the chrome tokens — colors, and the surface's border shape
+// and slot brackets — so every component drawn from one palette agrees. Anything you need to
 // override for a single component (a custom width, a deliberately heavier
 // border on one pane) you set on the returned Options before passing it to
 // that component's New; a per-instance value always wins over the theme.
@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/activity"
@@ -48,80 +49,38 @@ import (
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
-// Theme is a named palette. Every field is a color token consumed by one or
-// more components. Most tokens have a single semantic role so swapping themes
-// is a matter of rewriting this struct.
+// Theme is what components are built from: a palette, drawn with a
+// surface, using a set of glyphs. Nobody picks a theme directly — the user
+// picks a palette and a surface, and the app shell composes them (Compose)
+// and hands the result to every screen's SetTheme.
+//
+// The palette's colours are promoted, so t.Accent and t.BorderActive read as
+// they always did.
 type Theme struct {
-	// Name is a short identifier for debugging / theme pickers.
-	Name string
-
-	// BarBG / BarFG are the shared surface colors for the breadcrumb header,
-	// the status bar footer, and anything embedded in them (help hints).
-	// Must be a single pair so the strip reads as one continuous band.
-	BarBG lipgloss.TerminalColor
-	BarFG lipgloss.TerminalColor
-
-	// Current is the emphasis color for the active crumb / current selection.
-	Current lipgloss.TerminalColor
-	// Muted is for past crumbs and secondary text on the bar.
-	Muted lipgloss.TerminalColor
-	// Subtle is for separators and faint chrome.
-	Subtle lipgloss.TerminalColor
-
-	// KeyFG colors the key labels inside help hints (bold).
-	KeyFG lipgloss.TerminalColor
-
-	// BorderActive / BorderInactive color pane borders.
-	BorderActive   lipgloss.TerminalColor
-	BorderInactive lipgloss.TerminalColor
-
-	// BorderShapeActive / BorderShapeInactive are the border shapes for
-	// ordinary components, focused and unfocused. They are deliberately the
-	// same shape by default: focus is signalled by BorderActive, and a
-	// component that changed weight on focus would shift the eye for a
-	// reason the user didn't ask about.
-	//
-	// BorderShapeOverlay is for things that float above content — confirm,
-	// alert, the action menu. A heavier border is what separates an overlay
-	// from the pane it is covering, so this one is meant to differ.
-	//
-	// All three are zero-valued in the shipped palettes and resolve to the
-	// library defaults (Normal for components, Thick for overlays). A Theme
-	// literal written before these fields existed keeps its chrome.
-	BorderShapeActive   lipgloss.Border
-	BorderShapeInactive lipgloss.Border
-	BorderShapeOverlay  lipgloss.Border
-
-	// SlotBrackets controls how title and slot text meet the border line on
-	// every pane the theme builds. The zero value is SlotBracketsNone.
-	SlotBrackets pane.SlotBracketStyle
+	palette.Palette
 
 	// Glyphs are the marks components draw — row cursors, expand arrows,
-	// scrollbar thumbs, rules, sort indicators. Empty fields fall back to
+	// scrollbar thumbs, sort indicators. Empty fields fall back to
 	// glyph.Default, so setting one arrow does not blank the rest.
 	Glyphs glyph.Set
 
-	// Info / Error style the statusbar's middle slot in each message state.
-	InfoBG, InfoFG   lipgloss.TerminalColor
-	ErrorBG, ErrorFG lipgloss.TerminalColor
-
-	// Accent is a bold highlight for body content (not used by chrome).
-	// Exposed here so screens can reach for it without redeclaring a color.
-	Accent lipgloss.TerminalColor
-
 	// Surface is how components' edges and bodies are drawn, resolved
-	// against this theme's palette and the terminal. Zero draws the line
-	// border every component drew before surfaces. Compose sets it; the
-	// builders hand each component the form it needs — the surface itself,
-	// its overlay form for modals, its field form for single-line inputs.
+	// against this theme's palette and the terminal. The builders hand each
+	// component the form it needs — the surface itself, its overlay form for
+	// modals, its field form for single-line inputs.
 	Surface surface.Resolved
+}
+
+// New is p drawn Outlined: the look of an app that never chose a surface.
+func New(p palette.Palette) Theme {
+	return Compose(p, surface.Outlined, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
 }
 
 // Compose builds the theme for one palette drawn with one surface, on a
 // terminal offering caps. The shell calls it whenever the user changes
 // either axis.
 func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
-	t := FromPalette(p)
+	t := Theme{Palette: p}
 	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
 	if bar := t.Surface.Colour(t.Surface.Surface().Bar, false); bar != nil {
 		t.BarBG = bar
@@ -138,17 +97,12 @@ func (t Theme) Resolve(s surface.Surface) surface.Resolved { return t.Surface.Wi
 
 // ---- Per-component Options builders ----------------------------------------
 
-// shapeActive / shapeInactive / shapeOverlay resolve the theme's border
-// shapes, falling back to the library defaults when a palette leaves them
-// zero. Every builder goes through these so there is exactly one place that
-// decides what an unset shape means.
-//
-// An unset shape follows the surface when it is lined (Outlined drawn
-// rounded, say), and the library default otherwise.
+// shapeActive / shapeInactive / shapeOverlay are the line borders components
+// draw with: the surface's own lines when it is lined (Outlined, rounded,
+// thick), and the library defaults when it isn't — a filled surface's field
+// form and the fallback path. Every builder goes through these so there is
+// one place that decides the shape.
 func (t Theme) shapeActive() lipgloss.Border {
-	if (t.BorderShapeActive != lipgloss.Border{}) {
-		return t.BorderShapeActive
-	}
 	if b, lined := t.Surface.Surface().Lined(); lined {
 		return b
 	}
@@ -156,9 +110,6 @@ func (t Theme) shapeActive() lipgloss.Border {
 }
 
 func (t Theme) shapeInactive() lipgloss.Border {
-	if (t.BorderShapeInactive != lipgloss.Border{}) {
-		return t.BorderShapeInactive
-	}
 	if b, lined := t.Surface.Surface().Lined(); lined {
 		return b
 	}
@@ -166,9 +117,6 @@ func (t Theme) shapeInactive() lipgloss.Border {
 }
 
 func (t Theme) shapeOverlay() lipgloss.Border {
-	if (t.BorderShapeOverlay != lipgloss.Border{}) {
-		return t.BorderShapeOverlay
-	}
 	if b, lined := t.Surface.Overlay().Surface().Lined(); lined {
 		return b
 	}
@@ -303,7 +251,7 @@ func (t Theme) HelpOverlay() help.OverlayOptions {
 		ActiveBorder:       t.shapeOverlay(),
 		InactiveBorder:     t.shapeOverlay(),
 		Glyphs:             t.glyphs(),
-		SlotBrackets:       t.SlotBrackets,
+		SlotBrackets:       t.Surface.Surface().Brackets,
 		FilterRuleActive:   lipgloss.NewStyle().Foreground(t.BorderActive),
 		FilterRuleInactive: lipgloss.NewStyle().Foreground(t.BorderInactive),
 		Filter:             t.Filter(),
@@ -324,7 +272,7 @@ func (t Theme) Pane() pane.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 	}
 	o.Surface = t.Surface
@@ -346,7 +294,7 @@ func (t Theme) Filter() filter.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 	}
 	o.Surface = t.Surface.Field()
 	return o
@@ -364,7 +312,7 @@ func (t Theme) List() list.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
@@ -392,7 +340,7 @@ func (t Theme) Input() input.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 	}
 	o.Surface = t.Surface.Field()
 	return o
@@ -410,7 +358,7 @@ func (t Theme) Toggle() toggle.Options {
 		ActiveBorder:    t.shapeActive(),
 		InactiveBorder:  t.shapeInactive(),
 		Glyphs:          t.glyphs(),
-		SlotBrackets:    t.SlotBrackets,
+		SlotBrackets:    t.Surface.Surface().Brackets,
 	}
 	o.Surface = t.Surface.Field()
 	return o
@@ -430,7 +378,7 @@ func (t Theme) Confirm() confirm.Options {
 		ActiveBorder:    t.shapeOverlay(),
 		InactiveBorder:  t.shapeOverlay(),
 		Glyphs:          t.glyphs(),
-		SlotBrackets:    t.SlotBrackets,
+		SlotBrackets:    t.Surface.Surface().Brackets,
 	}
 	o.Surface = t.Surface.Overlay()
 	return o
@@ -451,7 +399,7 @@ func (t Theme) Alert() alert.Options {
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 	}
 	o.Surface = t.Surface.Overlay()
 	return o
@@ -478,7 +426,7 @@ func (t Theme) Actions() action.Options {
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		Keys:           action.DefaultKeys(),
 	}
 	o.Surface = t.Surface.Overlay()
@@ -501,14 +449,14 @@ func (t Theme) Table() table.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Activity:       t.activityCell(),
 		Filter:         t.Filter(),
 		Borders: table.Borders{
 			Vertical:   cellColor(t.Subtle, t.glyphs().ColumnSep),
-			HeaderRule: cellColor(t.Subtle, t.glyphs().Rule),
+			HeaderRule: cellColor(t.Subtle, t.Surface.Surface().Divider.Glyph),
 		},
 		Keys: table.DefaultKeys(),
 	}
@@ -532,7 +480,7 @@ func (t Theme) Logview() logview.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
@@ -558,7 +506,7 @@ func (t Theme) Eventlog() eventlog.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
@@ -583,7 +531,7 @@ func (t Theme) TextView() textview.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             textview.DefaultKeys(),
@@ -608,7 +556,7 @@ func (t Theme) Tree() tree.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		MarkStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -638,7 +586,7 @@ func (t Theme) Inspector() inspector.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),

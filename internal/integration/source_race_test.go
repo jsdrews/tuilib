@@ -16,6 +16,7 @@ import (
 
 	"github.com/jsdrews/tuilib/demoapi"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/query"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/source"
@@ -48,7 +49,7 @@ func newSourceScreen(t *testing.T, slow func(string) time.Duration) *sourceScree
 		src:  source.New(source.Options{PageSize: 50}),
 		slow: slow,
 	}
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Title = "apps"
 	o.Filterable = true
 	o.FilterMode = table.FilterRemote

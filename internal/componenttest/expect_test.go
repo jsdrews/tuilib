@@ -18,6 +18,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -48,7 +49,7 @@ type listClaim struct {
 }
 
 func newListClaim(settle int) claimable {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.BusyWhen = listBusyWhen
 	o.Activity.Settle = settle
 	d := &listClaim{ops: map[string]activity.Op{}}
@@ -73,7 +74,7 @@ func (d *listClaim) retract(keys ...string) {
 func (d *listClaim) retractAll() { d.m.ApplyRead(d.m.BeginRead(), nil, errRefused) }
 
 func newTableClaim(settle int) claimable {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
 	o.Activity.Settle = settle
@@ -139,7 +140,7 @@ type treeClaim struct {
 }
 
 func newTreeClaim(settle int) claimable {
-	o := theme.Dark().Tree()
+	o := theme.New(palette.Dark()).Tree()
 	o.InitialDepth = 2
 	o.Root = derivedTree(statusOf(nil))
 	o.Activity.Settle = settle

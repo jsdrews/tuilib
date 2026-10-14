@@ -10,6 +10,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -45,7 +46,7 @@ func newApp(t *testing.T, depth int) Model {
 	t.Helper()
 	m := New(Options{
 		Root:       &stubScreen{name: "root"},
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		Mouse:      MouseClick,
 		SkipConfig: true,
 	})
@@ -150,7 +151,7 @@ func TestClickingCrumbPopsToThatDepth(t *testing.T) {
 func TestMouseOffIgnoresClicks(t *testing.T) {
 	m := New(Options{
 		Root:       &stubScreen{name: "root"},
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 	})
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
@@ -190,7 +191,7 @@ func TestMouseIsReenabledAfterASubprocess(t *testing.T) {
 func TestMouseStaysOffAfterASubprocessWhenDisabled(t *testing.T) {
 	m := New(Options{
 		Root:       &stubScreen{name: "root"},
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 	})
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
@@ -237,7 +238,7 @@ func TestMouseIsReenabledAfterSuspend(t *testing.T) {
 func TestMouseStaysOffAfterSuspendWhenDisabled(t *testing.T) {
 	m := New(Options{
 		Root:       &stubScreen{name: "root"},
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 	})
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})
@@ -278,7 +279,7 @@ func TestSuspendKeySuppressedWhileCapturing(t *testing.T) {
 func TestDisableSuspendTurnsTheKeyOff(t *testing.T) {
 	m := New(Options{
 		Root:           &stubScreen{name: "root"},
-		Themes:         []theme.Theme{theme.Dark()},
+		Palettes:       []palette.Palette{palette.Dark()},
 		DisableSuspend: true,
 		SkipConfig:     true,
 	})

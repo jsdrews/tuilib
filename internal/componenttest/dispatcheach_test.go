@@ -10,6 +10,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -45,9 +46,9 @@ func replies(cmd tea.Cmd) []eachReply {
 }
 
 func TestDispatchEachGivesEveryKeyItsOwnOperation(t *testing.T) {
-	lm := list.New(theme.Dark().List())
-	tm := table.New(theme.Dark().Table())
-	to := theme.Dark().Tree()
+	lm := list.New(theme.New(palette.Dark()).List())
+	tm := table.New(theme.New(palette.Dark()).Table())
+	to := theme.New(palette.Dark()).Tree()
 	to.InitialDepth = 2
 	to.Root = derivedTree(statusOf(nil))
 	trm := tree.New(to)

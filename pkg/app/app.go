@@ -44,17 +44,13 @@ type Options struct {
 	// Root is the root screen — the bottom of the nav stack. Required.
 	Root screen.Screen
 
-	// Themes is the list the user cycles through. At least one entry is
-	// required; Themes[0] is the initial theme. Ignored when Palettes is
-	// set.
-	Themes []theme.Theme
-
 	// Palettes and Surfaces are the two axes a user picks independently:
-	// the colours, and how components' edges and bodies are drawn. Setting
-	// Palettes switches the shell to them: ThemeKey cycles palettes,
-	// SurfaceKey cycles surfaces, and every screen is themed with the pair
-	// composed (theme.Compose). Surfaces defaults to [surface.Outlined],
-	// which draws exactly what Themes does. See docs/surfaces.md.
+	// the colours, and how components' edges and bodies are drawn. ThemeKey
+	// cycles palettes, SurfaceKey cycles surfaces, and every screen is
+	// themed with the pair composed (theme.Compose). Palettes defaults to
+	// [palette.Dark()] and Surfaces to [surface.Outlined]. The user's
+	// config file and the env vars below pick where each starts. See
+	// docs/surfaces.md.
 	Palettes []palette.Palette
 	Surfaces []surface.Surface
 
@@ -178,18 +174,9 @@ type Options struct {
 	// file, then to mouse.DefaultDoubleClickInterval.
 	DoubleClickInterval time.Duration
 
-	// ThemeEnvVar names an environment variable consulted for the initial
-	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
-	// theme's Name, that theme becomes Themes[0]. Empty string disables
-	// env-var lookup but the user config file is still consulted; see
-	// SkipConfig to disable both.
-	ThemeEnvVar string
-
-	// SkipConfig disables the automatic theme.Resolve call inside app.New.
-	// By default app.New reorders Themes so Themes[0] reflects the user's
-	// $XDG_CONFIG_HOME/tuilib/config.yaml `theme:` field (and ThemeEnvVar,
-	// when set) — set this to true if you've already called theme.Resolve
-	// yourself, or if you want to pin the app to Themes[0] regardless.
+	// SkipConfig ignores the user's config file and the env vars, so the
+	// app starts on Palettes[0] and Surfaces[0] with the double-click
+	// default — for tests, and apps pinned to one look.
 	SkipConfig bool
 
 	// DisableAutoEscPop turns off automatic esc→pop handling. When false
@@ -228,16 +215,16 @@ func (m MouseMode) enableCmd() tea.Cmd {
 	return nil
 }
 
-// SetThemeMsg asks the app to switch to the named theme and rebroadcast it
-// across the stack. Emit via SetTheme(name) from any screen.
-type SetThemeMsg struct{ Name string }
+// SetPaletteMsg asks the app to switch to the named palette and rebroadcast
+// the theme across the stack. Emit via SetPalette(name) from any screen.
+type SetPaletteMsg struct{ Name string }
 
-// SetTheme returns a command that tells the app shell to switch to the theme
-// whose Name matches. Useful for a theme-picker screen that wants to preview
-// palettes live as the cursor moves. No-op if no theme with that name is in
-// the app's Themes list.
-func SetTheme(name string) tea.Cmd {
-	return func() tea.Msg { return SetThemeMsg{Name: name} }
+// SetPalette returns a command that tells the app shell to switch to the
+// palette whose Name matches. Useful for a picker screen that previews
+// palettes live as the cursor moves. No-op if the app offers no palette by
+// that name.
+func SetPalette(name string) tea.Cmd {
+	return func() tea.Msg { return SetPaletteMsg{Name: name} }
 }
 
 // StatusInfoMsg asks the app to show Text as an info message in the
@@ -336,12 +323,9 @@ type OutputClosed = output.Closed
 type Model struct {
 	w, h int
 
-	themes   []theme.Theme
-	themeIdx int
-	version  string
+	version string
 
-	// ax is the palette × surface state when the app was built from
-	// Options.Palettes; nil for an app built from Themes.
+	// ax is the palette × surface state the theme is composed from.
 	ax           *axes
 	surfaceKey   key.Binding
 	lastFallback string
@@ -459,26 +443,18 @@ func (m Model) overlayUp() bool { return m.menuUp || m.confUp || m.helpUp }
 // outputEnabled reports whether the console exists for this app.
 func (m Model) outputEnabled() bool { return m.outBuf != nil }
 
-// New constructs an app shell. By default it reorders Themes via
-// theme.Resolve so Themes[0] reflects the user's config file (and
-// ThemeEnvVar, when set) — pass SkipConfig=true to opt out. The root
-// screen's SetTheme is then called with the resulting Themes[0] so the
-// root renders in the initial palette immediately.
+// New constructs an app shell. The starting palette and surface come from
+// the env vars and the user's config file, unless SkipConfig; the root
+// screen's SetTheme is then called with the composed theme so the root
+// renders in it immediately.
 func New(opts Options) Model {
 	if opts.Root == nil {
 		panic("app.New: Options.Root is required")
 	}
-	var ax *axes
-	if len(opts.Palettes) > 0 {
-		ax = newAxes(opts)
-		opts.Themes = []theme.Theme{ax.theme}
+	if len(opts.Palettes) == 0 {
+		opts.Palettes = []palette.Palette{palette.Dark()}
 	}
-	if len(opts.Themes) == 0 {
-		opts.Themes = []theme.Theme{theme.Dark()}
-	}
-	if ax == nil && !opts.SkipConfig {
-		opts.Themes = theme.Resolve(opts.Themes, opts.ThemeEnvVar)
-	}
+	ax := newAxes(opts)
 	if opts.QuitKey.Keys() == nil {
 		opts.QuitKey = key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
@@ -508,12 +484,10 @@ func New(opts Options) Model {
 		}
 	}
 
-	t := opts.Themes[0]
+	t := ax.theme
 	opts.Root.SetTheme(t)
 
 	m := Model{
-		themes:      opts.Themes,
-		themeIdx:    0,
 		version:     opts.Version,
 		stack:       screen.NewStack(opts.Root),
 		quitKey:     opts.QuitKey,
@@ -598,10 +572,7 @@ func (m Model) Init() tea.Cmd {
 
 // theme returns the currently-active palette.
 func (m Model) theme() theme.Theme {
-	if m.ax != nil {
-		return m.ax.theme
-	}
-	return m.themes[m.themeIdx]
+	return m.ax.theme
 }
 
 // retheme pushes the current palette through the stack and the console, then
@@ -957,19 +928,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, cmd
 
-	case SetThemeMsg:
-		if m.ax != nil {
-			if m.ax.selectPalette(msg.Name) {
-				m.retheme()
-			}
-			return m, nil
-		}
-		for i, t := range m.themes {
-			if t.Name == msg.Name {
-				m.themeIdx = i
-				m.retheme()
-				break
-			}
+	case SetPaletteMsg:
+		if m.ax.selectPalette(msg.Name) {
+			m.retheme()
 		}
 		return m, nil
 
@@ -1115,15 +1076,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.themeKey.Keys() != nil && key.Matches(msg, m.themeKey) {
-				if m.ax != nil {
-					m.ax.nextPalette()
-				} else {
-					m.themeIdx = (m.themeIdx + 1) % len(m.themes)
-				}
+				m.ax.nextPalette()
 				m.retheme()
 				return m, nil
 			}
-			if m.ax != nil && m.surfaceKey.Keys() != nil && key.Matches(msg, m.surfaceKey) {
+			if m.surfaceKey.Keys() != nil && key.Matches(msg, m.surfaceKey) {
 				m.ax.nextSurface()
 				m.retheme()
 				return m, nil
@@ -1561,7 +1518,7 @@ func (m Model) helpSections() []help.Section {
 	if m.themeKey.Keys() != nil {
 		globals = append(globals, m.themeKey)
 	}
-	if m.ax != nil && m.surfaceKey.Keys() != nil {
+	if m.surfaceKey.Keys() != nil {
 		globals = append(globals, m.surfaceKey)
 	}
 	if m.autoEscPop && m.stack.Depth() > 1 {

@@ -1527,22 +1527,25 @@ path.
 - **Package overview:** `go doc ./pkg/<name>` prints the package doc
   comment + every exported symbol's signature and doc.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.
-- **Color vocabulary:** `pkg/theme/theme.go` — field comments on the
-  `Theme` struct name every semantic slot.
-- **User-default theme:** `app.New` runs `theme.Resolve` on `Options.Themes`
-  by default, picking the initial theme from (1) `Options.ThemeEnvVar` if
-  set, (2) `~/.config/tuilib/config.yaml`'s `theme:` field, (3) `Themes[0]`.
-  Pass the raw theme list — the shell reorders it. Set `Options.SkipConfig
-  = true` to disable resolution (tests, or apps pinned to a single theme).
-  Config is opt-in: the library never writes the file. Unknown names fall
-  through silently; malformed YAML surfaces only via `config.Load`
-  directly. `theme.Resolve` is still exported for callers that need the
-  resolved order outside `app.New`.
+- **Color vocabulary:** `pkg/palette/palette.go` — field comments on the
+  `Palette` struct name every semantic slot; `theme.Theme` embeds it.
+- **Palette and surface:** an app offers `Options.Palettes` and
+  `Options.Surfaces` (default `[surface.Outlined]`), cycled by `ThemeKey`
+  and `SurfaceKey`; the shell composes the pair with `theme.Compose` and
+  hands the result to `SetTheme`. `app.New` picks where each starts from
+  (1) `Options.PaletteEnvVar` / `SurfaceEnvVar`, (2)
+  `~/.config/tuilib/config.yaml`'s `palette:` (or the old `theme:`) and
+  `surface:`, (3) the first entry. Set `Options.SkipConfig = true` to
+  disable this (tests, or apps pinned to one look). Config is opt-in: the
+  library never writes the file. Unknown names fall through silently;
+  malformed YAML surfaces only via `config.Load` directly. Outside the
+  shell, `theme.New(p)` is a palette drawn Outlined. See `docs/surfaces.md`.
 - **User config in general:** `pkg/config` owns the YAML file shape
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
   (not `pkg/theme`) when they grow their own user-tunable defaults.
-  Today it carries `theme:` and `double_click_ms:`.
+  Today it carries `palette:` (and its old name `theme:`), `surface:`,
+  `block_glyphs:` and `double_click_ms:`.
 - **Geometry:** `pkg/geom` is a leaf holding `Rect{X,Y,W,H,Gen}` plus
   `Contains` / `Hit` / `Fresh` / `Inset` / `CenterIn`, and the
   render-generation counter (`NextGen`, `Gen`). Both `pkg/layout` and

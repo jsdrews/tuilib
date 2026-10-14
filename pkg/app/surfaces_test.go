@@ -62,7 +62,7 @@ func TestPalettesWithOutlinedMatchThemes(t *testing.T) {
 	viaPalettes := surfaceApp(t, Options{Palettes: []palette.Palette{palette.Nord()}})
 	viaThemes := New(Options{
 		Root:       &listScreen{stubScreen: stubScreen{name: "root"}},
-		Themes:     []theme.Theme{theme.Nord()},
+		Palettes:   []palette.Palette{palette.Nord()},
 		SkipConfig: true,
 	})
 	tm, _ := viaThemes.Update(tea.WindowSizeMsg{Width: termW, Height: termH})

@@ -16,10 +16,10 @@ import (
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/output"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
-	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
 // recordingScreen notes what OnEnter was handed, which is how the pop
@@ -38,7 +38,7 @@ func newOutputApp(t *testing.T, root screen.Screen) Model {
 	t.Helper()
 	m := New(Options{
 		Root:       root,
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		Mouse:      MouseClick,
 		SkipConfig: true,
 		OutputKey:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "output")),
@@ -298,7 +298,7 @@ func TestFooterFitsWithBadgeAndVersion(t *testing.T) {
 		for _, expanded := range []bool{false, true} {
 			m := New(Options{
 				Root:       &stubScreen{name: "Deploy"},
-				Themes:     []theme.Theme{theme.Dark()},
+				Palettes:   []palette.Palette{palette.Dark()},
 				Version:    "v1.4.0",
 				SkipConfig: true,
 				OutputKey:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "output")),
@@ -415,7 +415,7 @@ func TestOutputKeySurvivesABindingHeavyScreen(t *testing.T) {
 	for _, w := range []int{60, 80, 100, 120} {
 		m := New(Options{
 			Root:       &bindingHeavyScreen{stubScreen{name: "Table"}},
-			Themes:     []theme.Theme{theme.Dark()},
+			Palettes:   []palette.Palette{palette.Dark()},
 			Version:    "v1.4.0",
 			SkipConfig: true,
 			OutputKey:  key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "output")),

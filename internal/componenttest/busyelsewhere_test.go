@@ -13,6 +13,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -37,7 +38,7 @@ type listBusy struct {
 }
 
 func newListBusy() busyable {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.BusyWhen = func(it list.KeyedItem) (string, bool) {
 		label, _ := it.Data.(string)
 		return label, label != ""
@@ -75,7 +76,7 @@ type tableBusy struct {
 }
 
 func newTableBusy() busyable {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
@@ -113,7 +114,7 @@ type treeBusy struct {
 }
 
 func newTreeBusy() busyable {
-	o := theme.Dark().Tree()
+	o := theme.New(palette.Dark()).Tree()
 	o.InitialDepth = 2
 	o.Root = busyTree(derivedKeys, nil)
 	o.BusyWhen = func(n tree.Node) (string, bool) {

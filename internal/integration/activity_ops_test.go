@@ -22,6 +22,7 @@ import (
 	"github.com/jsdrews/tuilib/demoapi"
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/layout"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -57,7 +58,7 @@ type opsAnswered struct {
 
 func newOpsScreen(t *testing.T, settle int) *opsScreen {
 	t.Helper()
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Columns = []table.Column{{Title: "Name", Width: 20}, {Title: "Sync", Width: 14}}
 	o.ActivityColumn = "Sync"
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) {

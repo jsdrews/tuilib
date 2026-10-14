@@ -17,7 +17,9 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -25,15 +27,16 @@ import (
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
-// shapeTheme uses borders no component defaults to, so a component that
+// shapeTheme draws an Outlined surface with borders no component defaults to, so a component that
 // ignores the theme and falls back to its own literal fails here rather than
 // passing by coincidence. Asserting on NormalBorder would prove nothing: it
 // is what every component would draw anyway.
 func shapeTheme() theme.Theme {
-	t := theme.Dark()
-	t.BorderShapeActive = lipgloss.RoundedBorder()
-	t.BorderShapeInactive = lipgloss.RoundedBorder()
-	t.BorderShapeOverlay = lipgloss.DoubleBorder()
+	t := theme.New(palette.Dark())
+	s := surface.OutlinedWith(lipgloss.RoundedBorder())
+	ov := surface.OutlinedWith(lipgloss.DoubleBorder())
+	s.Overlay = &ov
+	t.Surface = t.Resolve(s)
 	return t
 }
 

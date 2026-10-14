@@ -8,9 +8,10 @@ package pane
 
 import (
 	"fmt"
-	"github.com/jsdrews/tuilib/pkg/glyph"
 	"strings"
 	"time"
+
+	"github.com/jsdrews/tuilib/pkg/glyph"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -149,11 +150,11 @@ type Options struct {
 	// it is not. Both default to lipgloss.NormalBorder(): focus is carried
 	// by ActiveColor, and a pane that also changed weight on focus would
 	// shift the surrounding layout's visual weight for no reason the user
-	// asked for. The same two defaults are what theme.Theme resolves an
-	// unset BorderShapeActive / BorderShapeInactive to, so a themed pane and
-	// a bare pane.New(pane.Options{}) agree.
+	// asked for. Outlined draws the same lines, so a themed pane and a bare
+	// pane.New(pane.Options{}) agree.
 	//
-	// Overlays are the deliberate exception — see Theme.BorderShapeOverlay.
+	// Overlays are the deliberate exception — a surface's overlay form has
+	// heavier lines (see surface.Surface.Overlay).
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
 	// Glyphs supplies the scrollbar thumb and track. Empty fields fall back
@@ -499,12 +500,12 @@ func (p Pane) dividerView() string {
 		if p.headerInput {
 			style = p.dividerActive
 		}
-		return style.Render(strings.Repeat(p.glyphs.Rule, w))
+		return style.Render(strings.Repeat(p.surf.Surface().Divider.Glyph, w))
 	}
 	d := p.surf.Surface().Divider
 	glyph := d.Glyph
 	if glyph == "" {
-		glyph = p.glyphs.Rule
+		glyph = "─"
 	}
 	role := d.FG
 	if p.headerInput && d.FGActive != surface.None {

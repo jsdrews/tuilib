@@ -10,8 +10,8 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/help"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
-	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
 // sectionedScreen describes its bindings as groups, the way a screen holding
@@ -34,7 +34,7 @@ func helpApp(t *testing.T, opts Options) Model {
 	if opts.Root == nil {
 		opts.Root = &stubScreen{name: "root"}
 	}
-	opts.Themes = []theme.Theme{theme.Dark()}
+	opts.Palettes = []palette.Palette{palette.Dark()}
 	opts.SkipConfig = true
 	m := New(opts)
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: termW, Height: termH})

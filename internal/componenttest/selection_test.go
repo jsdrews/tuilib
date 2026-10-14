@@ -11,6 +11,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
@@ -37,7 +38,7 @@ func selRect() geom.Rect { return geom.New(0, 0, 44, 12) }
 // its own way of painting the row, and five of them stopped at the first
 // nested reset.
 func TestSelectedRowKeepsItsBackground(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	content := "SEL " + styled + " tail"
 
 	for _, tc := range []struct {
