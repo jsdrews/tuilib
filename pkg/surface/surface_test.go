@@ -293,3 +293,21 @@ func TestFieldFormsFitThreeRows(t *testing.T) {
 		t.Error("Outlined should be its own field")
 	}
 }
+
+// A modal covers what is under it, so an unfilled surface's derived overlay
+// form fills its body; otherwise every blank cell shows the panes behind.
+func TestUnfilledSurfaceOverlayIsFilled(t *testing.T) {
+	o := resolved(Accented, rich).Overlay().Surface()
+	if !o.Filled() || o.Fill != Overlay || o.Text != Text {
+		t.Errorf("Accented overlay: fill %s/%s text %s, want overlay with text", o.Fill, o.FillFocused, o.Text)
+	}
+	if bg := o.Rings[1].Top.BG; bg != Fill {
+		t.Errorf("Accented overlay's title row sits on %s, want the fill", bg)
+	}
+	if bg := o.Rings[0].Right.BG; bg != Parent {
+		t.Errorf("Accented overlay's margin moved onto %s; it should stay on the parent", bg)
+	}
+	if Accented.Rings[1].Top.BG != Parent {
+		t.Error("deriving the overlay changed Accented itself")
+	}
+}

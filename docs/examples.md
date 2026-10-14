@@ -49,7 +49,7 @@ and delete what you don't need.
 | Status | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s and the shell paints the statusbar's center slot. Auto-clears on the next keypress, which is why anything worth reading twice belongs in the console |
 | Output | The app-wide console: `app.Info` / `app.ErrorDetail` / `app.ErrorOf`, plus `runner.Capture` streaming a live subprocess. `o` opens it, `c` clears, `x` kills a running capture, `w` exports. Note the `OnEnter` guard on `app.OutputClosed` — closing the console must not look like a fresh activation |
 | Themes | Live palette picker — moving the cursor re-skins the whole app, enter shows a theme's field palette. Also the package every other example's theme list comes from |
-| Chrome | The two border-shape slots a `Theme` carries, one for ordinary components and one for overlays. Pick a shape and every component on screen is rebuilt from the modified theme. Set both pickers the same to see why the overlay slot is separate: the modal flattens into the content behind it |
+| Surfaces | Live surface picker: moving the cursor redraws the whole app as a line border, a filled card, a header band, a drop shadow or an accent bar (what `T` cycles). The list gets the surface, the input and toggle its field form, the modal its overlay form, and one pane pins itself to Outlined. Ruled and Lipped are custom surfaces defined in the example |
 | Prescreen | The "log in before you can use this" shape — a root screen pushes a child from `OnEnter`, takes its result on `Pop`, and can re-push it later (`L` logs out) without the child living permanently on the stack |
 
 ## `examples/patterns/` — composition idioms

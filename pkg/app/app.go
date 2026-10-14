@@ -227,6 +227,18 @@ func SetPalette(name string) tea.Cmd {
 	return func() tea.Msg { return SetPaletteMsg{Name: name} }
 }
 
+// SetSurfaceMsg asks the app to switch to the named surface. Emit via
+// SetSurface(name) from any screen.
+type SetSurfaceMsg struct{ Name string }
+
+// SetSurface returns a command that tells the app shell to switch to the
+// surface whose Name matches — the surface counterpart of SetPalette, for a
+// picker that previews surfaces live. No-op if the app offers no surface by
+// that name.
+func SetSurface(name string) tea.Cmd {
+	return func() tea.Msg { return SetSurfaceMsg{Name: name} }
+}
+
 // StatusInfoMsg asks the app to show Text as an info message in the
 // statusbar's center slot. The message auto-clears on the next KeyMsg
 // (matching the statusbar's own Update behavior). Emit via Info(s) from any
@@ -930,6 +942,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SetPaletteMsg:
 		if m.ax.selectPalette(msg.Name) {
+			m.retheme()
+		}
+		return m, nil
+
+	case SetSurfaceMsg:
+		if m.ax.selectSurface(msg.Name) {
 			m.retheme()
 		}
 		return m, nil

@@ -218,3 +218,18 @@ func backgroundsOf(s string) []string {
 	}
 	return out
 }
+
+func TestSetSurfaceSwitchesByName(t *testing.T) {
+	m := surfaceApp(t, Options{
+		Palettes: []palette.Palette{palette.Nord()},
+		Surfaces: []surface.Surface{surface.Outlined, surface.Banded},
+	})
+	m = send(t, m, SetSurfaceMsg{Name: "banded"})
+	if got := m.theme().Surface.Name(); got != "banded" {
+		t.Errorf("surface = %q, want banded", got)
+	}
+	m = send(t, m, SetSurfaceMsg{Name: "nope"})
+	if got := m.theme().Surface.Name(); got != "banded" {
+		t.Errorf("an unknown name changed the surface to %q", got)
+	}
+}

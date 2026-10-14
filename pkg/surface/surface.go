@@ -44,7 +44,9 @@ type Surface struct {
 	Bar Role
 
 	// Overlay is the form this surface takes for modals. Nil derives it: the
-	// same surface with its body in the Overlay tone.
+	// same surface with its body filled in the Overlay tone — filled even
+	// when the surface itself isn't, since a modal must cover what is under
+	// it.
 	Overlay *Surface
 	// Field is the form this surface takes for single-line components —
 	// input, filter, toggle — which screens place in three-row slots. It
@@ -67,6 +69,27 @@ type Ring struct {
 	Top, Bottom, Left, Right Side
 
 	TopLeft, TopRight, BottomLeft, BottomRight Cell
+}
+
+// onFill is r with every cell drawn on the parent moved onto the fill.
+func (r Ring) onFill() Ring {
+	cell := func(c Cell) Cell {
+		if c.BG == Parent {
+			c.BG = Fill
+		}
+		if c.BGFocused == Parent {
+			c.BGFocused = Fill
+		}
+		return c
+	}
+	side := func(sd Side) Side {
+		sd.Cell, sd.First = cell(sd.Cell), cell(sd.First)
+		return sd
+	}
+	r.Top, r.Bottom, r.Left, r.Right = side(r.Top), side(r.Bottom), side(r.Left), side(r.Right)
+	r.TopLeft, r.TopRight = cell(r.TopLeft), cell(r.TopRight)
+	r.BottomLeft, r.BottomRight = cell(r.BottomLeft), cell(r.BottomRight)
+	return r
 }
 
 // Side is one side of a ring.
@@ -173,8 +196,23 @@ func (s Surface) overlayForm() Surface {
 	}
 	o := s
 	o.Name = s.Name + "-overlay"
-	if o.Filled() {
-		o.Fill, o.FillFocused = Overlay, Overlay
+	// A modal covers what is under it, so its body is filled even when the
+	// surface's isn't: an unfilled overlay would let the panes behind show
+	// through every blank cell.
+	o.Fill, o.FillFocused = Overlay, Overlay
+	if o.Text == None {
+		o.Text = Text
+	}
+	// Edge cells inside the margin sit on the overlay's fill too: an
+	// unfilled surface draws its title row and padding on the parent, which
+	// for a modal is the pane it covers.
+	o.Rings = make([]Ring, len(s.Rings))
+	for i, r := range s.Rings {
+		if i == 0 && s.Margined() {
+			o.Rings[i] = r
+			continue
+		}
+		o.Rings[i] = r.onFill()
 	}
 	return o
 }

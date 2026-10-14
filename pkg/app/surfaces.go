@@ -131,6 +131,18 @@ func (a *axes) selectPalette(name string) bool {
 	return false
 }
 
+// selectSurface switches to the surface called name, if there is one.
+func (a *axes) selectSurface(name string) bool {
+	for i, s := range a.surfaces {
+		if s.Name == name {
+			a.si = i
+			a.compose()
+			return true
+		}
+	}
+	return false
+}
+
 // fallbackNote says why the chosen surface isn't the one drawn, or "".
 func (a *axes) fallbackNote() string {
 	asked, why, ok := a.theme.Surface.FellBack()

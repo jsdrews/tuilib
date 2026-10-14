@@ -1511,7 +1511,7 @@ path.
   | Area | Holds |
   |---|---|
   | `components/` | one demo per UI component, in isolation — `pane`, `list`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
-  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `chrome`, `prescreen` |
+  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `surfaces`, `prescreen` |
   | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `activity`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
 
   When you add a demo, pick the area by what a reader is looking for, not

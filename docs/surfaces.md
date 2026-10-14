@@ -1,6 +1,9 @@
 # Surfaces — spec
 
-Status: **specified, not built.** Every decision here was made on the map
+Status: **built**, except two pieces: a blurred pane's selected row doesn't
+yet dim to `SelectionDim` (components have no blurred selection style to set),
+and bar text on a `Screen`-painted bar isn't checked against the contrast
+floor. Every decision here was made on the map
 [Map: surfaces — card-style theming](https://github.com/jsdrews/tuilib/issues/111),
 and each section links the ticket that holds its reasoning. The vocabulary is in
 `CONTEXT.md` § Surfaces.
@@ -49,8 +52,9 @@ Each step ships on its own and leaves the library working.
    surface's role, fallback logging, config keys.
 7. **Migration** of the library's examples and the six downstream modules,
    with a "Migrating to surfaces" section in this doc's successor guide.
-8. **The surface demo** (`examples/shell/chrome` becomes it), defining one
-   custom surface as a struct literal.
+8. **The surface demo**: `examples/shell/surfaces` (was `shell/chrome`), a
+   live surface picker that defines two custom surfaces, Ruled and Lipped,
+   as struct literals offered beside the built-ins.
 
 ## Packages
 
