@@ -70,7 +70,23 @@ const (
 	// floorQuantised is the same floor after rounding to the profile, where
 	// only the palette's discrete steps are available.
 	floorQuantised = 0.015
+	// floorText is the least lightness distance text keeps from what it is
+	// drawn on. Far above the tone floor: two tones a few percent apart read
+	// as two surfaces, but text needs real contrast to be read at all.
+	floorText = 0.25
 )
+
+// Legible reports whether text in fg reads on bg: their OKLab lightness
+// differs by at least the text floor. Colours with no known RGB (ANSI
+// indices) are the terminal's to render and count as legible.
+func Legible(fg, bg lipgloss.TerminalColor) bool {
+	f, okF := rgbOf(fg)
+	b, okB := rgbOf(bg)
+	if !okF || !okB {
+		return true
+	}
+	return math.Abs(lightness(f)-lightness(b)) >= floorText
+}
 
 // floorPairs are the derived tones that must stay distinct from the tone
 // they sit on: {derived, base}.

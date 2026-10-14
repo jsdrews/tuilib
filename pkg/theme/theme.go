@@ -82,8 +82,16 @@ func New(p palette.Palette) Theme {
 func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
 	t := Theme{Palette: p}
 	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
-	if bar := t.Surface.Colour(t.Surface.Surface().Bar, false); bar != nil {
+	role := t.Surface.Surface().Bar
+	if bar := t.Surface.Colour(role, false); bar != nil {
 		t.BarBG = bar
+		// BarFG was chosen to read on the palette's own bar colour. Moved
+		// onto another — the screen, for the filled surfaces — it can sink
+		// into it; the surface's Text colour is chosen to read there.
+		text := t.Surface.Colour(surface.Text, false)
+		if role != surface.Bar && !surface.Legible(t.BarFG, bar) && surface.Legible(text, bar) {
+			t.BarFG = text
+		}
 	}
 	return t
 }
@@ -123,22 +131,30 @@ func (t Theme) shapeOverlay() lipgloss.Border {
 	return lipgloss.ThickBorder()
 }
 
-// selection is a selected row's style: legacy, the component's own, while
-// the surface keeps the theme's selection (Outlined does); otherwise the
-// surface's Selection tone under its Text colour.
-func (t Theme) selection(legacy lipgloss.Style) lipgloss.Style {
+// selection is a selected row's style, focused and blurred: legacy, the
+// component's own, while the surface keeps the theme's selection (Outlined
+// does, so it never dims); otherwise the surface's Selection tone under its
+// Text colour, dimming to SelectionDim when the pane loses focus.
+func (t Theme) selection(legacy lipgloss.Style) (focused, blurred lipgloss.Style) {
 	sel := t.Surface.Surface().Selection
 	if t.Surface.IsZero() || sel.FromTheme {
-		return legacy
+		return legacy, lipgloss.Style{}
 	}
-	st := lipgloss.NewStyle()
-	if bg := t.Surface.Colour(sel.BG, true); bg != nil {
-		st = st.Background(bg)
+	style := func(bg surface.Role) lipgloss.Style {
+		st := lipgloss.NewStyle()
+		if c := t.Surface.Colour(bg, true); c != nil {
+			st = st.Background(c)
+		}
+		if c := t.Surface.Colour(sel.FG, true); c != nil {
+			st = st.Foreground(c)
+		}
+		return st
 	}
-	if fg := t.Surface.Colour(sel.FG, true); fg != nil {
-		st = st.Foreground(fg)
+	blurredBG := sel.BGBlurred
+	if blurredBG == surface.None {
+		blurredBG = sel.BG
 	}
-	return st
+	return style(sel.BG), style(blurredBG)
 }
 
 // glyphs resolves the theme's glyph set against the library defaults. Every
@@ -322,7 +338,7 @@ func (t Theme) List() list.Options {
 		Keys:           list.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.SelectedStyle = t.selection(o.SelectedStyle)
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
 	return o
 }
 
@@ -461,7 +477,7 @@ func (t Theme) Table() table.Options {
 		Keys: table.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.SelectedStyle = t.selection(o.SelectedStyle)
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
 	return o
 }
 
@@ -487,7 +503,7 @@ func (t Theme) Logview() logview.Options {
 		Keys:             logview.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
 	return o
 }
 
@@ -513,7 +529,7 @@ func (t Theme) Eventlog() eventlog.Options {
 		Keys:           eventlog.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.SelectedStyle = t.selection(o.SelectedStyle)
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
 	return o
 }
 
@@ -538,7 +554,7 @@ func (t Theme) TextView() textview.Options {
 		Wrap:             true,
 	}
 	o.Surface = t.Surface
-	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
 	return o
 }
 
@@ -565,7 +581,7 @@ func (t Theme) Tree() tree.Options {
 		Keys:             tree.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
 	return o
 }
 
@@ -593,7 +609,7 @@ func (t Theme) Inspector() inspector.Options {
 		Keys:             inspector.DefaultKeys(),
 	}
 	o.Surface = t.Surface
-	o.CurrentLineStyle = t.selection(o.CurrentLineStyle)
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
 	return o
 }
 

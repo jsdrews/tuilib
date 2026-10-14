@@ -17,6 +17,7 @@ The shell. See [The app shell](../guide/app-shell.md) for `app.Options`.
 | `ErrorOf(err)` | `tea.Cmd` | `err.Error()` to the statusbar, the unwrapped `%w` chain to the console. |
 | `ClearStatus()` | `tea.Cmd` | Clear the statusbar message. |
 | `SetPalette(name)` | `tea.Cmd` | Switch to a named palette in `Options.Palettes` (live preview). |
+| `SetSurface(name)` | `tea.Cmd` | Switch to a named surface in `Options.Surfaces` (live preview). |
 | `OutputClosed` | type | The value the console pops with; ignore it in `OnEnter`. |
 | `MouseOff`, `MouseClick` | `MouseMode` | `Options.Mouse` values. |
 | `Model.Theme()` | method | The current theme. |

@@ -105,6 +105,10 @@ type Options struct {
 	// padded out to the pane's inner width. theme.Tree() seeds a subtle
 	// background.
 	CurrentLineStyle lipgloss.Style
+	// CurrentLineBlurredStyle replaces CurrentLineStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise CurrentLineStyle applies whatever the focus.
+	CurrentLineBlurredStyle lipgloss.Style
 
 	// Pane pass-throughs. See pkg/pane.Options for defaults.
 	ActiveColor    lipgloss.TerminalColor
@@ -307,8 +311,9 @@ type Model struct {
 	// return value, flushed on the next Update.
 	actCmd tea.Cmd
 
-	matchStyle       lipgloss.Style
-	currentLineStyle lipgloss.Style
+	matchStyle         lipgloss.Style
+	currentLineStyle   lipgloss.Style
+	currentLineBlurred lipgloss.Style
 
 	keys Keys
 
@@ -354,20 +359,21 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:           opts.Glyphs.Resolve(),
-		token:            focus.NewToken(),
-		root:             opts.Root,
-		expanded:         map[string]bool{},
-		searchable:       opts.Searchable,
-		markable:         opts.Markable,
-		markStyle:        opts.MarkStyle,
-		act:              activity.New(opts.Activity),
-		busyWhen:         opts.BusyWhen,
-		revision:         opts.Revision,
-		matchStyle:       opts.MatchStyle,
-		currentLineStyle: opts.CurrentLineStyle,
-		keys:             opts.Keys,
-		matchIdx:         -1,
+		glyphs:             opts.Glyphs.Resolve(),
+		token:              focus.NewToken(),
+		root:               opts.Root,
+		expanded:           map[string]bool{},
+		searchable:         opts.Searchable,
+		markable:           opts.Markable,
+		markStyle:          opts.MarkStyle,
+		act:                activity.New(opts.Activity),
+		busyWhen:           opts.BusyWhen,
+		revision:           opts.Revision,
+		matchStyle:         opts.MatchStyle,
+		currentLineStyle:   opts.CurrentLineStyle,
+		currentLineBlurred: opts.CurrentLineBlurredStyle,
+		keys:               opts.Keys,
+		matchIdx:           -1,
 	}
 
 	bodyH := opts.Height
@@ -725,6 +731,23 @@ func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 // Title returns the label on the pane's border.
 func (m Model) Title() string { return m.body.Title() }
 
+// selection is the selected row's style: currentLineStyle, or currentLineBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.currentLineBlurred
+	}
+	return m.currentLineStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -733,6 +756,7 @@ func (m Model) Title() string { return m.body.Title() }
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -741,6 +765,7 @@ func (m *Model) Focus() tea.Cmd {
 // invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.searchable {
 		m.filter.Blur()
 		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
@@ -1316,7 +1341,7 @@ func (m *Model) formatRow(r row, current bool) string {
 		return gutter + indent + glyph + m.highlightLabel(label)
 	}
 
-	base := m.currentLineStyle
+	base := m.selection()
 	matchOnRow := m.matchStyle.Inherit(base)
 	var b strings.Builder
 	b.WriteString(ansi.RenderFill(base.Render, gutter+indent+glyph))

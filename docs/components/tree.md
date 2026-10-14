@@ -53,11 +53,13 @@ cursor row's highlight survives it.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"tree"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Root` | `tree.Node` | | The top-level node. |
 | `Searchable` | `bool` | `false` | Search row inside the pane; `/` focuses it. |
 | `InitialDepth` | `int` | `0` | Pre-expand nodes shallower than this. 0 shows only the root, 1 expands the root, 2 its children too. |
 | `MatchStyle` | `lipgloss.Style` | bold reverse accent | Highlight on matched text. |
 | `CurrentLineStyle` | `lipgloss.Style` | subtle background | The cursor row. |
+| `CurrentLineBlurredStyle` | `lipgloss.Style` | unset | `CurrentLineStyle` while the tree doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `Markable`, `MarkStyle` | | `false` | Multi-select, keyed by node path. |
 | `BusyWhen` | `func(Node) (string, bool)` | `nil` | Which nodes are working (row activity). |
 | `Revision` | `func(Node) string` | `nil` | A value that moves when work on the node finishes. |

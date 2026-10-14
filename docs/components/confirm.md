@@ -74,6 +74,7 @@ and the shell does all of this.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"confirm"` | Border title. |
+| `Surface` | `surface.Resolved` | the surface's overlay form, filled so it covers what is under it | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Message` | `string` | `""` | Body text; multi-line allowed, not wrapped. |
 | `Confirm`, `Cancel` | `string` | `"Yes"`, `"No"` | Button labels. |
 | `Initial` | `bool` | `false` | `true` starts on the confirm button. |

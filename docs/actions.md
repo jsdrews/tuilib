@@ -849,7 +849,8 @@ generates the table below, so the doc cannot drift from the code.
 | `esc` | `pkg/app` | pop the stack |
 | `?` | `pkg/app` | key overlay |
 | `ctrl+z` | `pkg/app` | suspend |
-| `t` | `pkg/app` | cycle theme (opt-in, conventional) |
+| `t` | `pkg/app` | cycle palette (opt-in, conventional) |
+| `T` | `pkg/app` | cycle surface (opt-in, conventional) |
 | `o` | `pkg/app` | output console (opt-in, conventional) |
 | `a` | `pkg/app` | actions menu (opt-in, conventional) |
 

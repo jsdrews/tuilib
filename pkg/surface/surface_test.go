@@ -311,3 +311,15 @@ func TestUnfilledSurfaceOverlayIsFilled(t *testing.T) {
 		t.Error("deriving the overlay changed Accented itself")
 	}
 }
+
+func TestLegible(t *testing.T) {
+	if Legible(lipgloss.Color("#3b4252"), lipgloss.Color("#2e3440")) {
+		t.Error("two near-identical darks shouldn't count as legible")
+	}
+	if !Legible(lipgloss.Color("#d8dee9"), lipgloss.Color("#2e3440")) {
+		t.Error("light text on a dark background should count as legible")
+	}
+	if !Legible(lipgloss.Color("4"), lipgloss.Color("#2e3440")) {
+		t.Error("an ANSI index is the terminal's to render and counts as legible")
+	}
+}

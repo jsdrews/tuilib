@@ -68,6 +68,10 @@ type Options struct {
 	// Style, so a list that only accepted a foreground color was the one
 	// place a caller could not give the cursor a background.
 	SelectedStyle lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
 
 	// Markable adds a mark column and binds x / X / A / D, so the
 	// user can build a multi-selection the screen reads back with Selection().
@@ -262,9 +266,10 @@ type Model struct {
 	filter     filter.Model
 	filterable bool
 
-	body          pane.Pane
-	selectedStyle lipgloss.Style
-	hScrollbar    bool
+	body            pane.Pane
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	hScrollbar      bool
 
 	// marks holds the multi-selection by item key. See mark.go.
 	markable bool
@@ -327,6 +332,7 @@ func New(opts Options) Model {
 		items:              append([]string(nil), opts.Items...),
 		filterable:         opts.Filterable,
 		selectedStyle:      opts.SelectedStyle,
+		selectedBlurred:    opts.SelectedBlurredStyle,
 		hScrollbar:         opts.HScrollbar,
 		keys:               opts.Keys,
 		markable:           opts.Markable,
@@ -422,7 +428,7 @@ func (m *Model) refresh() {
 			if pad := m.body.ContentRect().W - lipgloss.Width(row); pad > 0 {
 				row += strings.Repeat(" ", pad)
 			}
-			row = ansi.RenderFill(m.selectedStyle.Render, row)
+			row = ansi.RenderFill(m.selection().Render, row)
 		case m.markable && m.isMarkedAt(i):
 			row = m.withBadge(i, " "+m.markStyle.Render(m.glyphs.Mark)+" "+it)
 		default:
@@ -970,6 +976,23 @@ func (m *Model) SetValue(s string) {
 	m.refresh()
 }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // A filterable list has two focusable regions behind one Focusable, so this
@@ -979,6 +1002,7 @@ func (m *Model) SetValue(s string) {
 // while the filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -987,6 +1011,7 @@ func (m *Model) Focus() tea.Cmd {
 // up invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
 		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())

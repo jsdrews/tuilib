@@ -32,6 +32,7 @@ s.apply(s.query.Value())
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"filter"` | Border title. |
+| `Surface` | `surface.Resolved` | the surface's field form, which fits a three-row slot | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Prompt` | `string` | `"/ "` | Drawn before the cursor. |
 | `Placeholder` | `string` | `""` | Shown while empty. |
 | `CharLimit` | `int` | 64 | Maximum length. |

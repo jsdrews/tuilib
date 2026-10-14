@@ -46,6 +46,7 @@ if s.table.IsActivate(msg) {
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"Table"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Columns` | `[]table.Column` | **required** | Column layout (below). |
 | `Rows` | `[]table.Row` | | Initial rows; `Row` is `[]string`, one cell per column. |
 | `Filterable` | `bool` | `false` | Filter row inside the pane; `/` focuses it. |
@@ -58,6 +59,7 @@ if s.table.IsActivate(msg) {
 | `Placeholder` | `string` | `"·"` | Cell text for rows a window doesn't hold. |
 | `HeaderStyle` | `lipgloss.Style` | bold | Header row. |
 | `SelectedStyle` | `lipgloss.Style` | bold accent on subtle bg | Cursor row. |
+| `SelectedBlurredStyle` | `lipgloss.Style` | unset | Cursor row while the table doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `CellStyle` | `lipgloss.Style` | none | Non-selected rows. |
 | `Borders` | `table.Borders` | `│` and `─` | Interior separators (below). |
 | `HScrollbar` | `bool` | `true` (theme) | Horizontal scroll for wide tables. |

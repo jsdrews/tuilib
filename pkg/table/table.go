@@ -360,6 +360,10 @@ type Options struct {
 	// SelectedStyle is applied to the highlighted row. theme.Table()
 	// uses bold + Accent fg + Subtle bg.
 	SelectedStyle lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
 
 	// Markable adds a mark gutter and binds x / X / A / D, so the
 	// user can build a multi-selection the screen reads back with Selection().
@@ -660,11 +664,12 @@ type Model struct {
 	// SetRows / SetColumns so per-keystroke lookups stay cheap.
 	distinct [][]string
 
-	body          pane.Pane
-	headerStyle   lipgloss.Style
-	selectedStyle lipgloss.Style
-	cellStyle     lipgloss.Style
-	hScrollbar    bool
+	body            pane.Pane
+	headerStyle     lipgloss.Style
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	cellStyle       lipgloss.Style
+	hScrollbar      bool
 
 	colSep     string
 	headerRule string
@@ -714,36 +719,37 @@ func New(opts Options) Model {
 		colSep = " " + opts.Borders.Vertical + " "
 	}
 	m := Model{
-		glyphs:        opts.Glyphs.Resolve(),
-		cols:          cols,
-		rows:          append([]Row(nil), opts.Rows...),
-		filterable:    opts.Filterable,
-		filterMode:    opts.FilterMode,
-		sortMode:      opts.SortMode,
-		sortCol:       -1,
-		qSortCol:      -1,
-		winTotal:      -1,
-		phGlyph:       opts.Placeholder,
-		headerStyle:   opts.HeaderStyle,
-		selectedStyle: opts.SelectedStyle,
-		cellStyle:     opts.CellStyle,
-		markable:      opts.Markable,
-		marks:         map[string]bool{},
-		markStyle:     opts.MarkStyle,
-		act:           activity.New(opts.Activity),
-		actEnabled:    opts.ActivityColumn != "" || opts.BusyWhen != nil,
-		actColName:    opts.ActivityColumn,
-		busyWhen:      opts.BusyWhen,
-		revision:      opts.Revision,
-		hScrollbar:    opts.HScrollbar,
-		colSep:        colSep,
-		headerRule:    opts.Borders.HeaderRule,
-		keys:          opts.Keys,
-		token:         focus.NewToken(),
-		vpFirst:       -1,
-		vpLast:        -1,
-		vpTotal:       -1,
-		focusIdx:      -1,
+		glyphs:          opts.Glyphs.Resolve(),
+		cols:            cols,
+		rows:            append([]Row(nil), opts.Rows...),
+		filterable:      opts.Filterable,
+		filterMode:      opts.FilterMode,
+		sortMode:        opts.SortMode,
+		sortCol:         -1,
+		qSortCol:        -1,
+		winTotal:        -1,
+		phGlyph:         opts.Placeholder,
+		headerStyle:     opts.HeaderStyle,
+		selectedStyle:   opts.SelectedStyle,
+		selectedBlurred: opts.SelectedBlurredStyle,
+		cellStyle:       opts.CellStyle,
+		markable:        opts.Markable,
+		marks:           map[string]bool{},
+		markStyle:       opts.MarkStyle,
+		act:             activity.New(opts.Activity),
+		actEnabled:      opts.ActivityColumn != "" || opts.BusyWhen != nil,
+		actColName:      opts.ActivityColumn,
+		busyWhen:        opts.BusyWhen,
+		revision:        opts.Revision,
+		hScrollbar:      opts.HScrollbar,
+		colSep:          colSep,
+		headerRule:      opts.Borders.HeaderRule,
+		keys:            opts.Keys,
+		token:           focus.NewToken(),
+		vpFirst:         -1,
+		vpLast:          -1,
+		vpTotal:         -1,
+		focusIdx:        -1,
 	}
 	m.rq = remoteState{debounce: opts.SortDebounce, cSortCol: -1, baseTitle: opts.Title}
 	switch {
@@ -1252,6 +1258,23 @@ func (m *Model) SetTitle(s string) {
 // query they answer and the one in flight; Title returns the label alone.
 func (m Model) Title() string { return m.rq.baseTitle }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -1260,6 +1283,7 @@ func (m Model) Title() string { return m.rq.baseTitle }
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -1268,6 +1292,7 @@ func (m *Model) Focus() tea.Cmd {
 // invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
 		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
@@ -2250,7 +2275,7 @@ func (m *Model) refresh() {
 		}
 		cells = m.withActivity(i, cells)
 		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
-		sel, cell := m.selectedStyle, m.cellStyle
+		sel, cell := m.selection(), m.cellStyle
 		if stale {
 			sel, cell = sel.Faint(true), cell.Faint(true)
 		}

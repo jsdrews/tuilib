@@ -41,6 +41,7 @@ case lineMsg:
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"logs"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Searchable` | `bool` | `false` | Search row inside the pane; `/` focuses it. |
 | `MaxLines` | `int` | `0` → 10,000 | Buffer cap. A positive value sets it; `-1` disables it (only for bounded producers). |
 | `FilterMode` | `bool` | `false` | Start in filter mode (only matching lines, once a query is set). |
@@ -48,6 +49,7 @@ case lineMsg:
 | `GutterStyle` | `lipgloss.Style` | theme | The line-number gutter. |
 | `MatchStyle` | `lipgloss.Style` | bold reverse accent | Highlight on matches. |
 | `CurrentLineStyle` | `lipgloss.Style` | subtle background | The line holding the current match. |
+| `CurrentLineBlurredStyle` | `lipgloss.Style` | unset | `CurrentLineStyle` while the logview doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `Filter` | `filter.Options` | theme | Styles the search field. |
 | `HScrollbar` | `bool` | `true` (theme) | Horizontal scroll for long lines. |
 | `SpinnerStyle`, `LoadingLabel` | | theme | |

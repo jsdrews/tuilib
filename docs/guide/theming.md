@@ -119,6 +119,15 @@ opts := t.Logview()
 opts.Surface = t.Resolve(surface.Outlined)
 ```
 
+The builders hand each component the form of the surface it needs: the
+surface itself for panes, lists and tables; its **field form** for input,
+filter and toggle, which screens place in three-row slots; its **overlay
+form** for confirm, alert and the menus, which is always filled so a modal
+covers what is under it. On a filled surface a selected row dims when its
+pane loses focus, and the bars move onto the screen colour, with their text
+switched to the surface's `Text` colour if the palette's bar text wouldn't
+read there.
+
 `Glyphs` (a `glyph.Set`) holds every mark components draw: cursor `▸`, mark
 `✓`, expand `▾`/`▸`, scrollbar thumb and track, sort `▲`/`▼`, column
 separator `│`, placeholder `·`. Empty fields fall back to `glyph.Default()`,

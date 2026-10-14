@@ -41,12 +41,14 @@ layout.Sized(&s.notes)
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `""` | Text in the title slot. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `TitlePosition` | `pane.BorderPosition` | `TopLeftBorder` | Which of the six border slots holds the title. |
 | `Focused` | `bool` | `false` | Start in the focused (active) style. |
 | `ActiveColor`, `InactiveColor` | `lipgloss.TerminalColor` | theme | Border color when focused / not. |
 | `ActiveBorder`, `InactiveBorder` | `lipgloss.Border` | normal border | Border shape when focused / not. |
 | `Glyphs` | `glyph.Set` | `glyph.Default()` | Scrollbar thumb and track. |
-| `SlotBrackets` | `pane.SlotBracketStyle` | `SlotBracketsNone` | How slot text meets the border line. |
+| `SlotBrackets` | `pane.SlotBracketStyle` | `SlotBracketsNone` | How slot text meets the border line. An alias for `surface.Brackets`: on a themed pane it comes from the surface. |
+| `DividerStyle`, `DividerActiveStyle` | `lipgloss.Style` | unset | The divider under a header set with `SetDividedHeader`, on a line border. A surface's own divider takes their place. |
 | `HScrollbar` | `bool` | `false` | Reserve one row for a horizontal scrollbar. |
 | `Spinner` | `*spinner.Spinner` | `spinner.Dot` | Frames used while loading. |
 | `SpinnerStyle` | `lipgloss.Style` | theme accent | Spinner style. |
@@ -97,6 +99,9 @@ bottom-right slot shows the scroll percentage unless something overrides it.
 | `HandleScrollbar(mouse.Msg)` | Process a click or drag on the scrollbars. |
 | `SetVirtualScroll(total, visible, offset)` | Drive the scrollbar from logical counts when you window content yourself. |
 | `SetActiveColor`, `SetInactiveColor`, `SetActiveBorder`, `SetInactiveBorder`, `SetSlotBrackets`, `SetSpinnerStyle` | Restyle in place. |
+| `SetSurface(r)`, `SetDividerStyles(inactive, active)` | Change the surface, or the line-border divider colours. |
+| `SetDividedHeader(row, input)` | Pin a header row with a divider the pane draws beneath it; `input` lights the divider while the header holds the keys. |
+| `InnerRect()`, `Insets()` | The rect inside the edge (header, divider and content), and how many cells the edge takes on each side. Use these rather than assuming a one-cell border: a filled surface's edge is deeper. |
 
 ## Helpers
 

@@ -1,9 +1,6 @@
 # Surfaces — spec
 
-Status: **built**, except two pieces: a blurred pane's selected row doesn't
-yet dim to `SelectionDim` (components have no blurred selection style to set),
-and bar text on a `Screen`-painted bar isn't checked against the contrast
-floor. Every decision here was made on the map
+Status: **built.** Every decision here was made on the map
 [Map: surfaces — card-style theming](https://github.com/jsdrews/tuilib/issues/111),
 and each section links the ticket that holds its reasoning. The vocabulary is in
 `CONTEXT.md` § Surfaces.
@@ -204,7 +201,11 @@ findings in `research/background-fill-audit.md`)
   list's bold `Accent` foreground with no background, a `Subtle` background in
   the others, and no difference on blur. Filled, Banded, Elevated and Accented
   declare a `Selection` background with `Text` foreground in every component,
-  and `SelectionDim` when the pane is blurred.
+  and `SelectionDim` when the pane is blurred. Each row component carries the
+  blurred style as its own option (`SelectedBlurredStyle` on list, table and
+  eventlog; `CurrentLineBlurredStyle` on tree, inspector, logview and
+  textview), set by the theme and used only when it sets a background, and
+  redraws its rows on a focus change when it has one.
 
 ([Selection on filled surfaces](https://github.com/jsdrews/tuilib/issues/124))
 
@@ -229,8 +230,10 @@ findings in `research/background-fill-audit.md`)
 The surface names the role the breadcrumb and statusbar sit on. Outlined uses
 `Bar` (byte-identical). Filled, Banded, Elevated and Accented use `Screen`, so
 the cards float in one field. Bar text keeps `BarFG`, falling back to `Text`
-under the contrast floor. Info and Error keep their own bands. The `? help`
-affordance and the inline hints take the bar's role as their background.
+when it isn't legible there (`surface.Legible`: an OKLab lightness distance of
+at least 0.25, well above the tone floor). Outlined keeps the palette's own
+pair untouched. Info and Error keep their own bands. The `? help` affordance
+and the inline hints take the bar's role as their background.
 
 ([Bars on filled surfaces](https://github.com/jsdrews/tuilib/issues/123))
 

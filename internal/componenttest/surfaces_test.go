@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
@@ -142,5 +143,98 @@ func TestFilledModalCoversTheBase(t *testing.T) {
 				t.Fatalf("base shows through the modal at (%d,%d):\n%s", x, y, strings.Join(lines, "\n"))
 			}
 		}
+	}
+}
+
+// TestSelectionDimsWhenBlurred: on a filled surface the selected row is the
+// Selection tone while its pane has focus and SelectionDim once it loses it,
+// in every row component — so a screen with two panes shows which one the
+// keys go to.
+func TestSelectionDimsWhenBlurred(t *testing.T) {
+	caps := surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true}
+	th := theme.Compose(palette.Nord(), surface.Elevated, caps)
+	bgOf := func(r surface.Role) string {
+		return backgrounds(lipgloss.NewStyle().Background(th.Surface.Colour(r, true)).Render("x"))[0]
+	}
+	focusedBG, blurredBG := bgOf(surface.Selection), bgOf(surface.SelectionDim)
+	if focusedBG == blurredBG {
+		t.Fatalf("Selection and SelectionDim are the same colour, %q", focusedBG)
+	}
+
+	type comp interface {
+		View() string
+		Blur()
+	}
+	for _, tc := range []struct {
+		name  string
+		build func() comp
+	}{
+		{"list", func() comp {
+			o := th.List()
+			o.Items = []string{"SEL row", "other"}
+			m := list.New(o)
+			m.SetRect(selRect())
+			return &m
+		}},
+		{"table", func() comp {
+			o := th.Table()
+			o.Columns = []table.Column{{Title: "A", Width: 8}}
+			o.Rows = []table.Row{{"SEL"}, {"x"}}
+			m := table.New(o)
+			m.SetRect(selRect())
+			return &m
+		}},
+		{"tree", func() comp {
+			o := th.Tree()
+			o.Root = node{label: "SEL root", kids: []tree.Node{node{label: "child"}}}
+			m := tree.New(o)
+			m.SetRect(selRect())
+			return &m
+		}},
+		{"inspector", func() comp {
+			o := th.Inspector()
+			o.Fields = []inspector.Field{{Label: "SEL", Value: "v"}, {Label: "k", Value: "v"}}
+			m := inspector.New(o)
+			m.SetRect(selRect())
+			return &m
+		}},
+		{"logview", func() comp {
+			o := th.Logview()
+			o.Searchable = true
+			m := logview.New(o)
+			m.SetRect(selRect())
+			m.AppendLines([]string{"SEL line", "other"})
+			m.SetQuery("SEL")
+			return &m
+		}},
+		{"textview", func() comp {
+			o := th.TextView()
+			o.Searchable, o.Content = true, "SEL line\nother"
+			m := textview.New(o)
+			m.SetRect(selRect())
+			m.SetQuery("SEL")
+			return &m
+		}},
+		{"eventlog", func() comp {
+			o := th.Eventlog()
+			m := eventlog.New(o)
+			m.SetRect(selRect())
+			m.SetPage([]eventlog.Item{{Key: "1", Lines: []string{"SEL line"}}, {Key: "2", Lines: []string{"other"}}}, 0, 2, eventlog.Answer{})
+			m.SetCursor(0)
+			return &m
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := tc.build()
+			row, start := selectedLine(t, c.View())
+			if got := backgrounds(row)[start]; got != focusedBG {
+				t.Errorf("focused: selected row background %q, want Selection %q", got, focusedBG)
+			}
+			c.Blur()
+			row, start = selectedLine(t, c.View())
+			if got := backgrounds(row)[start]; got != blurredBG {
+				t.Errorf("blurred: selected row background %q, want SelectionDim %q", got, blurredBG)
+			}
+		})
 	}
 }

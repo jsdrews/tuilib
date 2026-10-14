@@ -64,6 +64,7 @@ from the viewport.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"events"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Anchored` | `bool` | `false` | Hold a span grown with `Append`/`Prepend` instead of offset pages. |
 | `Filterable` | `bool` | `false` | A filter (`f`) that narrows the query on the server. |
 | `Searchable` | `bool` | `false` | Search (`/`) that jumps to matches. |
@@ -72,6 +73,7 @@ from the viewport.
 | `NoGutter` | `bool` | `false` | Hide the position/mark gutter. |
 | `NewStyle`, `NewFor` | | theme, 2s | Briefly highlight items that just loaded beside ones already on screen. Negative `NewFor` disables. |
 | `MatchStyle`, `SelectedStyle`, `CellStyle`, `GutterStyle` | `lipgloss.Style` | theme | |
+| `SelectedBlurredStyle` | `lipgloss.Style` | unset | The selected item while the eventlog doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `Filter` | `filter.Options` | theme | Styles both the filter and search fields. |
 | `Keys` | `eventlog.Keys` | `DefaultKeys()` | Key bindings. |
 | pane pass-throughs | | theme | See [Components](index.md#pane-pass-through-options). |

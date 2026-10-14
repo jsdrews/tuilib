@@ -53,6 +53,7 @@ The theme's alert chrome is deliberately neutral; set `ActiveColor` (and the
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"alert"` | Border title. |
+| `Surface` | `surface.Resolved` | the surface's overlay form, filled so it covers what is under it | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Message` | `string` | `""` | Body text. Not wrapped unless `Autosize`. |
 | `OK` | `string` | `"OK"` | Button label. |
 | `OKStyle` | `lipgloss.Style` | bold accent | Button style. |

@@ -155,7 +155,11 @@ type Options struct {
 
 	MatchStyle    lipgloss.Style
 	SelectedStyle lipgloss.Style
-	CellStyle     lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
+	CellStyle            lipgloss.Style
 	// GutterStyle draws the gutter of positions or marks down the left.
 	GutterStyle lipgloss.Style
 	// NoGutter hides the gutter. It is on by default: in a long timeline
@@ -285,14 +289,15 @@ type Model struct {
 	// into it — set by Reanchor.
 	replace bool
 
-	placeholder   string
-	gutter        bool
-	gutterStyle   lipgloss.Style
-	matchStyle    lipgloss.Style
-	selectedStyle lipgloss.Style
-	cellStyle     lipgloss.Style
-	ruleActive    lipgloss.Style
-	ruleInactive  lipgloss.Style
+	placeholder     string
+	gutter          bool
+	gutterStyle     lipgloss.Style
+	matchStyle      lipgloss.Style
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	cellStyle       lipgloss.Style
+	ruleActive      lipgloss.Style
+	ruleInactive    lipgloss.Style
 
 	baseTitle string
 	loadCmd   tea.Cmd
@@ -312,24 +317,25 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:        opts.Glyphs.Resolve(),
-		token:         focus.NewToken(),
-		keys:          opts.Keys,
-		maxItems:      opts.MaxItems,
-		following:     true,
-		filterable:    opts.Filterable,
-		searchable:    opts.Searchable,
-		placeholder:   opts.Placeholder,
-		gutter:        !opts.NoGutter,
-		gutterStyle:   opts.GutterStyle,
-		matchStyle:    opts.MatchStyle,
-		selectedStyle: opts.SelectedStyle,
-		cellStyle:     opts.CellStyle,
-		baseTitle:     opts.Title,
-		matchTotal:    -1,
-		landAt:        -1,
-		newStyle:      opts.NewStyle,
-		newFor:        opts.NewFor,
+		glyphs:          opts.Glyphs.Resolve(),
+		token:           focus.NewToken(),
+		keys:            opts.Keys,
+		maxItems:        opts.MaxItems,
+		following:       true,
+		filterable:      opts.Filterable,
+		searchable:      opts.Searchable,
+		placeholder:     opts.Placeholder,
+		gutter:          !opts.NoGutter,
+		gutterStyle:     opts.GutterStyle,
+		matchStyle:      opts.MatchStyle,
+		selectedStyle:   opts.SelectedStyle,
+		selectedBlurred: opts.SelectedBlurredStyle,
+		cellStyle:       opts.CellStyle,
+		baseTitle:       opts.Title,
+		matchTotal:      -1,
+		landAt:          -1,
+		newStyle:        opts.NewStyle,
+		newFor:          opts.NewFor,
 	}
 	if m.placeholder == "" {
 		m.placeholder = m.glyphs.Placeholder
@@ -1287,7 +1293,7 @@ func (m Model) render() string {
 		return lipgloss.Place(max(1, c.W), max(1, c.H), lipgloss.Center, lipgloss.Center, "✗ failed to load")
 	}
 	stale := m.Stale()
-	sel, cell := m.selectedStyle, m.cellStyle
+	sel, cell := m.selection(), m.cellStyle
 	if stale {
 		sel, cell = sel.Faint(true), cell.Faint(true)
 	}
@@ -1426,15 +1432,34 @@ func (m Model) Loading() bool { return m.body.Loading() }
 // FocusToken returns the eventlog's focus identity.
 func (m Model) FocusToken() focus.Token { return m.token }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the eventlog the keyboard.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
 // Blur releases the keyboard, clearing both input fields.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
 	}

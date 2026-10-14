@@ -1145,8 +1145,48 @@ example in `examples/`.
     Elasticsearch, pod logs, generic REST), and the API facts behind
     each, are in `docs/remote-data.md`.
 
+35. **Let the theme choose the surface form.** An app is drawn in a palette
+    (colours) with a surface (how edges and bodies are drawn: `Outlined`,
+    `Filled`, `Banded`, `Elevated`, `Accented`, or one the app defines). The
+    user picks each independently — `Options.Palettes` / `ThemeKey`,
+    `Options.Surfaces` / `SurfaceKey` — and the shell composes them with
+    `theme.Compose` and calls `SetTheme`, so a screen needs nothing new: rule
+    4 already rebuilds it.
+
+    Every pane-owning component takes `Options.Surface`, and the builders
+    set it to the right form: the surface itself for panes, lists, tables
+    and the other row components; its **field form** for input, filter and
+    toggle, which fits the three-row slots screens give them; its **overlay
+    form** for confirm, alert and the menus, which is always filled so a
+    modal covers what is under it. Don't set `Surface` yourself, except to
+    pin one component to another surface:
+
+    ```go
+    opts := t.Logview()
+    opts.Surface = t.Resolve(surface.Outlined)
+    ```
+
+    `Options.Surface` holds a resolved surface — paired with the palette's
+    colours and the terminal's capabilities, after its fallback chain — so
+    there is no way to hand a component roles it would have to guess at.
+
+    A surface is data, so a custom one is a struct literal: start from a
+    built-in, copy its `Rings` before changing one, and offer it in
+    `Options.Surfaces` beside the built-ins. Colours are roles, never
+    literals, so it works in every palette. `examples/shell/surfaces` defines
+    Ruled and Lipped this way.
+
+    Outlined is the default and draws byte for byte what tuilib drew before
+    surfaces; `examples/launcher`'s goldens hold that. See `docs/surfaces.md`.
+
 ## Anti-patterns
 
+- **Don't assume a one-cell border.** A filled surface's edge is deeper
+  (Elevated takes a row above and two below, for its text row and shadow),
+  so `width-2`, `Y+1` and `height-2` put content in the wrong place and
+  clicks on the wrong row under every surface but Outlined. Ask the pane:
+  `ContentRect()` for the content, `InnerRect()` for the header row,
+  `Insets()` for the edge on each side.
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
   The shell owns them, including theme-swap rebuilds and re-placing them
   on resize. It also owns mouse: enabling reporting, resolving double
@@ -1469,7 +1509,9 @@ stops an undrawn component claiming a click.
 
 ## Manual layout reference (only when not using `pkg/app`)
 
-If you genuinely can't use the app shell, here are the row costs. Size
+If you genuinely can't use the app shell, here are the row costs. They are
+for Outlined, a one-cell border; any other surface's edge is deeper, so read
+`Insets()` from the pane rather than these numbers when a surface is set. Size
 components with `SetRect(geom.Rect{W: w, H: h})`; a zero X/Y is fine when
 you aren't hit-testing, and mouse support needs the app shell anyway
 (it's what translates `tea.MouseMsg` into `mouse.Msg`).

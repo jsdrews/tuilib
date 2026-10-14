@@ -142,7 +142,11 @@ How a component's edge and body are drawn: whether it has a line, a fill, a head
 _Avoid_: theme (a palette plus chrome), style (a lipgloss.Style), skin, card style
 
 **Outlined**:
-The surface of a line border around an unfilled body. It is today's look.
+The surface of a line border around an unfilled body, and the default. It draws byte for byte what tuilib drew before surfaces existed.
+
+**Lined surface**:
+Outlined or a variant of it — a single ring of lines around an unfilled body. A pane draws a lined surface as the line border it always drew, which is what keeps Outlined byte-identical.
+_Avoid_: outlined, when a rounded or thick variant is also meant
 
 **Filled**:
 The surface of a solid fill whose half-block rows are its own edge, with no line.
@@ -169,12 +173,20 @@ The tone painted behind and between surfaces, so that a filled surface reads as 
 _Avoid_: terminal background (the terminal's own default, which no filled surface relies on)
 
 **Edge**:
-What a surface draws on one side of its rect: glyphs, the background each glyph sits on, and the cells it takes. A shadow is edge too, because a surface never draws outside its rect.
+What a surface draws around its body inside its rect: glyphs, the background each glyph sits on (the fill or the parent), and the cells it takes on each side. A shadow is edge too, because a surface never draws outside its rect.
 _Avoid_: border (only Outlined's edge is a line), frame, inset
 
+**Ring**:
+One cell's depth of edge, listed outermost first. A surface's inset on a side is the number of rings drawing there; Elevated is a shadow ring around a ring carrying its text rows and stripe.
+_Avoid_: layer, border
+
 **Role**:
-A named colour slot a surface refers to (`Screen`, `Card`, `Band`, `Shadow`, …), resolved against the palette when the theme builds a component. A surface never holds a literal colour.
+A named colour slot a surface refers to (`Screen`, `Card`, `Band`, `Shadow`, …), resolved against the palette when the theme builds a component. A surface never holds a literal colour. Two roles stand in for whatever is current: `Fill` is the body's own tone in its focus state, and `Parent` is no colour at all, left for whatever contains the surface to paint.
 _Avoid_: token, when the surface's view is meant
+
+**Resolved surface**:
+A surface paired with a palette's derived colours and the terminal's capabilities, after following its fallback chain. It is what a component is handed; a raw surface can't be, so a component never has to guess at a role.
+_Avoid_: theme surface, concrete surface
 
 **Text row**:
 The top or bottom row of a surface's edge that carries the pane's slots: the title, counters, hints and errors. Every surface has both.
@@ -192,6 +204,10 @@ _Avoid_: base colour, primary
 The part of a surface's edge, on its right and bottom, that separates it from its neighbours. It is drawn on the parent's background, so whatever contains the surface paints it. Outlined has none.
 _Avoid_: gutter (the visible gap, which margins produce), gap, padding
 
+**Overlay form**:
+The surface a modal (confirm, alert, the action menu, the help overlay) is drawn in: the same shape as its surface with its body filled in the `Overlay` tone, filled even when the surface itself isn't, so a modal always covers what is under it. Outlined's has thick lines.
+_Avoid_: modal style, overlay border
+
 **Field form**:
 The surface a single-line component (input, filter, toggle) is drawn in, taking at most one cell of edge per side so it fits a three-row slot. An outlined field unless the surface says otherwise.
 _Avoid_: compact surface, input style
@@ -199,3 +215,15 @@ _Avoid_: compact surface, input style
 **Fallback**:
 The surface a surface becomes when the terminal can't meet what it needs (colour depth, block glyphs), followed as a chain that always ends at Outlined.
 _Avoid_: degrade mode, compatibility mode
+
+**Painted cell**:
+A cell that draws a glyph or carries a background. When an overlay is composited over the screen, painted cells cover what is beneath and every other cell lets it show through — which is how a filled modal is solid while the padding around it stays transparent.
+_Avoid_: opaque cell, non-space cell
+
+**Blurred selection**:
+How the selected row looks while its pane doesn't have focus: `SelectionDim` on a filled surface, so the brighter row says which pane the keys go to. Outlined keeps one look either way.
+_Avoid_: inactive selection, dim row
+
+**Custom surface**:
+A surface an app defines itself, as a struct literal, offered beside the built-ins and drawn by the same code. `examples/shell/surfaces` defines Ruled and Lipped this way.
+_Avoid_: user surface, theme override
