@@ -230,7 +230,7 @@ func TestInsets(t *testing.T) {
 		want Insets
 	}{
 		{Outlined, Insets{1, 1, 1, 1}},
-		{Filled, Insets{Top: 2, Bottom: 3, Left: 1, Right: 2}},
+		{Filled, Insets{Top: 2, Bottom: 2, Left: 1, Right: 2}},
 		{Banded, Insets{Top: 1, Bottom: 2, Left: 1, Right: 2}},
 		{Elevated, Insets{Top: 1, Bottom: 2, Left: 1, Right: 2}},
 		{Accented, Insets{Top: 1, Bottom: 2, Left: 1, Right: 2}},
@@ -321,5 +321,22 @@ func TestLegible(t *testing.T) {
 	}
 	if !Legible(lipgloss.Color("4"), lipgloss.Color("#2e3440")) {
 		t.Error("an ANSI index is the terminal's to render and counts as legible")
+	}
+}
+
+func TestTopGap(t *testing.T) {
+	for _, tc := range []struct {
+		s    Surface
+		want bool
+	}{
+		{Outlined, false}, // its border line is the gap
+		{Filled, false},   // its ▄ lip is the gap
+		{Banded, true},
+		{Elevated, true},
+		{Accented, true},
+	} {
+		if got := tc.s.TopGap(); got != tc.want {
+			t.Errorf("%s TopGap = %v, want %v", tc.s.Name, got, tc.want)
+		}
 	}
 }

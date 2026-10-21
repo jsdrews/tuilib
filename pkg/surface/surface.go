@@ -315,11 +315,14 @@ var (
 		Fallback:  &Outlined,
 	}
 
-	// Filled is a solid card whose half-block rows are its own edge.
+	// Filled is a solid card whose half-block rows are its own edge. The
+	// lips are its vertical margin too: the lower half of one card's ▀ and
+	// the upper half of the next card's ▄ leave exactly one row of screen
+	// between them, so it keeps a margin on the right only.
 	Filled = Surface{
 		Name: "filled",
 		Rings: []Ring{
-			margin(),
+			{Right: Side{Cell: Cell{Glyph: " ", BG: Parent}}},
 			{
 				Top:    Side{Cell: Cell{Glyph: "▄", FG: Fill, BG: Parent}},
 				Bottom: Side{Cell: Cell{Glyph: "▀", FG: Fill, BG: Parent}},
@@ -427,13 +430,32 @@ func (s Surface) Lined() (lipgloss.Border, bool) {
 	}, true
 }
 
-// Margined reports whether s keeps a margin on its right and bottom — an
-// outermost ring drawn on the parent there. The app shell pads the screen's
-// left and top edges to match when the current surface does.
+// Margined reports whether s keeps a margin on its right — an outermost ring
+// drawn on the parent there. The app shell pads the screen's left edge to
+// match when the current surface does.
 func (s Surface) Margined() bool {
 	if _, lined := s.Lined(); lined || len(s.Rings) == 0 {
 		return false
 	}
 	r := s.Rings[0]
-	return r.Right.Drawn() && r.Right.BG == Parent && r.Bottom.Drawn() && r.Bottom.BG == Parent
+	return r.Right.Drawn() && r.Right.BG == Parent
+}
+
+// TopGap reports whether s wants a row of the parent above it. A surface
+// whose top edge starts with a solid row — a title, a band — reads as
+// jammed against whatever is above it; one whose top edge is already a lip
+// or a line (Filled's ▄, Outlined's border) brings its own gap. The app
+// shell adds the row under the breadcrumb when the current surface asks.
+func (s Surface) TopGap() bool {
+	if _, lined := s.Lined(); lined {
+		return false
+	}
+	for _, r := range s.Rings {
+		if !r.Top.Drawn() {
+			continue
+		}
+		c := r.Top.Cell
+		return c.Glyph == " " || c.BG != Parent
+	}
+	return false
 }

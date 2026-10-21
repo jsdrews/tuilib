@@ -214,3 +214,16 @@ func applyBG(bg, params string) string {
 	}
 	return bg
 }
+
+// A pane asked to keep a row visible before it has a size must not scroll:
+// the offset would stick once the real size arrives, and the component would
+// open with its first rows out of view.
+func TestEnsureVisibleBeforeSizingDoesNotScroll(t *testing.T) {
+	p := New(Options{})
+	p.SetContent("a\nb\nc\nd\ne\nf")
+	p.EnsureVisible(3)
+	p.SetRect(geom.New(0, 0, 20, 10))
+	if got := p.viewport.YOffset; got != 0 {
+		t.Errorf("offset after sizing = %d, want 0", got)
+	}
+}

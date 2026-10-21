@@ -94,18 +94,24 @@ func TestFilledSurfaceFrameIsFullyPainted(t *testing.T) {
 	}
 }
 
-// A surface with margins gets matching padding on the screen's left and top
-// edges: the card starts one cell in from the left, one row below the
-// breadcrumb.
-func TestMarginedSurfacePadsTheBody(t *testing.T) {
+// A surface with margins gets a matching gutter on the screen's left edge,
+// and one whose top edge is a solid row gets a row of screen under the
+// breadcrumb. Filled's top edge is a lip, which is its own gap.
+func TestSurfacePadsTheBody(t *testing.T) {
 	trueColour(t)
 	m := surfaceApp(t, Options{Palettes: []palette.Palette{palette.Nord()}, Surfaces: []surface.Surface{surface.Elevated}})
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
 	if strings.TrimSpace(lines[1]) != "" {
-		t.Errorf("row under the breadcrumb should be screen, got %q", lines[1])
+		t.Errorf("Elevated: row under the breadcrumb should be screen, got %q", lines[1])
 	}
 	if r := []rune(lines[2]); r[0] != ' ' || r[1] != '▎' {
-		t.Errorf("card should start at column 1, row 2: %q", lines[2])
+		t.Errorf("Elevated: card should start at column 1, row 2: %q", lines[2])
+	}
+
+	m = surfaceApp(t, Options{Palettes: []palette.Palette{palette.Nord()}, Surfaces: []surface.Surface{surface.Filled}})
+	lines = strings.Split(ansi.Strip(m.View()), "\n")
+	if r := []rune(lines[1]); r[0] != ' ' || r[1] != '▄' {
+		t.Errorf("Filled: its lip should sit right under the breadcrumb: %q", lines[1])
 	}
 }
 

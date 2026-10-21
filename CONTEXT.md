@@ -201,7 +201,7 @@ A palette colour that surface roles are derived from: `Background` (which the sc
 _Avoid_: base colour, primary
 
 **Margin**:
-The part of a surface's edge, on its right and bottom, that separates it from its neighbours. It is drawn on the parent's background, so whatever contains the surface paints it. Outlined has none.
+The part of a surface's edge, on its right and bottom, that separates it from its neighbours. It is drawn on the parent's background, so whatever contains the surface paints it. Filled has a right margin only, because its half-block lips already leave a row between stacked cards; Outlined has none.
 _Avoid_: gutter (the visible gap, which margins produce), gap, padding
 
 **Overlay form**:

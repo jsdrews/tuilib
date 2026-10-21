@@ -2,10 +2,10 @@
 // whole app in that surface — line border, filled card, header band, drop
 // shadow — through app.SetSurface, the way shell/themes previews palettes.
 //
-// The preview shows what each component is handed. The list and the table
-// get the surface itself; the input and the toggle get its field form, which
-// fits a three-row slot; the modal gets its overlay form, which reads as
-// raised above the pane it covers. The "pinned" pane ignores the app's choice
+// The preview shows what each component is handed. The list gets the surface
+// itself; the input and the toggle get its field form, which fits a
+// three-row slot; the modal — opened by the toggle — gets its overlay form,
+// which reads as raised above the pane it covers. The "pinned" pane ignores the app's choice
 // — a per-component override, t.Resolve(surface.Outlined) — so there is
 // always an Outlined pane to compare against.
 //
@@ -114,6 +114,9 @@ type Screen struct {
 	choice toggle.Model
 	pinned textview.Model
 	modal  confirm.Model
+	// modalUp is whether the overlay preview is open. The toggle opens it;
+	// the modal's own y/n/esc closes it.
+	modalUp bool
 
 	focus focus.Group
 }
@@ -139,9 +142,25 @@ func (s *Screen) OnEnter(any) tea.Cmd { return nil }
 
 func (s *Screen) Init() tea.Cmd { return s.focus.Init() }
 
-func (s *Screen) IsCapturingKeys() bool { return s.focus.IsCapturingKeys() }
+// IsCapturingKeys holds the keys while the overlay is up, so esc closes it
+// rather than leaving the screen (rule 22).
+func (s *Screen) IsCapturingKeys() bool { return s.modalUp || s.focus.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
+	// While the overlay is up it gets every message and nothing else does
+	// (rule 22); its answer closes it and puts the toggle back.
+	if s.modalUp {
+		switch msg.(type) {
+		case confirm.ConfirmedMsg, confirm.CancelledMsg:
+			s.modalUp = false
+			s.choice.SetValue(false)
+			return s, nil
+		}
+		var cmd tea.Cmd
+		s.modal, cmd = s.modal.Update(msg)
+		return s, cmd
+	}
+
 	surfBefore, glyphsBefore := s.surfPick.Cursor(), s.glyphs
 	var cmds []tea.Cmd
 
@@ -166,6 +185,9 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	}
 	if s.glyphs = s.glyphPick.Cursor(); s.glyphs != glyphsBefore {
 		s.rebuild()
+	}
+	if s.choice.Value() && !s.modalUp {
+		s.modalUp = true
 	}
 	return s, tea.Batch(cmds...)
 }
@@ -211,6 +233,10 @@ func (s *Screen) forwardFocused(msg tea.Msg) tea.Cmd {
 }
 
 func (s *Screen) Layout() layout.Node {
+	var overlay layout.Node
+	if s.modalUp {
+		overlay = layout.Center(42, 9, layout.Sized(&s.modal))
+	}
 	return layout.HStack(
 		layout.Fixed(26, layout.VStack(
 			layout.Flex(2, layout.Sized(&s.surfPick)),
@@ -225,7 +251,7 @@ func (s *Screen) Layout() layout.Node {
 				layout.Fixed(3, layout.Sized(&s.field)),
 				layout.Fixed(3, layout.Sized(&s.choice)),
 			),
-			layout.Center(42, 9, layout.Sized(&s.modal)),
+			overlay,
 		)),
 	)
 }
@@ -233,6 +259,9 @@ func (s *Screen) Layout() layout.Node {
 func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
 
 func (s *Screen) HelpSections() []help.Section {
+	if s.modalUp {
+		return help.SectionsOf(&s.modal)
+	}
 	return help.SectionsOf(&s.focus, help.Group("Surfaces",
 		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	))
@@ -295,13 +324,13 @@ func (s *Screen) rebuild() {
 
 	cst := s.choice.State()
 	co := t.Toggle()
-	co.Title = "a toggle: field form"
+	co.Title = "show the overlay? (a toggle: field form)"
 	s.choice = toggle.New(co)
 	s.choice.Restore(cst)
 
 	mo := t.Confirm()
 	mo.Title = "an overlay"
-	mo.Message = "Drawn in the surface's overlay form,\none step above the cards."
+	mo.Message = "Drawn in the surface's overlay form,\none step above the cards. y/n/esc."
 	s.modal = confirm.New(mo)
 
 	// The input is a focus stop like any other. It reports IsCapturingKeys

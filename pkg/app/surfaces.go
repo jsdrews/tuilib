@@ -165,23 +165,23 @@ func (m *Model) logFallback() {
 	m.logEntry("surface", note, "", output.LevelInfo)
 }
 
-// surfaceBody pads the body to match a surface's margins: cards keep one
-// cell of screen to their right and below, so the screen's left and top
-// edges get one too.
+// surfaceBody pads the body to match the surface: cards keep one cell of
+// screen to their right, so the screen's left edge gets one too; and a
+// surface whose top edge is a solid row (a title, a band) gets a row of
+// screen under the breadcrumb, which one whose top edge is a lip or a line
+// already brings with it.
 func (m Model) surfaceBody(body layout.Node) layout.Node {
-	if !m.ax.theme.Surface.Surface().Margined() {
-		return body
-	}
+	s := m.ax.theme.Surface.Surface()
 	blank := layout.RenderFunc(func(r geom.Rect) string {
 		return strings.TrimSuffix(strings.Repeat(strings.Repeat(" ", r.W)+"\n", r.H), "\n")
 	})
-	return layout.HStack(
-		layout.Fixed(1, blank),
-		layout.Flex(1, layout.VStack(
-			layout.Fixed(1, blank),
-			layout.Flex(1, body),
-		)),
-	)
+	if s.TopGap() {
+		body = layout.VStack(layout.Fixed(1, blank), layout.Flex(1, body))
+	}
+	if s.Margined() {
+		body = layout.HStack(layout.Fixed(1, blank), layout.Flex(1, body))
+	}
+	return body
 }
 
 // screenPass paints every cell nothing else painted in the Screen tone:

@@ -661,17 +661,19 @@ func (o Overlay) renderColumn(col []block) (lines []string, width int) {
 func (o Overlay) plan(r geom.Rect) (rows []string, w, h int) {
 	rows, contentW := o.renderColumn(o.blocks())
 
-	chromeH := 2 // borders
+	// The pane's edge takes cells on each side — one for a line border, more
+	// for a filled surface — and it always reserves a column for the
+	// scrollbar track, drawn or not; content measured against the outer size
+	// alone loses its last rows and cell to them.
+	edge := o.body.Insets()
+	chromeH := edge.Top + edge.Bottom
 	if o.searchable {
 		chromeH += 2 // filter row + rule
 	}
-	// The pane's border takes two columns and it always reserves one more for
-	// the scrollbar track, drawn or not — content measured against the outer
-	// width alone loses its last cell to it.
-	chromeW := 2 + pane.ScrollbarWidth
+	chromeW := edge.Left + edge.Right + pane.ScrollbarWidth
 
 	w = clampSize(contentW+chromeW, overlayMinWidth, r.W, overlayWidthNum, overlayWidthDen)
-	h = clampSize(len(rows)+chromeH, overlayMinHeight, r.H, overlayHeightNum, overlayHeightDen)
+	h = clampSize(len(rows)+chromeH, max(overlayMinHeight, chromeH+1), r.H, overlayHeightNum, overlayHeightDen)
 	return rows, w, h
 }
 

@@ -924,6 +924,14 @@ func (p *Pane) SetVirtualScroll(total, visible, offset int) {
 // `n` inside the visible window. Useful for cursor-driven list views, where
 // moving the cursor past the viewport's bottom should pull the view with it.
 func (p *Pane) EnsureVisible(n int) {
+	// An unsized pane shows no rows, so there is nothing to keep visible —
+	// and scrolling to put n in a zero-row window would park the offset at
+	// n, where it stays once the real size arrives. A component redrawn
+	// before its first SetRect (a rebuild in SetTheme, a focus grant) would
+	// open scrolled away from its first rows.
+	if p.viewport.Height <= 0 {
+		return
+	}
 	top := p.viewport.YOffset
 	bottom := top + p.viewport.Height - 1
 	switch {

@@ -1442,7 +1442,10 @@ func (m Model) View() string {
 	// while the menu is up.
 	switch {
 	case m.confUp:
-		body = layout.ZStack(body, layout.Center(52, 7, layout.Sized(m.conf)))
+		// Sized for five rows and fifty columns of content inside whatever
+		// edge the overlay form draws.
+		edge := m.theme().Surface.Overlay().Insets()
+		body = layout.ZStack(body, layout.Center(50+edge.Left+edge.Right, 5+edge.Top+edge.Bottom, layout.Sized(m.conf)))
 	case m.menuUp:
 		// No layout.Center wrapper — the menu treats the rect as outer
 		// bounds and places itself inside them.

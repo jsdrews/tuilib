@@ -113,10 +113,17 @@ Colours appear only as roles, never as literals.
 - **Margins:** a filled surface's edge includes one cell on its right and bottom,
   drawn with no background, so whatever contains it paints it: an outer pane's
   fill pass, or at the top level the shell's screen pass. Adjacent cards end up
-  exactly one cell apart. Elevated's shadow *is* its margin. Outlined has none.
-- **The shell pads the body** one column on the left and one row on top when the
-  current surface has margins, so the screen's edges match. `layout` knows
-  nothing about any of this.
+  exactly one cell apart. Elevated's shadow *is* its margin. Filled keeps a
+  right margin only: its lips are its vertical margin, since the lower half of
+  one card's `▀` and the upper half of the next card's `▄` leave exactly one
+  row of screen between them. Outlined has none.
+- **The shell pads the body** one column on the left when the current surface
+  has a right margin (`Surface.Margined`), so the screen's left edge matches
+  the gaps between cards; and one row under the breadcrumb when the surface's
+  top edge starts with a solid row (`Surface.TopGap`: Banded, Elevated,
+  Accented), which would otherwise sit jammed against it. A top edge that is
+  already a lip or a line (Filled, Outlined) brings its own gap. `layout`
+  knows nothing about any of this.
 - **Hit-testing:** `pane.RowAt`, scrollbar hits and slot clicks derive from the
   surface's per-side edge space. A click on a margin or shadow cell is in the
   rect but outside the card, so the component declines it (rule 28).
