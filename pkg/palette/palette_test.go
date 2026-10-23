@@ -1,9 +1,11 @@
 package palette
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/lucasb-eyer/go-colorful"
 	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/surface"
@@ -70,4 +72,40 @@ func TestByName(t *testing.T) {
 	if _, ok := ByName(All(), "nope"); ok {
 		t.Error("ByName found a palette that doesn't exist")
 	}
+}
+
+// On a dark palette each elevation rises from the one below it: screen,
+// card, focused card, modal. A floor that pushed a tone back down once let
+// Solarized's focused card land on the very screen it rises from.
+func TestDarkElevationsRise(t *testing.T) {
+	steps := []surface.Role{surface.Screen, surface.Card, surface.CardRaised, surface.Overlay}
+	for _, profile := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256} {
+		for _, p := range All() {
+			c := p.Colours(profile)
+			bg, fg := lightnessOf(t, c.Of(surface.Screen)), lightnessOf(t, c.Of(surface.Text))
+			if bg > fg {
+				continue // light palette
+			}
+			for i := 1; i < len(steps); i++ {
+				lo, hi := lightnessOf(t, c.Of(steps[i-1])), lightnessOf(t, c.Of(steps[i]))
+				if hi-lo < 0.015 {
+					t.Errorf("%s (profile %d): %s sits %.3f above %s", p.Name, profile, steps[i], hi-lo, steps[i-1])
+				}
+			}
+		}
+	}
+}
+
+func lightnessOf(t *testing.T, c lipgloss.TerminalColor) float64 {
+	t.Helper()
+	s := fmt.Sprint(c)
+	if s == "" || s[0] != '#' {
+		s = termenv.ConvertToRGB(termenv.TrueColor.Color(s)).Hex()
+	}
+	k, err := colorful.Hex(s)
+	if err != nil {
+		t.Fatalf("colour %v: %v", c, err)
+	}
+	l, _, _ := k.OkLab()
+	return l
 }

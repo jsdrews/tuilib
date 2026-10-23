@@ -141,29 +141,77 @@ Every role is **derived** from the palette, and any role can be **overridden**
 per palette with `Palette.Surface map[surface.Role]lipgloss.TerminalColor`, where
 a missing key means derive.
 
-"Lift" mixes toward `Foreground` in OKLab. On light palettes, cards lift toward
-white.
+"Lift" raises OKLab lightness toward the `Foreground`'s while keeping the
+background's own hue and chroma — tonal elevation, as in Material's dark
+surfaces. Mixing toward the text colour instead dragged its tint in: Gruvbox's
+neutral screen grew beige cards, and Everforest's tones each landed on a
+different hue. On light palettes, cards lift toward white.
 
 | Role | Used for | Derived (dark) | Derived (light) |
 |---|---|---|---|
-| `Screen` | behind and between surfaces | `Background` | `Background` |
-| `Card` | surface fill | lift 8% | toward white 70% |
-| `CardRaised` | focused fill | lift 13% | toward white 90% |
-| `Band` | Banded's header, Filled's divider step | lift 18% | darken `Card` 6% |
-| `Overlay` | overlay-form fill | lift 16% | white |
+| `Screen` | behind and between surfaces | `Background` | `Background`, a step darker (−0.05 lightness) so near-white cards stand off it |
+| `Card` | surface fill | lift 3.5% | toward white 70% |
+| `CardRaised` | focused fill | lift 6.5% | toward white 90% |
+| `Band` | Banded's header, Filled's divider step | lift 10% | darken `Card` 6% |
+| `Overlay` | overlay-form fill | lift 17% | white |
 | `Shadow` | Elevated's shadow | darken `Screen` 60% | darken `Screen` 22% |
-| `Selection` | focused selected row | `Card` mixed 45% toward `EdgeActive` | same |
+| `Selection` | focused selected row | `Card` mixed 22% toward `EdgeActive` | 45% |
 | `SelectionDim` | blurred selected row | lift `Card` 12% | same |
 | `Bar` | bars under Outlined | `BarBG` | same |
 | `Text` / `TextMuted` | body text on filled surfaces | `Foreground` / `Muted` | same |
-| `Edge` / `EdgeActive` | lines, the active band | `BorderInactive` / `BorderActive` | same |
-| `Divider` / `Accent` | | `Subtle` / `Accent` | same |
+| `Edge` / `EdgeActive` | lines, the active band | `BorderInactive` (kept clear of `CardRaised`) / `BorderActive` | same |
+| `Divider` / `Accent` | rules, separators, placeholders / emphasis | `Subtle` (kept clear of `CardRaised`) / `Accent` | same |
 
 The percentages are starting points to tune, not spec.
 
 - **Contrast floor:** a derived tone too close in lightness to the role beneath
   it is pushed further: `Card` on `Screen`, `CardRaised` on `Card`, `Band` on
-  `Card`, `Selection` on `Card`.
+  `Card`, `Selection` on `Card`, and `Overlay` on `CardRaised` — wider, 0.05,
+  on a dark palette, since a modal opens over a focused card and one tone step
+  above it reads as the same surface.
+- **Elevation only rises.** On a dark palette a card, a focused card, a band
+  and a modal are each pushed *up* from what they sit on when they fall
+  inside the floor, never back down — at truecolor and after rounding to
+  xterm-256. Pushing whichever way a tone leaned once landed Solarized's
+  focused card exactly on its screen colour: its card had been pushed above
+  the focused card's lift, and the focused card was then pushed back past it.
+- **Minimum span.** Dark lifts are fractions of the span from background to
+  text, but at least 0.55 of it. A deliberately low-contrast palette —
+  Solarized's text is a mid-grey, a span of 0.39 — would otherwise get cards
+  that barely rise.
+- **Chrome floor:** `Divider` and `Edge` keep at least 0.12 lightness from a
+  focused card. The palette chose `Subtle` and `BorderInactive` to sit on its
+  own background, and a card lifts away from it: on a dark palette the rules,
+  separators and placeholders inside a card would otherwise vanish into it
+  (Nord's and Dracula's sat 0.01–0.02 from a focused card). On a filled
+  surface the theme's `Subtle` is the `Divider` tone, so everything drawn
+  with it inside a card follows.
+- **Selection on dark palettes** is a state layer, a 22% tint of the accent
+  over the card, rather than the 45% mix light palettes use: on a dark card
+  the stronger mix made a bright, saturated block that outshone everything
+  around it.
+- **Vibrance:** before the contrast floor, text colours' chroma is boosted in
+  their own hue — `Accent` ×1.3, `TextMuted` ×1.2, `Text` ×1.15 — as far as
+  the RGB gamut allows without shifting hue. A card's tone sits between the
+  palette's background and text, which mutes what is drawn on it; the boost
+  gives the colour back.
+- **Text contrast floor:** on every card tone, body text (`Text`, and the
+  theme's `Current` emphasis) keeps at least a 14:1 WCAG contrast ratio,
+  secondary text (`TextMuted`, the theme's `Muted`) at least 8:1, and
+  `Accent` at least 7:1 (further would wash out its colour). A colour is
+  moved in its own hue first; when the hue runs out — a tinted colour can't
+  get as bright as white — it gives up tint, blending toward white or black
+  only as far as the floor needs. Past pure white there is nowhere left:
+  Nord's text tops out at 10.2:1 on a focused card, Dracula's at 11.8:1,
+  Gruvbox's at 12.3:1. Each is moved in lightness, in its own hue, against whichever card
+  is worst for it. Dark palettes need it because every lift moves a card
+  toward its text: Nord's text went from 9.2:1 on the screen to 6.8:1 on a
+  focused card, and Dracula's secondary text sat at 2.1:1. Light palettes
+  need it because pale accents sink into near-white cards: Catppuccin
+  Latte's accent was 2.5:1. On a filled surface the theme's `Muted`,
+  `Accent` and `Current` are the floored colours, since components draw
+  labels, headers and titles with them directly. `surface.Contrast` and
+  `surface.EnsureContrast` are the helpers.
 - **Text:** filled surfaces paint body text in `Text`, and the fill pass
   re-opens the foreground as well as the background. Outlined keeps the
   terminal's own colours.

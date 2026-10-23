@@ -61,9 +61,10 @@ func TestDeriveLightCardsSitBrighterThanTheScreen(t *testing.T) {
 func TestDeriveKeepsTheContrastFloor(t *testing.T) {
 	for name, seeds := range map[string]Seeds{"dark": darkSeeds(), "light": lightSeeds()} {
 		c := Derive(seeds, nil, termenv.TrueColor)
+		floor := func(p floorPair) float64 { return p.floor(name == "dark") }
 		for _, p := range floorPairs {
-			if d := math.Abs(L(t, c.Of(p[0])) - L(t, c.Of(p[1]))); d < floorL-1e-3 {
-				t.Errorf("%s: %s and %s are %.3f apart, floor is %.3f", name, p[0], p[1], d, floorL)
+			if d := math.Abs(L(t, c.Of(p.derived)) - L(t, c.Of(p.base))); d < floor(p)-1e-3 {
+				t.Errorf("%s: %s and %s are %.3f apart, floor is %.3f", name, p.derived, p.base, d, floor(p))
 			}
 		}
 	}
@@ -87,8 +88,11 @@ func TestDeriveFallsBackToBarWithoutBackground(t *testing.T) {
 	if c.Of(Screen) != lipgloss.Color("#313244") {
 		t.Errorf("Screen = %v, want Bar", c.Of(Screen))
 	}
-	if c.Of(Text) != lipgloss.Color("#cdd6f4") {
-		t.Errorf("Text = %v, want BarText", c.Of(Text))
+	// Text comes from BarText, brightened as far as the contrast floor needs.
+	with := darkSeeds()
+	with.Background, with.Foreground = with.Bar, with.BarText
+	if want := Derive(with, nil, termenv.TrueColor).Of(Text); c.Of(Text) != want {
+		t.Errorf("Text = %v, want %v (derived from BarText)", c.Of(Text), want)
 	}
 }
 
@@ -137,8 +141,8 @@ func TestDeriveQuantisedTonesStayDistinct(t *testing.T) {
 	for name, seeds := range map[string]Seeds{"catppuccin": darkSeeds(), "nord": nord, "light": lightSeeds()} {
 		c := Derive(seeds, nil, termenv.ANSI256)
 		for _, p := range floorPairs {
-			if c.Of(p[0]) == c.Of(p[1]) {
-				t.Errorf("%s: %s and %s both round to %v", name, p[0], p[1], c.Of(p[0]))
+			if c.Of(p.derived) == c.Of(p.base) {
+				t.Errorf("%s: %s and %s both round to %v", name, p.derived, p.base, c.Of(p.derived))
 			}
 		}
 	}
@@ -337,6 +341,61 @@ func TestTopGap(t *testing.T) {
 	} {
 		if got := tc.s.TopGap(); got != tc.want {
 			t.Errorf("%s TopGap = %v, want %v", tc.s.Name, got, tc.want)
+		}
+	}
+}
+
+// A modal opens over a focused card, so on a dark palette its tone keeps a
+// wider gap from CardRaised than one tone keeps from another; one step
+// lighter than a focused card reads as the same surface.
+func TestOverlayStandsOutFromAFocusedCard(t *testing.T) {
+	c := Derive(darkSeeds(), nil, termenv.TrueColor)
+	if d := L(t, c.Of(Overlay)) - L(t, c.Of(CardRaised)); d < 0.05-1e-3 {
+		t.Errorf("overlay is %.3f lighter than a focused card, want at least 0.05", d)
+	}
+	l := Derive(lightSeeds(), nil, termenv.TrueColor)
+	if L(t, l.Of(Overlay)) <= L(t, l.Of(CardRaised)) {
+		t.Error("a light palette's overlay should stay lighter than a focused card, not be pushed below it")
+	}
+}
+
+// Faint chrome is drawn on cards, so it stays visible against the brightest
+// of them; on a dark palette a divider chosen for the screen would otherwise
+// sit a hair from a focused card.
+func TestChromeStaysVisibleOnAFocusedCard(t *testing.T) {
+	s := darkSeeds()
+	s.Subtle, s.Edge = s.Background, s.Background // as faint as chrome gets
+	c := Derive(s, nil, termenv.TrueColor)
+	for _, r := range []Role{Divider, Edge} {
+		if d := math.Abs(L(t, c.Of(r)) - L(t, c.Of(CardRaised))); d < floorChrome-1e-3 {
+			t.Errorf("%s sits %.3f from a focused card, want at least %.2f", r, d, floorChrome)
+		}
+	}
+}
+
+// Text on a card keeps its contrast floor in dark and light palettes: on a
+// dark one every lift takes contrast away, and on a light one a pale accent
+// sinks into near-white cards.
+func TestTextKeepsItsContrastOnCards(t *testing.T) {
+	for name, seeds := range map[string]Seeds{"dark": darkSeeds(), "light": lightSeeds()} {
+		pale := seeds
+		pale.Accent, pale.Muted = lipgloss.Color("#f0c0e0"), lipgloss.Color("#c8c8d0") // faint on white
+		if name == "dark" {
+			pale.Accent, pale.Muted = lipgloss.Color("#505070"), lipgloss.Color("#45475a") // faint on a dark card
+		}
+		c := Derive(pale, nil, termenv.TrueColor)
+		for _, tc := range []struct {
+			r     Role
+			floor float64
+		}{{Text, contrastText}, {TextMuted, contrastMuted}, {Accent, contrastAccent}} {
+			for _, card := range []Role{Card, CardRaised} {
+				// Short of the floor is allowed only at the very end of the
+				// range: pure white or pure black.
+				got := Contrast(c.Of(tc.r), c.Of(card))
+				if l := L(t, c.Of(tc.r)); got < tc.floor-0.05 && l < 0.999 && l > 0.001 {
+					t.Errorf("%s: %s on %s is %.1f:1, want at least %.1f:1", name, tc.r, card, got, tc.floor)
+				}
+			}
 		}
 	}
 }

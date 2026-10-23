@@ -82,6 +82,29 @@ func New(p palette.Palette) Theme {
 func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
 	t := Theme{Palette: p}
 	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
+	// Faint chrome — separators, rules, placeholders — is drawn on cards on a
+	// filled surface, so it takes the surface's Divider tone, which is kept
+	// visible against a focused card.
+	if t.Surface.Surface().Filled() {
+		if d := t.Surface.Colour(surface.Divider, false); d != nil {
+			t.Subtle = d
+		}
+		// Text drawn on cards takes the surface's contrast-floored roles,
+		// and emphasis (Current — headers, values) is held to the body-text
+		// floor, so a dark palette's text keeps the contrast a card's lift
+		// takes from it.
+		if c := t.Surface.Colour(surface.TextMuted, false); c != nil {
+			t.Muted = c
+		}
+		if c := t.Surface.Colour(surface.Accent, false); c != nil {
+			t.Accent = c
+		}
+		for _, card := range []surface.Role{surface.Card, surface.CardRaised} {
+			if bg := t.Surface.Colour(card, false); bg != nil {
+				t.Current = surface.EnsureContrast(t.Current, bg, 14)
+			}
+		}
+	}
 	role := t.Surface.Surface().Bar
 	if bar := t.Surface.Colour(role, false); bar != nil {
 		t.BarBG = bar
