@@ -6,18 +6,21 @@ app-wide behavior around them.
 
 ```go
 m := app.New(app.Options{
-    Root:     newRootScreen(),
-    Themes:   theme.All(),
-    Version:  "v1.2.0",
-    ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
-    Mouse:    app.MouseClick,
+    Root:       newRootScreen(),
+    Palettes:   palette.All(),
+    Surfaces:   surface.Builtins(),
+    Version:    "v1.2.0",
+    ThemeKey:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "palette")),
+    SurfaceKey: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "surface")),
+    Mouse:      app.MouseClick,
 })
 if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
     log.Fatal(err)
 }
 ```
 
-`app.New` resolves the initial theme, calls the root's `SetTheme` with it,
+`app.New` picks the starting palette and surface, composes them into a theme,
+calls the root's `SetTheme` with it,
 and returns a `tea.Model`. You don't pass mouse options to `tea.NewProgram`;
 the shell enables reporting from `Init` when `Mouse` asks for it.
 
@@ -26,10 +29,12 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Root` | `screen.Screen` | **required** | The bottom of the navigation stack. |
-| `Themes` | `[]theme.Theme` | **required** | Themes the user cycles through. `Themes[0]` is the initial theme after resolution (below). |
+| `Palettes` | `[]palette.Palette` | `[palette.Dark()]` | Palettes the user cycles through. The first is where the app starts unless the env var or config says otherwise (below). |
+| `Surfaces` | `[]surface.Surface` | `[surface.Outlined]` | Surfaces the user cycles through, independently of the palette. See [Surfaces](../surfaces.md). |
 | `Version` | `string` | `""` | Drawn on the right of the statusbar. |
 | `QuitKey` | `key.Binding` | `q`, `ctrl+c` | Quits when the stack is at the root and no screen is capturing keys. |
-| `ThemeKey` | `key.Binding` | unset (off) | Cycles themes. Leave zero to pin the app to one theme. |
+| `ThemeKey` | `key.Binding` | unset (off) | Cycles palettes. Leave zero to pin the app to one. |
+| `SurfaceKey` | `key.Binding` | unset (off) | Cycles surfaces, skipping any that would draw the same as the current one. |
 | `HelpKey` | `key.Binding` | `?` | Opens the key overlay. Pass `key.NewBinding()` to disable. |
 | `SuspendKey` | `key.Binding` | `ctrl+z` | Suspends to the shell. Ignored on Windows. |
 | `DisableSuspend` | `bool` | `false` | Turns the suspend key off entirely. |
@@ -41,13 +46,14 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 | `DisableHelpSearch` | `bool` | `false` | Remove the `/` search field from the key overlay. |
 | `Mouse` | `app.MouseMode` | `MouseOff` | `MouseClick` enables presses, releases, the wheel and drags. |
 | `DoubleClickInterval` | `time.Duration` | config file, then 500ms | Window for a second press to count as a double click. |
-| `ThemeEnvVar` | `string` | `""` | Env var naming the initial theme, e.g. `MYAPP_THEME`. |
-| `SkipConfig` | `bool` | `false` | Don't reorder `Themes` from the env var and config file. |
+| `PaletteEnvVar`, `SurfaceEnvVar` | `string` | `""` | Env vars naming the starting palette and surface, e.g. `MYAPP_PALETTE`. |
+| `Capabilities` | `*surface.Caps` | detected | Pin the colour profile and block-glyph support instead of detecting them. For tests and screenshots. |
+| `SkipConfig` | `bool` | `false` | Ignore the env vars and config file; start on the first palette and surface. |
 | `DisableAutoEscPop` | `bool` | `false` | Stop `esc` from popping the stack. |
 
 !!! note "Why some keys are opt-in"
     A key the shell claims is a key no component in any app built on it may
-    bind. `ThemeKey`, `OutputKey` and `ActionsKey` therefore default to off, and
+    bind. `ThemeKey`, `SurfaceKey`, `OutputKey` and `ActionsKey` therefore default to off, and
     turning one on is a line the app author writes on purpose.
 
 ## Global keys
@@ -56,7 +62,8 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 |---|---|---|
 | quit | `q`, `ctrl+c` | stack depth is 1 |
 | back | `esc` | stack depth > 1 (pops the top screen) |
-| theme | opt-in | always |
+| palette | opt-in | always |
+| surface | opt-in | always |
 | help | `?` | toggles the key overlay |
 | suspend | `ctrl+z` | not on Windows |
 | output | opt-in | toggles the output console |
@@ -68,15 +75,19 @@ Screens should list `q` and `t` in their own `Help()` if they like; the shell
 removes duplicates of its own globals from the overlay. Don't handle these
 keys in a screen.
 
-## Initial theme resolution
+## Starting palette and surface
 
-Unless `SkipConfig` is set, `app.New` reorders `Themes` so the first entry
-is, in priority order:
+Unless `SkipConfig` is set, `app.New` starts on, in priority order:
 
-1. the theme whose `Name` matches the env var named by `ThemeEnvVar`,
-2. the `theme:` field of `$XDG_CONFIG_HOME/tuilib/config.yaml`
-   (default `~/.config/tuilib/config.yaml`),
-3. `Themes[0]` unchanged.
+1. the palette whose `Name` matches the env var named by `PaletteEnvVar`,
+2. the `palette:` field of `$XDG_CONFIG_HOME/tuilib/config.yaml`
+   (default `~/.config/tuilib/config.yaml`), or `theme:` when that is unset,
+3. `Palettes[0]`;
+
+and the surface the same way, from `SurfaceEnvVar`, the `surface:` field, then
+`Surfaces[0]`. When the terminal can't draw the chosen surface (too few
+colours, or `block_glyphs: false`), the shell draws its fallback and writes
+one line to the output console saying why.
 
 Unknown names fall through silently. The library never creates or writes the
 config file. See [Theming and state](theming.md#user-defaults).
@@ -96,11 +107,13 @@ Messages clear on the next keypress. The clear runs before the screen handles
 that key, so a screen can set a fresh message in response to the same key.
 See [Feedback and the console](feedback.md).
 
-## Live theme preview
+## Live palette preview
 
-`app.SetTheme(name)` returns a command that switches to the named theme (if
-it's in `Themes`) and rebroadcasts it across the stack. A theme picker can call
-it as its cursor moves.
+`app.SetPalette(name)` returns a command that switches to the named palette (if
+it's in `Palettes`) and rebroadcasts the theme across the stack. A picker can
+call it as its cursor moves. `app.SetSurface(name)` does the same for a surface
+in `Surfaces`; `examples/shell/themes` and `examples/shell/surfaces` are the two
+pickers.
 
 ## Subprocesses and suspend
 

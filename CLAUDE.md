@@ -1145,8 +1145,48 @@ example in `examples/`.
     Elasticsearch, pod logs, generic REST), and the API facts behind
     each, are in `docs/remote-data.md`.
 
+35. **Let the theme choose the surface form.** An app is drawn in a palette
+    (colours) with a surface (how edges and bodies are drawn: `Outlined`,
+    `Filled`, `Banded`, `Elevated`, `Accented`, or one the app defines). The
+    user picks each independently — `Options.Palettes` / `ThemeKey`,
+    `Options.Surfaces` / `SurfaceKey` — and the shell composes them with
+    `theme.Compose` and calls `SetTheme`, so a screen needs nothing new: rule
+    4 already rebuilds it.
+
+    Every pane-owning component takes `Options.Surface`, and the builders
+    set it to the right form: the surface itself for panes, lists, tables
+    and the other row components; its **field form** for input, filter and
+    toggle, which fits the three-row slots screens give them; its **overlay
+    form** for confirm, alert and the menus, which is always filled so a
+    modal covers what is under it. Don't set `Surface` yourself, except to
+    pin one component to another surface:
+
+    ```go
+    opts := t.Logview()
+    opts.Surface = t.Resolve(surface.Outlined)
+    ```
+
+    `Options.Surface` holds a resolved surface — paired with the palette's
+    colours and the terminal's capabilities, after its fallback chain — so
+    there is no way to hand a component roles it would have to guess at.
+
+    A surface is data, so a custom one is a struct literal: start from a
+    built-in, copy its `Rings` before changing one, and offer it in
+    `Options.Surfaces` beside the built-ins. Colours are roles, never
+    literals, so it works in every palette. `examples/shell/surfaces` defines
+    Ruled and Lipped this way.
+
+    Outlined is the default and draws byte for byte what tuilib drew before
+    surfaces; `examples/launcher`'s goldens hold that. See `docs/surfaces.md`.
+
 ## Anti-patterns
 
+- **Don't assume a one-cell border.** A filled surface's edge is deeper
+  (Elevated takes a row above and two below, for its text row and shadow),
+  so `width-2`, `Y+1` and `height-2` put content in the wrong place and
+  clicks on the wrong row under every surface but Outlined. Ask the pane:
+  `ContentRect()` for the content, `InnerRect()` for the header row,
+  `Insets()` for the edge on each side.
 - **Don't wire breadcrumb + statusbar by hand when you can use `pkg/app`.**
   The shell owns them, including theme-swap rebuilds and re-placing them
   on resize. It also owns mouse: enabling reporting, resolving double
@@ -1469,7 +1509,9 @@ stops an undrawn component claiming a click.
 
 ## Manual layout reference (only when not using `pkg/app`)
 
-If you genuinely can't use the app shell, here are the row costs. Size
+If you genuinely can't use the app shell, here are the row costs. They are
+for Outlined, a one-cell border; any other surface's edge is deeper, so read
+`Insets()` from the pane rather than these numbers when a surface is set. Size
 components with `SetRect(geom.Rect{W: w, H: h})`; a zero X/Y is fine when
 you aren't hit-testing, and mouse support needs the app shell anyway
 (it's what translates `tea.MouseMsg` into `mouse.Msg`).
@@ -1511,7 +1553,7 @@ path.
   | Area | Holds |
   |---|---|
   | `components/` | one demo per UI component, in isolation — `pane`, `list`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
-  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `chrome`, `prescreen` |
+  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `surfaces`, `prescreen` |
   | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `activity`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
 
   When you add a demo, pick the area by what a reader is looking for, not
@@ -1527,22 +1569,25 @@ path.
 - **Package overview:** `go doc ./pkg/<name>` prints the package doc
   comment + every exported symbol's signature and doc.
 - **Full config surface:** `go doc ./pkg/<name>.Options`.
-- **Color vocabulary:** `pkg/theme/theme.go` — field comments on the
-  `Theme` struct name every semantic slot.
-- **User-default theme:** `app.New` runs `theme.Resolve` on `Options.Themes`
-  by default, picking the initial theme from (1) `Options.ThemeEnvVar` if
-  set, (2) `~/.config/tuilib/config.yaml`'s `theme:` field, (3) `Themes[0]`.
-  Pass the raw theme list — the shell reorders it. Set `Options.SkipConfig
-  = true` to disable resolution (tests, or apps pinned to a single theme).
-  Config is opt-in: the library never writes the file. Unknown names fall
-  through silently; malformed YAML surfaces only via `config.Load`
-  directly. `theme.Resolve` is still exported for callers that need the
-  resolved order outside `app.New`.
+- **Color vocabulary:** `pkg/palette/palette.go` — field comments on the
+  `Palette` struct name every semantic slot; `theme.Theme` embeds it.
+- **Palette and surface:** an app offers `Options.Palettes` and
+  `Options.Surfaces` (default `[surface.Outlined]`), cycled by `ThemeKey`
+  and `SurfaceKey`; the shell composes the pair with `theme.Compose` and
+  hands the result to `SetTheme`. `app.New` picks where each starts from
+  (1) `Options.PaletteEnvVar` / `SurfaceEnvVar`, (2)
+  `~/.config/tuilib/config.yaml`'s `palette:` (or the old `theme:`) and
+  `surface:`, (3) the first entry. Set `Options.SkipConfig = true` to
+  disable this (tests, or apps pinned to one look). Config is opt-in: the
+  library never writes the file. Unknown names fall through silently;
+  malformed YAML surfaces only via `config.Load` directly. Outside the
+  shell, `theme.New(p)` is a palette drawn Outlined. See `docs/surfaces.md`.
 - **User config in general:** `pkg/config` owns the YAML file shape
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`
   (not `pkg/theme`) when they grow their own user-tunable defaults.
-  Today it carries `theme:` and `double_click_ms:`.
+  Today it carries `palette:` (and its old name `theme:`), `surface:`,
+  `block_glyphs:` and `double_click_ms:`.
 - **Geometry:** `pkg/geom` is a leaf holding `Rect{X,Y,W,H,Gen}` plus
   `Contains` / `Hit` / `Fresh` / `Inset` / `CenterIn`, and the
   render-generation counter (`NextGen`, `Gen`). Both `pkg/layout` and

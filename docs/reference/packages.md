@@ -16,7 +16,8 @@ The shell. See [The app shell](../guide/app-shell.md) for `app.Options`.
 | `InfoDetail(summary, body)`, `ErrorDetail(…)` | `tea.Cmd` | Summary to the statusbar, body to the console. |
 | `ErrorOf(err)` | `tea.Cmd` | `err.Error()` to the statusbar, the unwrapped `%w` chain to the console. |
 | `ClearStatus()` | `tea.Cmd` | Clear the statusbar message. |
-| `SetTheme(name)` | `tea.Cmd` | Switch to a named theme in `Options.Themes` (live preview). |
+| `SetPalette(name)` | `tea.Cmd` | Switch to a named palette in `Options.Palettes` (live preview). |
+| `SetSurface(name)` | `tea.Cmd` | Switch to a named surface in `Options.Surfaces` (live preview). |
 | `OutputClosed` | type | The value the console pops with; ignore it in `OnEnter`. |
 | `MouseOff`, `MouseClick` | `MouseMode` | `Options.Mouse` values. |
 | `Model.Theme()` | method | The current theme. |
@@ -99,11 +100,21 @@ See [Help and key hints](../guide/help.md).
 | `New(Options)` → `Model` | The footer: `ShortView`, `ShortViewBudget`, `SetBindings`, `SetMinimal`. |
 | `NewOverlay(OverlayOptions)` → `Overlay` | The modal: `SetSections`, `SetRect`, `Update`, `View`; emits `ClosedMsg`. |
 
-## theme, glyph
+## theme, palette, surface, glyph
 
-See [Theming and state](../guide/theming.md) and the
-[theme token reference](theme.md). `glyph.Set` is the full mark vocabulary;
-`glyph.Default()` returns it and `Set.Resolve()` fills empty fields from it.
+See [Theming and state](../guide/theming.md), the
+[theme token reference](theme.md) and [Surfaces](../surfaces.md).
+
+| Symbol | Does |
+|---|---|
+| `palette.Palette`, `palette.All()`, `palette.ByName` | The colours, and the 19 built-ins. |
+| `surface.Surface`, `surface.Builtins()` | How edges and bodies are drawn, as data: `Outlined`, `Filled`, `Banded`, `Elevated`, `Accented`. |
+| `surface.Derive`, `surface.Resolve` | Role colours from a palette's seeds; a surface paired with colours and the terminal's capabilities, following its fallback chain. |
+| `theme.Compose(p, s, caps)`, `theme.New(p)` | A theme from a palette and a surface; `New` is Outlined. |
+| `t.Resolve(s)` | Another surface against the same palette, for a per-component override. |
+
+`glyph.Set` is the full mark vocabulary; `glyph.Default()` returns it and
+`Set.Resolve()` fills empty fields from it.
 
 ## ansi
 
@@ -124,7 +135,7 @@ The user's `$XDG_CONFIG_HOME/tuilib/config.yaml` (default
 
 | Symbol | Does |
 |---|---|
-| `Config{Theme, DoubleClickMs}` | `theme:` and `double_click_ms:` fields. Unknown keys are ignored. |
+| `Config{Palette, Surface, BlockGlyphs, Theme, DoubleClickMs}` | `palette:`, `surface:`, `block_glyphs:`, `theme:` (old name for `palette:`) and `double_click_ms:`. Unknown keys are ignored. |
 | `Load()`, `LoadFrom(path)` | Read; a missing file is `(Config{}, nil)`. Errors only on bad YAML or I/O. |
 | `Path()` | The path that would be read. |
 

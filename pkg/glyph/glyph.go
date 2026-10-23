@@ -29,10 +29,6 @@ type Set struct {
 	ExpandOpen   string
 	ExpandClosed string
 
-	// Rule is the horizontal line under an inline filter, drawn identically
-	// by every filterable component.
-	Rule string
-
 	// ScrollThumb / ScrollTrack are the vertical scrollbar; HScrollThumb /
 	// HScrollTrack the horizontal one.
 	ScrollThumb  string
@@ -68,7 +64,6 @@ func Default() Set {
 		Mark:            "✓",
 		ExpandOpen:      "▾",
 		ExpandClosed:    "▸",
-		Rule:            "─",
 		ScrollThumb:     "█",
 		ScrollTrack:     "░",
 		HScrollThumb:    "━",
@@ -96,7 +91,6 @@ func (s Set) Resolve() Set {
 		{&s.Mark, d.Mark},
 		{&s.ExpandOpen, d.ExpandOpen},
 		{&s.ExpandClosed, d.ExpandClosed},
-		{&s.Rule, d.Rule},
 		{&s.ScrollThumb, d.ScrollThumb},
 		{&s.ScrollTrack, d.ScrollTrack},
 		{&s.HScrollThumb, d.HScrollThumb},

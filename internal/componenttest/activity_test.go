@@ -16,6 +16,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -84,7 +85,7 @@ func treeBusyWhen(n tree.Node) (string, bool) {
 type listDerive struct{ m list.Model }
 
 func newListDerive() derivable {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.BusyWhen = listBusyWhen
 	d := &listDerive{m: list.New(o)}
 	d.observe(statusOf(nil))
@@ -116,7 +117,7 @@ func (d *listDerive) activityState() activity.Set           { return d.m.Activit
 type tableDerive struct{ m table.Model }
 
 func newTableDerive() derivable {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.ActivityColumn = "Status"
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
 	o.BusyWhen = func(r table.KeyedRow) (string, bool) {
@@ -164,7 +165,7 @@ func (n statusNode) Children() []tree.Node { return n.children }
 type treeDerive struct{ m tree.Model }
 
 func newTreeDerive() derivable {
-	o := theme.Dark().Tree()
+	o := theme.New(palette.Dark()).Tree()
 	o.InitialDepth = 2
 	// Root at construction, so New's preExpand opens it — SetRoot alone leaves
 	// a fresh tree collapsed, and a spinner on a hidden child proves nothing.

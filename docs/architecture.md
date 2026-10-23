@@ -16,15 +16,17 @@ tea.Program
 
 ## The app shell
 
-`app.New(app.Options{Root: …, Themes: …})` returns a `tea.Model` you hand to
+`app.New(app.Options{Root: …, Palettes: …, Surfaces: …})` returns a `tea.Model` you hand to
 `tea.NewProgram`. It owns everything around your screens:
 
 - the **breadcrumb** (one crumb per screen on the stack, clickable),
 - the **statusbar** (help affordance, transient messages, console badge,
   version),
-- **global keys**: quit, esc-to-pop, theme cycling, suspend, the `?` overlay,
+- **global keys**: quit, esc-to-pop, palette and surface cycling, suspend, the `?` overlay,
   and the opt-in output-console and action-menu keys,
-- **theme resolution** from an env var and the user's config file,
+- **palette and surface**: where each starts (env var, the user's config
+  file), composing them into the theme, the gutters a margined surface needs,
+  and the screen colour behind everything,
 - **mouse**: enabling reporting, counting double clicks, routing clicks on its
   own chrome,
 - the **output console**, the **action menu** and the **help overlay**.
@@ -116,9 +118,10 @@ Bubble Tea delivers every message to `app.Model.Update`. From there:
 
 ## Theme swaps and state
 
-`theme.Theme` is one struct of semantic color tokens, border shapes and
-glyphs. Each component has a builder on it (`t.List()`, `t.Table()`, …)
-returning pre-styled `Options`. When the theme changes, the shell calls
+`theme.Theme` is a palette (`pkg/palette`, the colours) drawn with a surface
+(`pkg/surface`, how edges and bodies are drawn), plus the glyphs. Each
+component has a builder on it (`t.List()`, `t.Table()`, …) returning
+pre-styled `Options`. When the palette or the surface changes, the shell calls
 `SetTheme(t)` on **every** screen on the stack, and each screen rebuilds its
 components from the new builders.
 
@@ -163,7 +166,7 @@ a message:
 |---|---|
 | Shell and navigation | `app`, `screen`, `tab` |
 | Layout and geometry | `layout`, `geom` |
-| Look | `theme`, `glyph`, `ansi`, `config` |
+| Look | `theme`, `palette`, `surface`, `glyph`, `ansi`, `config` |
 | Input | `focus`, `mouse`, `help`, `action` |
 | Containers and text | `pane`, `textview`, `logview` |
 | Data views | `list`, `table`, `tree`, `inspector`, `eventlog`, `metrics` |

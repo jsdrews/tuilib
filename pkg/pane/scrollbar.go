@@ -1,9 +1,10 @@
 package pane
 
 import (
-	"github.com/jsdrews/tuilib/pkg/glyph"
 	"math"
 	"strings"
+
+	"github.com/jsdrews/tuilib/pkg/glyph"
 )
 
 const (

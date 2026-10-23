@@ -8,9 +8,10 @@ package pane
 
 import (
 	"fmt"
-	"github.com/jsdrews/tuilib/pkg/glyph"
 	"strings"
 	"time"
+
+	"github.com/jsdrews/tuilib/pkg/glyph"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Keys is the pane's keymap for horizontal scroll. Each binding carries
@@ -94,8 +96,12 @@ type Pane struct {
 	hDragging bool
 
 	// header is pinned under the top border, above the scrolling content.
-	header   string
-	titlePos BorderPosition
+	// divided adds the divider row beneath it, drawn by the pane, and
+	// headerInput lights that divider while the header holds the keys.
+	header      string
+	divided     bool
+	headerInput bool
+	titlePos    BorderPosition
 
 	loading bool
 	// lastTick is when the loading spinner last advanced, so a chain broken
@@ -120,6 +126,12 @@ type Pane struct {
 	inactiveBorder lipgloss.Border
 	slotBrackets   SlotBracketStyle
 	glyphs         glyph.Set
+	dividerStyle   lipgloss.Style
+	dividerActive  lipgloss.Style
+
+	// surf is how the edge and body are drawn. Zero, or a lined surface,
+	// draws the line border above; anything else is drawn from its data.
+	surf surface.Resolved
 
 	keys Keys
 }
@@ -138,11 +150,11 @@ type Options struct {
 	// it is not. Both default to lipgloss.NormalBorder(): focus is carried
 	// by ActiveColor, and a pane that also changed weight on focus would
 	// shift the surrounding layout's visual weight for no reason the user
-	// asked for. The same two defaults are what theme.Theme resolves an
-	// unset BorderShapeActive / BorderShapeInactive to, so a themed pane and
-	// a bare pane.New(pane.Options{}) agree.
+	// asked for. Outlined draws the same lines, so a themed pane and a bare
+	// pane.New(pane.Options{}) agree.
 	//
-	// Overlays are the deliberate exception — see Theme.BorderShapeOverlay.
+	// Overlays are the deliberate exception — a surface's overlay form has
+	// heavier lines (see surface.Surface.Overlay).
 	ActiveBorder   lipgloss.Border
 	InactiveBorder lipgloss.Border
 	// Glyphs supplies the scrollbar thumb and track. Empty fields fall back
@@ -152,6 +164,14 @@ type Options struct {
 	// bracketed against the border line. Defaults to SlotBracketsNone
 	// (text sits inline on the border with no surrounding glyphs).
 	SlotBrackets SlotBracketStyle
+	// Surface is how the pane's edge and body are drawn — a filled card, a
+	// header band, a drop shadow. Zero keeps the line border described by
+	// the fields above. Build one with surface.Resolve (a theme does this).
+	Surface surface.Resolved
+	// DividerStyle and DividerActiveStyle colour the divider under a header
+	// set with SetDividedHeader, on a line border. A surface's own divider
+	// takes their place when Surface is set.
+	DividerStyle, DividerActiveStyle lipgloss.Style
 	// HScrollbar reserves a single row at the bottom of the inner content
 	// area for a horizontal scrollbar. The thumb tracks xOffset against
 	// the longest line; when content fits, the track renders blank.
@@ -209,6 +229,9 @@ func New(opts Options) Pane {
 		inactiveBorder: opts.InactiveBorder,
 		slotBrackets:   opts.SlotBrackets,
 		glyphs:         opts.Glyphs.Resolve(),
+		dividerStyle:   opts.DividerStyle,
+		dividerActive:  opts.DividerActiveStyle,
+		surf:           opts.Surface,
 		keys:           opts.Keys,
 	}
 	p.SetRect(geom.Rect{W: opts.Width, H: opts.Height})
@@ -293,8 +316,9 @@ func (p *Pane) reviveSpinner() tea.Cmd {
 // inner content area is replaced with a centered spinner glyph (plus an
 // optional label) and scroll chrome is suppressed.
 func (p Pane) View() string {
-	innerW := max(0, p.width-2)
-	innerH := max(0, p.height-2)
+	in := p.insets()
+	innerW := max(0, p.width-in.Left-in.Right)
+	innerH := max(0, p.height-in.Top-in.Bottom)
 
 	var body string
 	br := p.bottomRight
@@ -334,8 +358,8 @@ func (p Pane) View() string {
 		BottomMiddleBorder: pad(p.bottomMid),
 		BottomRightBorder:  pad(br),
 	}
-	if p.header != "" {
-		body = lipgloss.JoinVertical(lipgloss.Left, p.header, body)
+	if h := p.headerView(); h != "" {
+		body = lipgloss.JoinVertical(lipgloss.Left, h, body)
 	}
 
 	// Title overrides whichever slot it's assigned to.
@@ -343,6 +367,9 @@ func (p Pane) View() string {
 		slots[p.titlePos] = pad(p.title)
 	}
 
+	if p.generic() {
+		return p.renderSurface(body, slots)
+	}
 	border := p.inactiveBorder
 	color := p.inactiveColor
 	if p.focused {
@@ -414,8 +441,8 @@ func (p *Pane) SetContent(s string) {
 }
 
 // SetRect places the Pane at an absolute position and outer size (including
-// border). The inner content area is sized as (width-2-scrollbar) ×
-// (height-2), shrunk by one more row when HScrollbar is enabled.
+// its edge). The inner content area is the rect less the edge's insets and
+// the scrollbar column, shrunk by one more row when HScrollbar is enabled.
 //
 // The rect is retained so the Pane and the components embedding it can map a
 // mouse position back to a content row — see Rect and ContentRect.
@@ -432,14 +459,66 @@ func (p *Pane) SetRect(r geom.Rect) {
 // visibly *inside* the thing it filters instead of floating above it as an
 // equal-weight sibling. Pass "" to remove it.
 //
-// The header is rendered as given; a component wanting a rule beneath it
-// should include one (the inner width is available from ContentRect).
+// The header is rendered as given. For a filter row, use SetDividedHeader,
+// which has the pane draw the divider beneath it in the surface's style.
 func (p *Pane) SetHeader(s string) {
-	if p.header == s {
+	if p.header == s && !p.divided {
 		return
 	}
-	p.header = s
+	p.header, p.divided = s, false
 	p.applySize()
+}
+
+// SetDividedHeader pins s under the top border with a divider beneath it, the
+// width of the content. input lights the divider: it says the header holds
+// the keys, which is how an inline filter shows it is focused. Pass "" to
+// remove both.
+func (p *Pane) SetDividedHeader(s string, input bool) {
+	if p.header == s && p.divided == (s != "") && p.headerInput == input {
+		return
+	}
+	p.header, p.divided, p.headerInput = s, s != "", input
+	p.applySize()
+}
+
+// headerView is the header with its divider, as drawn.
+func (p Pane) headerView() string {
+	if p.header == "" || !p.divided {
+		return p.header
+	}
+	return p.header + "\n" + p.dividerView()
+}
+
+// dividerView draws the divider across the content width.
+func (p Pane) dividerView() string {
+	w := p.viewport.Width
+	if w <= 0 {
+		return ""
+	}
+	if !p.generic() {
+		style := p.dividerStyle
+		if p.headerInput {
+			style = p.dividerActive
+		}
+		return style.Render(strings.Repeat(p.surf.Surface().Divider.Glyph, w))
+	}
+	d := p.surf.Surface().Divider
+	glyph := d.Glyph
+	if glyph == "" {
+		glyph = "─"
+	}
+	role := d.FG
+	if p.headerInput && d.FGActive != surface.None {
+		role = d.FGActive
+	}
+	st := lipgloss.NewStyle()
+	if fg := p.colour(role); fg != nil {
+		st = st.Foreground(fg)
+	}
+	if bg := p.colour(d.BG); bg != nil {
+		st = st.Background(bg)
+	}
+	return st.Render(strings.Repeat(glyph, w))
 }
 
 // Header returns the pinned header lines.
@@ -450,15 +529,20 @@ func (p Pane) headerRows() int {
 	if p.header == "" {
 		return 0
 	}
-	return strings.Count(p.header, "\n") + 1
+	n := strings.Count(p.header, "\n") + 1
+	if p.divided {
+		n++
+	}
+	return n
 }
 
 // applySize recomputes the viewport from the outer rect, the scrollbars, and
 // the pinned header. Called whenever any of those change.
 func (p *Pane) applySize() {
 	p.width, p.height = p.rect.W, p.rect.H
-	p.viewport.Width = max(0, p.rect.W-2-ScrollbarWidth)
-	innerH := p.rect.H - 2 - p.headerRows()
+	in := p.insets()
+	p.viewport.Width = max(0, p.rect.W-in.Left-in.Right-ScrollbarWidth)
+	innerH := p.rect.H - in.Top - in.Bottom - p.headerRows()
 	if p.hScrollbar {
 		innerH -= ScrollbarHeight
 	}
@@ -469,14 +553,41 @@ func (p *Pane) applySize() {
 // Rect returns the outer rect the Pane was last placed at, border included.
 func (p Pane) Rect() geom.Rect { return p.rect }
 
+// InnerRect is the rect inside the edge: the pinned header, its divider and
+// the content below them. A component placing its inline filter puts it on
+// the first row of this.
+func (p Pane) InnerRect() geom.Rect {
+	in := p.insets()
+	return geom.Rect{
+		X: p.rect.X + in.Left, Y: p.rect.Y + in.Top,
+		W: max(0, p.rect.W-in.Left-in.Right), H: max(0, p.rect.H-in.Top-in.Bottom),
+		Gen: p.rect.Gen,
+	}
+}
+
+// Insets is how many cells the pane's edge takes on each side.
+func (p Pane) Insets() surface.Insets { return p.insets() }
+
+// SetSurface changes how the pane's edge and body are drawn.
+func (p *Pane) SetSurface(r surface.Resolved) {
+	p.surf = r
+	p.applySize()
+}
+
+// SetDividerStyles changes the divider's colours on a line border.
+func (p *Pane) SetDividerStyles(inactive, active lipgloss.Style) {
+	p.dividerStyle, p.dividerActive = inactive, active
+}
+
 // ContentRect returns the rect covering the Pane's inner content area — the
 // outer rect less the border, the right-edge scrollbar, and the horizontal
 // scrollbar row when enabled. It is the region row 0 of the content occupies,
 // so RowAt inverts against it.
 func (p Pane) ContentRect() geom.Rect {
+	in := p.insets()
 	r := geom.Rect{
-		X:   p.rect.X + 1,
-		Y:   p.rect.Y + 1 + p.headerRows(),
+		X:   p.rect.X + in.Left,
+		Y:   p.rect.Y + in.Top + p.headerRows(),
 		W:   p.viewport.Width,
 		H:   p.viewport.Height,
 		Gen: p.rect.Gen,
@@ -813,6 +924,14 @@ func (p *Pane) SetVirtualScroll(total, visible, offset int) {
 // `n` inside the visible window. Useful for cursor-driven list views, where
 // moving the cursor past the viewport's bottom should pull the view with it.
 func (p *Pane) EnsureVisible(n int) {
+	// An unsized pane shows no rows, so there is nothing to keep visible —
+	// and scrolling to put n in a zero-row window would park the offset at
+	// n, where it stays once the real size arrives. A component redrawn
+	// before its first SetRect (a rebuild in SetTheme, a focus grant) would
+	// open scrolled away from its first rows.
+	if p.viewport.Height <= 0 {
+		return
+	}
 	top := p.viewport.YOffset
 	bottom := top + p.viewport.Height - 1
 	switch {

@@ -17,6 +17,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Options configures a new filter. Zero-value fields fall back to sensible
@@ -52,6 +53,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 }
 
 // Model is the filter's exported state. Focus state lives on both the
@@ -116,6 +121,7 @@ func New(opts Options) Model {
 		Title:          opts.Title,
 		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
+		Surface:        opts.Surface,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,

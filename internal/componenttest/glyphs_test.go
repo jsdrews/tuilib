@@ -11,6 +11,8 @@ import (
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -18,15 +20,18 @@ import (
 
 // glyphTheme uses marks no component would ever draw on its own, so a
 // component still holding a literal fails here instead of passing because the
-// default happens to match.
+// default happens to match. The inline-filter rule is the surface's divider,
+// so its glyph is set there.
 func glyphTheme() theme.Theme {
-	t := theme.Dark()
+	t := theme.New(palette.Dark())
+	s := surface.Outlined
+	s.Divider.Glyph = "="
+	t.Surface = t.Resolve(s)
 	t.Glyphs = glyph.Set{
 		Cursor:       "»",
 		Mark:         "@",
 		ExpandOpen:   "v",
 		ExpandClosed: ">",
-		Rule:         "=",
 		ScrollThumb:  "#",
 		ScrollTrack:  "+",
 		SortAsc:      "^",
@@ -120,7 +125,7 @@ func TestComponentsDrawThemeGlyphs(t *testing.T) {
 // one arrow must not blank the other twelve — the failure mode would be
 // invisible marks rather than a crash.
 func TestPartialGlyphSetKeepsDefaults(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	th.Glyphs = glyph.Set{Cursor: "»"}
 
 	o := th.List()

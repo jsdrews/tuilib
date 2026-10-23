@@ -17,6 +17,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -103,7 +104,7 @@ func newActApp(t *testing.T, root screen.Screen) Model {
 	t.Helper()
 	m := New(Options{
 		Root:       root,
-		Themes:     []theme.Theme{theme.Dark()},
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Mouse:      MouseClick,
 		ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions")),

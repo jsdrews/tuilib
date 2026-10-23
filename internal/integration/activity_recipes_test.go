@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/demoapi"
 	"github.com/jsdrews/tuilib/examples/patterns/activityrecipes"
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -23,8 +24,8 @@ func newRecipesApp(t *testing.T) *harness {
 	t.Cleanup(srv.Close)
 	t.Setenv(demoapi.EnvBase, srv.URL)
 	h := newAppHarness(t, app.New(app.Options{
-		Root:       activityrecipes.New(theme.Dark()),
-		Themes:     []theme.Theme{theme.Dark()},
+		Root:       activityrecipes.New(theme.New(palette.Dark())),
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions")),
 	}))

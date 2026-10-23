@@ -100,3 +100,26 @@ s.list.SetLoading(false)
 
 Remote-bound tables and eventlogs manage this themselves; don't call it there.
 See `examples/patterns/loading`.
+
+## Surfaces
+
+Every component that owns a pane takes an `Options.Surface`: how its edge and
+body are drawn, from a line border to a filled card with a drop shadow. The
+theme builders set it, handing each component the form it needs:
+
+| Form | Components |
+|---|---|
+| the surface itself | pane, list, table, tree, inspector, textview, logview, eventlog |
+| its **field form** (at most one cell of edge per side, so it fits a three-row slot) | filter, input, toggle |
+| its **overlay form** (always filled, so it covers what is under it) | confirm, alert, action menu, help overlay |
+
+You don't set it; the user picks the surface and the shell rebuilds every
+screen in it. To pin one component to a different surface, resolve it
+against the same theme:
+
+```go
+opts := t.Logview()
+opts.Surface = t.Resolve(surface.Outlined)
+```
+
+See [Surfaces](../surfaces.md).

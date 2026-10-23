@@ -9,6 +9,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -59,12 +60,12 @@ func eachReader(t *testing.T, fn func(t *testing.T, r reader)) {
 	t.Helper()
 	for name, mk := range map[string]func() reader{
 		"list": func() reader {
-			o := theme.Dark().List()
+			o := theme.New(palette.Dark()).List()
 			o.BusyWhen = listBusyWhen
 			return &listReader{m: list.New(o)}
 		},
 		"table": func() reader {
-			o := theme.Dark().Table()
+			o := theme.New(palette.Dark()).Table()
 			o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Status", Width: 14}}
 			o.ActivityColumn = "Status"
 			o.BusyWhen = func(r table.KeyedRow) (string, bool) {
@@ -73,7 +74,7 @@ func eachReader(t *testing.T, fn func(t *testing.T, r reader)) {
 			return &tableReader{m: table.New(o)}
 		},
 		"tree": func() reader {
-			o := theme.Dark().Tree()
+			o := theme.New(palette.Dark()).Tree()
 			o.InitialDepth = 2
 			o.Root = derivedTree(statusOf(nil))
 			o.BusyWhen = treeBusyWhen

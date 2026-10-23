@@ -48,10 +48,12 @@ func (s *Screen) IsCapturingKeys() bool { return s.list.IsCapturingKeys() }
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"List"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Items` | `[]string` | | Initial items (copied). |
 | `Filterable` | `bool` | `false` | Adds a filter row inside the pane; `/` focuses it. |
 | `Filter` | `filter.Options` | theme | Styles the embedded filter (e.g. `Filter.Placeholder`). |
 | `SelectedStyle` | `lipgloss.Style` | bold accent | The cursor row. |
+| `SelectedBlurredStyle` | `lipgloss.Style` | unset | The cursor row while the list doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `HScrollbar` | `bool` | `true` (theme) | Horizontal scroll for long rows. |
 | `Markable` | `bool` | `false` | Multi-select with `x`/`X`/`A`/`D`. Requires keyed items. |
 | `MarkStyle` | `lipgloss.Style` | theme | The `✓` on marked rows. |

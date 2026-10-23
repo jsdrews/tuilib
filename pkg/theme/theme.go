@@ -4,14 +4,14 @@
 //
 // Usage:
 //
-//	th := theme.Dark()
+//	th := theme.New(palette.Dark())
 //	bc := breadcrumb.New(th.Breadcrumb())                     // header
 //	h  := help.New(th.Help())                                 // inline hints
 //	sb := statusbar.New(th.Statusbar(h.ShortView(), "v0.1.0")) // footer
 //	p  := pane.New(th.Pane())                                 // body
 //
-// Theme fills in the chrome tokens — colors, border shape, slot brackets —
-// so every component drawn from one palette agrees. Anything you need to
+// Theme fills in the chrome tokens — colors, and the surface's border shape
+// and slot brackets — so every component drawn from one palette agrees. Anything you need to
 // override for a single component (a custom width, a deliberately heavier
 // border on one pane) you set on the returned Options before passing it to
 // that component's New; a per-instance value always wins over the theme.
@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/activity"
@@ -38,256 +39,145 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
-// Theme is a named palette. Every field is a color token consumed by one or
-// more components. Most tokens have a single semantic role so swapping themes
-// is a matter of rewriting this struct.
+// Theme is what components are built from: a palette, drawn with a
+// surface, using a set of glyphs. Nobody picks a theme directly — the user
+// picks a palette and a surface, and the app shell composes them (Compose)
+// and hands the result to every screen's SetTheme.
+//
+// The palette's colours are promoted, so t.Accent and t.BorderActive read as
+// they always did.
 type Theme struct {
-	// Name is a short identifier for debugging / theme pickers.
-	Name string
-
-	// BarBG / BarFG are the shared surface colors for the breadcrumb header,
-	// the status bar footer, and anything embedded in them (help hints).
-	// Must be a single pair so the strip reads as one continuous band.
-	BarBG lipgloss.TerminalColor
-	BarFG lipgloss.TerminalColor
-
-	// Current is the emphasis color for the active crumb / current selection.
-	Current lipgloss.TerminalColor
-	// Muted is for past crumbs and secondary text on the bar.
-	Muted lipgloss.TerminalColor
-	// Subtle is for separators and faint chrome.
-	Subtle lipgloss.TerminalColor
-
-	// KeyFG colors the key labels inside help hints (bold).
-	KeyFG lipgloss.TerminalColor
-
-	// BorderActive / BorderInactive color pane borders.
-	BorderActive   lipgloss.TerminalColor
-	BorderInactive lipgloss.TerminalColor
-
-	// BorderShapeActive / BorderShapeInactive are the border shapes for
-	// ordinary components, focused and unfocused. They are deliberately the
-	// same shape by default: focus is signalled by BorderActive, and a
-	// component that changed weight on focus would shift the eye for a
-	// reason the user didn't ask about.
-	//
-	// BorderShapeOverlay is for things that float above content — confirm,
-	// alert, the action menu. A heavier border is what separates an overlay
-	// from the pane it is covering, so this one is meant to differ.
-	//
-	// All three are zero-valued in the shipped palettes and resolve to the
-	// library defaults (Normal for components, Thick for overlays). A Theme
-	// literal written before these fields existed keeps its chrome.
-	BorderShapeActive   lipgloss.Border
-	BorderShapeInactive lipgloss.Border
-	BorderShapeOverlay  lipgloss.Border
-
-	// SlotBrackets controls how title and slot text meet the border line on
-	// every pane the theme builds. The zero value is SlotBracketsNone.
-	SlotBrackets pane.SlotBracketStyle
+	palette.Palette
 
 	// Glyphs are the marks components draw — row cursors, expand arrows,
-	// scrollbar thumbs, rules, sort indicators. Empty fields fall back to
+	// scrollbar thumbs, sort indicators. Empty fields fall back to
 	// glyph.Default, so setting one arrow does not blank the rest.
 	Glyphs glyph.Set
 
-	// Info / Error style the statusbar's middle slot in each message state.
-	InfoBG, InfoFG   lipgloss.TerminalColor
-	ErrorBG, ErrorFG lipgloss.TerminalColor
-
-	// Accent is a bold highlight for body content (not used by chrome).
-	// Exposed here so screens can reach for it without redeclaring a color.
-	Accent lipgloss.TerminalColor
+	// Surface is how components' edges and bodies are drawn, resolved
+	// against this theme's palette and the terminal. The builders hand each
+	// component the form it needs — the surface itself, its overlay form for
+	// modals, its field form for single-line inputs.
+	Surface surface.Resolved
 }
 
-// Dark is the default palette used across the examples — matches pug's look.
-func Dark() Theme {
-	return Theme{
-		Name:           "dark",
-		BarBG:          lipgloss.Color("236"),
-		BarFG:          lipgloss.Color("252"),
-		Current:        lipgloss.Color("255"),
-		Muted:          lipgloss.Color("244"),
-		Subtle:         lipgloss.Color("240"),
-		KeyFG:          lipgloss.Color("75"),
-		BorderActive:   lipgloss.Color("12"),
-		BorderInactive: lipgloss.Color("240"),
-		InfoBG:         lipgloss.Color("35"),
-		InfoFG:         lipgloss.Color("0"),
-		ErrorBG:        lipgloss.Color("160"),
-		ErrorFG:        lipgloss.Color("15"),
-		Accent:         lipgloss.Color("214"), // warm gold — pops against charcoal + cyan keys
+// New is p drawn Outlined: the look of an app that never chose a surface.
+func New(p palette.Palette) Theme {
+	return Compose(p, surface.Outlined, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
+}
+
+// Compose builds the theme for one palette drawn with one surface, on a
+// terminal offering caps. The shell calls it whenever the user changes
+// either axis.
+func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
+	t := Theme{Palette: p}
+	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
+	// Faint chrome — separators, rules, placeholders — is drawn on cards on a
+	// filled surface, so it takes the surface's Divider tone, which is kept
+	// visible against a focused card.
+	if t.Surface.Surface().Filled() {
+		if d := t.Surface.Colour(surface.Divider, false); d != nil {
+			t.Subtle = d
+		}
+		// Text drawn on cards takes the surface's contrast-floored roles,
+		// and emphasis (Current — headers, values) is held to the body-text
+		// floor, so a dark palette's text keeps the contrast a card's lift
+		// takes from it.
+		if c := t.Surface.Colour(surface.TextMuted, false); c != nil {
+			t.Muted = c
+		}
+		if c := t.Surface.Colour(surface.Accent, false); c != nil {
+			t.Accent = c
+		}
+		for _, card := range []surface.Role{surface.Card, surface.CardRaised} {
+			if bg := t.Surface.Colour(card, false); bg != nil {
+				t.Current = surface.EnsureContrast(t.Current, bg, 14)
+			}
+		}
 	}
-}
-
-// Accent is a variant with a colored header strip — the same scheme as
-// rendercheck variant 2. Good for apps where the header should pop.
-func Accent() Theme {
-	t := Dark()
-	t.Name = "accent"
-	t.BarBG = lipgloss.Color("24") // teal-blue
-	t.BarFG = lipgloss.Color("195")
-	t.Muted = lipgloss.Color("152")
-	t.Subtle = lipgloss.Color("110")
-	t.Current = lipgloss.Color("231")
-	t.KeyFG = lipgloss.Color("195")
-	t.Accent = lipgloss.Color("222") // pale amber — warm counterpoint to teal
+	role := t.Surface.Surface().Bar
+	if bar := t.Surface.Colour(role, false); bar != nil {
+		t.BarBG = bar
+		// BarFG was chosen to read on the palette's own bar colour. Moved
+		// onto another — the screen, for the filled surfaces — it can sink
+		// into it; the surface's Text colour is chosen to read there.
+		text := t.Surface.Colour(surface.Text, false)
+		if role != surface.Bar && !surface.Legible(t.BarFG, bar) && surface.Legible(text, bar) {
+			t.BarFG = text
+		}
+	}
 	return t
 }
 
-// Light inverts Dark: pale bars with dark text. Key/border lean teal so the
-// interactive bits stay legible against the light surface.
-func Light() Theme {
-	return Theme{
-		Name:           "light",
-		BarBG:          lipgloss.Color("254"),
-		BarFG:          lipgloss.Color("236"),
-		Current:        lipgloss.Color("232"),
-		Muted:          lipgloss.Color("240"),
-		Subtle:         lipgloss.Color("248"),
-		KeyFG:          lipgloss.Color("24"),
-		BorderActive:   lipgloss.Color("24"),
-		BorderInactive: lipgloss.Color("248"),
-		InfoBG:         lipgloss.Color("22"),
-		InfoFG:         lipgloss.Color("255"),
-		ErrorBG:        lipgloss.Color("124"),
-		ErrorFG:        lipgloss.Color("255"),
-		Accent:         lipgloss.Color("161"),
-	}
-}
-
-// Solarized maps Ethan Schoonover's solarized-dark palette onto the 256-color
-// approximation. Warm text on a deep blue-green surface.
-func Solarized() Theme {
-	return Theme{
-		Name:           "solarized",
-		BarBG:          lipgloss.Color("234"), // base03
-		BarFG:          lipgloss.Color("245"), // base1
-		Current:        lipgloss.Color("250"), // base2
-		Muted:          lipgloss.Color("244"), // base0
-		Subtle:         lipgloss.Color("240"), // base01
-		KeyFG:          lipgloss.Color("37"),  // cyan
-		BorderActive:   lipgloss.Color("33"),  // blue
-		BorderInactive: lipgloss.Color("240"),
-		InfoBG:         lipgloss.Color("64"), // green
-		InfoFG:         lipgloss.Color("234"),
-		ErrorBG:        lipgloss.Color("160"), // red
-		ErrorFG:        lipgloss.Color("255"),
-		Accent:         lipgloss.Color("166"), // orange
-	}
-}
-
-// Nord is the Nord palette (arcticicestudio/nord) mapped to 256-color.
-// Cool frost tones; reads calmer than Dark.
-func Nord() Theme {
-	return Theme{
-		Name:           "nord",
-		BarBG:          lipgloss.Color("236"), // nord0
-		BarFG:          lipgloss.Color("252"), // nord4
-		Current:        lipgloss.Color("255"), // nord6
-		Muted:          lipgloss.Color("109"), // nord8 (frost)
-		Subtle:         lipgloss.Color("239"), // nord3
-		KeyFG:          lipgloss.Color("110"), // nord9
-		BorderActive:   lipgloss.Color("67"),  // nord10
-		BorderInactive: lipgloss.Color("239"),
-		InfoBG:         lipgloss.Color("150"), // nord14 aurora green
-		InfoFG:         lipgloss.Color("236"),
-		ErrorBG:        lipgloss.Color("131"), // nord11 aurora red
-		ErrorFG:        lipgloss.Color("255"),
-		Accent:         lipgloss.Color("139"), // nord15 purple
-	}
-}
-
-// Dracula is the Dracula palette mapped to 256-color — saturated pinks and
-// purples on a near-black surface. Good for "this tool is fun to use."
-func Dracula() Theme {
-	return Theme{
-		Name:           "dracula",
-		BarBG:          lipgloss.Color("235"),
-		BarFG:          lipgloss.Color("252"),
-		Current:        lipgloss.Color("255"),
-		Muted:          lipgloss.Color("61"), // comment
-		Subtle:         lipgloss.Color("238"),
-		KeyFG:          lipgloss.Color("141"), // purple
-		BorderActive:   lipgloss.Color("212"), // pink
-		BorderInactive: lipgloss.Color("238"),
-		InfoBG:         lipgloss.Color("84"), // green
-		InfoFG:         lipgloss.Color("235"),
-		ErrorBG:        lipgloss.Color("203"), // red
-		ErrorFG:        lipgloss.Color("255"),
-		Accent:         lipgloss.Color("117"), // cyan — on-brand against pink/purple chrome
-	}
-}
-
-// Gruvbox maps Pavel Pertsev's gruvbox-dark palette — warm earthy tones.
-func Gruvbox() Theme {
-	return Theme{
-		Name:           "gruvbox",
-		BarBG:          lipgloss.Color("235"), // bg0
-		BarFG:          lipgloss.Color("223"), // fg1
-		Current:        lipgloss.Color("230"),
-		Muted:          lipgloss.Color("245"), // fg4
-		Subtle:         lipgloss.Color("239"), // bg2
-		KeyFG:          lipgloss.Color("214"), // yellow
-		BorderActive:   lipgloss.Color("208"), // orange
-		BorderInactive: lipgloss.Color("239"),
-		InfoBG:         lipgloss.Color("106"), // green
-		InfoFG:         lipgloss.Color("235"),
-		ErrorBG:        lipgloss.Color("124"), // red
-		ErrorFG:        lipgloss.Color("223"),
-		Accent:         lipgloss.Color("175"), // purple
-	}
-}
-
-// All returns every built-in theme, in display order. Handy for theme
-// pickers and examples/shell/themes.
-func All() []Theme {
-	return []Theme{
-		// core (this file)
-		Dark(), Accent(), Light(), Solarized(), Nord(), Dracula(), Gruvbox(),
-		// named palettes (named.go)
-		CatppuccinMocha(), CatppuccinLatte(),
-		TokyoNight(),
-		RosePine(), RosePineDawn(),
-		OneDark(), Monokai(), EverforestDark(),
-		// base16 schemes (base16.go)
-		Base16Ocean(), Base16Eighties(), Base16Railscasts(), Base16TomorrowNight(),
-	}
-}
+// Resolve resolves s against this theme's palette and terminal — how a
+// screen pins one component to a surface other than the app's:
+//
+//	opts := t.Logview()
+//	opts.Surface = t.Resolve(surface.Outlined)
+func (t Theme) Resolve(s surface.Surface) surface.Resolved { return t.Surface.With(s) }
 
 // ---- Per-component Options builders ----------------------------------------
 
-// shapeActive / shapeInactive / shapeOverlay resolve the theme's border
-// shapes, falling back to the library defaults when a palette leaves them
-// zero. Every builder goes through these so there is exactly one place that
-// decides what an unset shape means.
+// shapeActive / shapeInactive / shapeOverlay are the line borders components
+// draw with: the surface's own lines when it is lined (Outlined, rounded,
+// thick), and the library defaults when it isn't — a filled surface's field
+// form and the fallback path. Every builder goes through these so there is
+// one place that decides the shape.
 func (t Theme) shapeActive() lipgloss.Border {
-	if (t.BorderShapeActive == lipgloss.Border{}) {
-		return lipgloss.NormalBorder()
+	if b, lined := t.Surface.Surface().Lined(); lined {
+		return b
 	}
-	return t.BorderShapeActive
+	return lipgloss.NormalBorder()
 }
 
 func (t Theme) shapeInactive() lipgloss.Border {
-	if (t.BorderShapeInactive == lipgloss.Border{}) {
-		return lipgloss.NormalBorder()
+	if b, lined := t.Surface.Surface().Lined(); lined {
+		return b
 	}
-	return t.BorderShapeInactive
+	return lipgloss.NormalBorder()
 }
 
 func (t Theme) shapeOverlay() lipgloss.Border {
-	if (t.BorderShapeOverlay == lipgloss.Border{}) {
-		return lipgloss.ThickBorder()
+	if b, lined := t.Surface.Overlay().Surface().Lined(); lined {
+		return b
 	}
-	return t.BorderShapeOverlay
+	return lipgloss.ThickBorder()
+}
+
+// selection is a selected row's style, focused and blurred: legacy, the
+// component's own, while the surface keeps the theme's selection (Outlined
+// does, so it never dims); otherwise the surface's Selection tone under its
+// Text colour, dimming to SelectionDim when the pane loses focus.
+func (t Theme) selection(legacy lipgloss.Style) (focused, blurred lipgloss.Style) {
+	sel := t.Surface.Surface().Selection
+	if t.Surface.IsZero() || sel.FromTheme {
+		return legacy, lipgloss.Style{}
+	}
+	style := func(bg surface.Role) lipgloss.Style {
+		st := lipgloss.NewStyle()
+		if c := t.Surface.Colour(bg, true); c != nil {
+			st = st.Background(c)
+		}
+		if c := t.Surface.Colour(sel.FG, true); c != nil {
+			st = st.Foreground(c)
+		}
+		return st
+	}
+	blurredBG := sel.BGBlurred
+	if blurredBG == surface.None {
+		blurredBG = sel.BG
+	}
+	return style(sel.BG), style(blurredBG)
 }
 
 // glyphs resolves the theme's glyph set against the library defaults. Every
@@ -390,7 +280,7 @@ func (t Theme) Help() help.Options {
 // statusbar and has to match its band, the overlay draws on the pane's own
 // ground.
 func (t Theme) HelpOverlay() help.OverlayOptions {
-	return help.OverlayOptions{
+	o := help.OverlayOptions{
 		KeyStyle:           lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
 		DescStyle:          lipgloss.NewStyle().Foreground(t.BarFG),
 		SectionStyle:       lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -400,12 +290,14 @@ func (t Theme) HelpOverlay() help.OverlayOptions {
 		ActiveBorder:       t.shapeOverlay(),
 		InactiveBorder:     t.shapeOverlay(),
 		Glyphs:             t.glyphs(),
-		SlotBrackets:       t.SlotBrackets,
+		SlotBrackets:       t.Surface.Surface().Brackets,
 		FilterRuleActive:   lipgloss.NewStyle().Foreground(t.BorderActive),
 		FilterRuleInactive: lipgloss.NewStyle().Foreground(t.BorderInactive),
 		Filter:             t.Filter(),
 		Keys:               help.DefaultOverlayKeys(),
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Pane returns pane.Options with only the color tokens applied. Border shape,
@@ -413,15 +305,17 @@ func (t Theme) HelpOverlay() help.OverlayOptions {
 // a SpinnerStyle so panes set into a loading state render the spinner in the
 // theme's accent color.
 func (t Theme) Pane() pane.Options {
-	return pane.Options{
+	o := pane.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 	}
+	o.Surface = t.Surface
+	return o
 }
 
 // Filter returns filter.Options pre-filled with theme colors — prompt in
@@ -429,7 +323,7 @@ func (t Theme) Pane() pane.Options {
 // colors matching pane. Set Width and override anything else on the returned
 // value before passing to filter.New.
 func (t Theme) Filter() filter.Options {
-	return filter.Options{
+	o := filter.Options{
 		PromptStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
 		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
@@ -439,8 +333,10 @@ func (t Theme) Filter() filter.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // List returns list.Options pre-filled from the theme, including nested
@@ -449,13 +345,13 @@ func (t Theme) Filter() filter.Options {
 // Height, Title, Items, Filterable, and any placeholder via
 // Filter.Placeholder.
 func (t Theme) List() list.Options {
-	return list.Options{
+	o := list.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		HScrollbar:     true,
@@ -464,6 +360,9 @@ func (t Theme) List() list.Options {
 		Filter:         t.Filter(),
 		Keys:           list.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // Input returns input.Options pre-filled from the theme — text in BarFG,
@@ -471,7 +370,7 @@ func (t Theme) List() list.Options {
 // Set Width, Title (the field's label), and any placeholder before passing
 // to input.New.
 func (t Theme) Input() input.Options {
-	return input.Options{
+	o := input.Options{
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
 		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
 		CursorColor:      t.Accent,
@@ -480,15 +379,17 @@ func (t Theme) Input() input.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // Toggle returns toggle.Options pre-filled from the theme — selected side in
 // Accent (bold), unselected in Muted, border colors matching pane. Set
 // Width, Title (the field's question), and Initial as needed.
 func (t Theme) Toggle() toggle.Options {
-	return toggle.Options{
+	o := toggle.Options{
 		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
 		ActiveColor:     t.BorderActive,
@@ -496,8 +397,10 @@ func (t Theme) Toggle() toggle.Options {
 		ActiveBorder:    t.shapeActive(),
 		InactiveBorder:  t.shapeInactive(),
 		Glyphs:          t.glyphs(),
-		SlotBrackets:    t.SlotBrackets,
+		SlotBrackets:    t.Surface.Surface().Brackets,
 	}
+	o.Surface = t.Surface.Field()
+	return o
 }
 
 // Confirm returns confirm.Options pre-filled from the theme — selected
@@ -505,7 +408,7 @@ func (t Theme) Toggle() toggle.Options {
 // border colors matching pane. Set Width, Height, Title, Message,
 // Confirm/Cancel labels, and Initial as needed.
 func (t Theme) Confirm() confirm.Options {
-	return confirm.Options{
+	o := confirm.Options{
 		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
 		MessageStyle:    lipgloss.NewStyle().Foreground(t.BarFG),
@@ -514,8 +417,10 @@ func (t Theme) Confirm() confirm.Options {
 		ActiveBorder:    t.shapeOverlay(),
 		InactiveBorder:  t.shapeOverlay(),
 		Glyphs:          t.glyphs(),
-		SlotBrackets:    t.SlotBrackets,
+		SlotBrackets:    t.Surface.Surface().Brackets,
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Alert returns alert.Options pre-filled from the theme — OK button in
@@ -525,7 +430,7 @@ func (t Theme) Confirm() confirm.Options {
 // t.ErrorBG) after this builder. Set Width, Height, Title, Message, and
 // OK label as needed before passing to alert.New.
 func (t Theme) Alert() alert.Options {
-	return alert.Options{
+	o := alert.Options{
 		OKStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		MessageStyle:   lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:    t.BorderActive,
@@ -533,8 +438,10 @@ func (t Theme) Alert() alert.Options {
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Actions returns action.Options pre-filled from the theme — the label in
@@ -547,7 +454,7 @@ func (t Theme) Alert() alert.Options {
 // is a plain component rather than a screen.Screen, so pkg/action never
 // imports pkg/screen and there is no import cycle to invert.
 func (t Theme) Actions() action.Options {
-	return action.Options{
+	o := action.Options{
 		LabelStyle:     lipgloss.NewStyle().Foreground(t.BarFG),
 		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
 		KeyStyle:       lipgloss.NewStyle().Foreground(t.KeyFG),
@@ -558,9 +465,11 @@ func (t Theme) Actions() action.Options {
 		ActiveBorder:   t.shapeOverlay(),
 		InactiveBorder: t.shapeOverlay(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		Keys:           action.DefaultKeys(),
 	}
+	o.Surface = t.Surface.Overlay()
+	return o
 }
 
 // Table returns table.Options pre-filled from the theme — header bold +
@@ -570,7 +479,7 @@ func (t Theme) Actions() action.Options {
 // Height, Title, Columns, Rows, Filterable, and any Filter.Placeholder
 // before passing to table.New.
 func (t Theme) Table() table.Options {
-	return table.Options{
+	o := table.Options{
 		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
 		MarkStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -579,17 +488,20 @@ func (t Theme) Table() table.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Activity:       t.activityCell(),
 		Filter:         t.Filter(),
 		Borders: table.Borders{
 			Vertical:   cellColor(t.Subtle, t.glyphs().ColumnSep),
-			HeaderRule: cellColor(t.Subtle, t.glyphs().Rule),
+			HeaderRule: cellColor(t.Subtle, t.Surface.Surface().Divider.Glyph),
 		},
 		Keys: table.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // Logview returns logview.Options pre-filled from the theme — match
@@ -598,7 +510,7 @@ func (t Theme) Table() table.Options {
 // Searchable, MaxLines, and any Filter.Placeholder before passing to
 // logview.New.
 func (t Theme) Logview() logview.Options {
-	return logview.Options{
+	o := logview.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		GutterStyle:      lipgloss.NewStyle().Foreground(t.Muted),
@@ -607,12 +519,15 @@ func (t Theme) Logview() logview.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             logview.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Eventlog returns eventlog.Options pre-filled from the theme — the
@@ -620,7 +535,7 @@ func (t Theme) Logview() logview.Options {
 // the logview's, border colors matching pane. Set Title, Anchored,
 // Filterable and Searchable on the returned value before eventlog.New.
 func (t Theme) Eventlog() eventlog.Options {
-	return eventlog.Options{
+	o := eventlog.Options{
 		MatchStyle:     lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent).Background(t.Subtle),
 		GutterStyle:    lipgloss.NewStyle().Foreground(t.Muted),
@@ -630,12 +545,15 @@ func (t Theme) Eventlog() eventlog.Options {
 		ActiveBorder:   t.shapeActive(),
 		InactiveBorder: t.shapeInactive(),
 		Glyphs:         t.glyphs(),
-		SlotBrackets:   t.SlotBrackets,
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		HScrollbar:     true,
 		SpinnerStyle:   lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:         t.Filter(),
 		Keys:           eventlog.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
+	return o
 }
 
 // TextView returns textview.Options pre-filled from the theme — match
@@ -644,7 +562,7 @@ func (t Theme) Eventlog() eventlog.Options {
 // theme.Filter(). Set Width, Height, Title, Content, Wrap, and
 // Searchable on the returned value before passing to textview.New.
 func (t Theme) TextView() textview.Options {
-	return textview.Options{
+	o := textview.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
@@ -652,12 +570,15 @@ func (t Theme) TextView() textview.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             textview.DefaultKeys(),
 		Wrap:             true,
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Tree returns tree.Options pre-filled from the theme — match highlight
@@ -666,7 +587,7 @@ func (t Theme) TextView() textview.Options {
 // Set Width, Height, Title, Root, Searchable, and InitialDepth before
 // passing to tree.New.
 func (t Theme) Tree() tree.Options {
-	return tree.Options{
+	o := tree.Options{
 		MatchStyle:       lipgloss.NewStyle().Bold(true).Reverse(true).Foreground(t.Accent),
 		CurrentLineStyle: lipgloss.NewStyle().Background(t.Subtle),
 		ActiveColor:      t.BorderActive,
@@ -674,7 +595,7 @@ func (t Theme) Tree() tree.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		MarkStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
@@ -682,12 +603,15 @@ func (t Theme) Tree() tree.Options {
 		Filter:           t.Filter(),
 		Keys:             tree.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Inspector returns inspector.Options pre-filled with theme colors. Set
 // Title, Fields, Filterable, and InitialDepth on the returned value.
 func (t Theme) Inspector() inspector.Options {
-	return inspector.Options{
+	o := inspector.Options{
 		// Labels use Muted (semantic "secondary text"), not Subtle —
 		// CurrentLineStyle below sets bg=Subtle for the cursor row, and
 		// dimming labels to Subtle too would make them invisible on that
@@ -701,12 +625,15 @@ func (t Theme) Inspector() inspector.Options {
 		ActiveBorder:     t.shapeActive(),
 		InactiveBorder:   t.shapeInactive(),
 		Glyphs:           t.glyphs(),
-		SlotBrackets:     t.SlotBrackets,
+		SlotBrackets:     t.Surface.Surface().Brackets,
 		HScrollbar:       true,
 		SpinnerStyle:     lipgloss.NewStyle().Foreground(t.Accent),
 		Filter:           t.Filter(),
 		Keys:             inspector.DefaultKeys(),
 	}
+	o.Surface = t.Surface
+	o.CurrentLineStyle, o.CurrentLineBlurredStyle = t.selection(o.CurrentLineStyle)
+	return o
 }
 
 // Form returns form.Options pre-filled with theme colors. Set Width, Height,

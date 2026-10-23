@@ -70,8 +70,8 @@ func (s *cities) SetTheme(t theme.Theme) {
 
 func main() {
     m := app.New(app.Options{
-        Root:   &cities{},
-        Themes: []theme.Theme{theme.Nord()},
+        Root:     &cities{},
+        Palettes: []palette.Palette{palette.Nord()},
     })
     if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
         fmt.Println(err); os.Exit(1)
@@ -112,7 +112,9 @@ handles its own state in `Update`.
 | `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
 | `pkg/tab` | Tabbed container hosting multiple `screen.Screen` bodies behind a one-row strip. Each body keeps its own state across switches; `shift+left`/`shift+right` and `1`–`9` switch tabs (`tab`/`shift+tab` is left alone for inner pane focus cycling). Host screen forwards `Update`/`OnEnter`/`IsCapturingKeys`/`SetTheme`/`Help` to `tabs` |
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
-| `pkg/theme` | Single palette struct + per-component `Options` builders. `app.New` resolves the initial theme from `Options.ThemeEnvVar` + the user config file automatically (set `SkipConfig=true` to opt out) |
+| `pkg/theme` | A palette drawn with a surface, plus the per-component `Options` builders. `app.New` composes it from the starting palette and surface (env var, then the user config file; `SkipConfig=true` opts out) |
+| `pkg/palette` | The colours: the `Palette` struct and the 19 built-ins |
+| `pkg/surface` | How edges and bodies are drawn, as data — `Outlined`, `Filled`, `Banded`, `Elevated`, `Accented` — and the colour roles derived from a palette. See `docs/surfaces.md` |
 | `pkg/config` | YAML user-config at `~/.config/tuilib/config.yaml`. Pure data + I/O; opt-in (library never writes). Today carries `Theme`; expands as components grow user-tunable knobs |
 | `pkg/ansi` | `CellColor(n, text)` for foreground-only ANSI in table cells (or any context that wraps content in its own SGR with a background); the foreground-only `\x1b[39m` reset preserves the outer background where lipgloss's full `\x1b[0m` would clobber it. `Hyperlink(url, text)` wraps a label in an OSC 8 hyperlink so shift-click in alacritty/tmux/kitty/iTerm2 opens the full URL — and `x/ansi.Cut` preserves the envelope across truncation, so narrow columns don't break the launched URL. `ExtractHyperlink(cell)` pulls the URL back out for programmatic open-in-browser |
 
@@ -164,14 +166,17 @@ Layout is pure render plumbing — it doesn't own focus or key routing.
 
 `pkg/app` is the standard shell for a tuilib TUI: breadcrumb + flex body
 + statusbar + theme cycling + global-key routing + auto-esc-pop. You
-provide a root `screen.Screen` and a list of themes; the shell does the rest.
+provide a root `screen.Screen`, a list of palettes and optionally of
+surfaces; the shell does the rest.
 
 ```go
 m := app.New(app.Options{
-    Root:     newCityList(),
-    Themes:   []theme.Theme{theme.Nord(), theme.Dark()},
-    Version:  "v0.1.0",
-    ThemeKey: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+    Root:       newCityList(),
+    Palettes:   []palette.Palette{palette.Nord(), palette.Dark()},
+    Surfaces:   []surface.Surface{surface.Outlined, surface.Elevated},
+    Version:    "v0.1.0",
+    ThemeKey:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "palette")),
+    SurfaceKey: key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "surface")),
 })
 tea.NewProgram(m, tea.WithAltScreen()).Run()
 ```
@@ -286,16 +291,20 @@ lifetime. See `examples/shell/status` for the full pattern.
 
 ## Theming
 
-`theme.Theme` is a single struct of semantic color tokens (`BarBG`, `KeyFG`,
-`Accent`, `BorderActive`, …). Swapping themes is a one-liner — every
-component reads from the same palette, so nothing drifts. Built-ins include
-`Dark`, `Light`, `Nord`, `Dracula`, `Gruvbox`, `Solarized`, `TokyoNight`,
+An app is drawn in a **palette** with a **surface**, which the user picks
+independently. A `palette.Palette` is a struct of semantic colour tokens
+(`BarBG`, `KeyFG`, `Accent`, `BorderActive`, …); built-ins include `Dark`,
+`Light`, `Nord`, `Dracula`, `Gruvbox`, `Solarized`, `TokyoNight`,
 `CatppuccinMocha/Latte`, `RosePine/Dawn`, `OneDark`, `Monokai`,
-`EverforestDark`, four `Base16…` schemes, and a `Terminal()` that reads
-the user's actual terminal palette at startup.
+`EverforestDark`, four `Base16…` schemes, and a `Terminal()` that reads the
+user's actual terminal colours at startup. A surface is how components'
+edges and bodies are drawn: `Outlined` (a line border, the default),
+`Filled`, `Banded`, `Elevated` or `Accented` — see `docs/surfaces.md`. The
+shell composes the pair into a `theme.Theme`, whose builders hand every
+component pre-styled options, so nothing drifts:
 
 ```go
-th := theme.Nord()
+th := theme.New(palette.Nord()) // Nord, drawn Outlined
 bc := breadcrumb.New(th.Breadcrumb())
 p  := pane.New(th.Pane())
 fl := filter.New(th.Filter())
@@ -303,20 +312,21 @@ li := list.New(th.List())
 sb := statusbar.New(th.Statusbar(helpModel.ShortView(), "v0.1.0"))
 ```
 
-### Default theme via env / config
+### Default palette and surface via env / config
 
-`app.New` resolves the initial theme by checking, in order, the env var
-named by `Options.ThemeEnvVar`, the `theme:` field in
-`$XDG_CONFIG_HOME/tuilib/config.yaml` (falls back to
-`~/.config/tuilib/config.yaml`, via `pkg/config`), and `Themes[0]`. Hand
-the raw theme list to `app.Options.Themes` — the shell reorders it for
-you:
+`app.New` picks the starting palette by checking, in order, the env var
+named by `Options.PaletteEnvVar`, the `palette:` field (or the older
+`theme:`) in `$XDG_CONFIG_HOME/tuilib/config.yaml` (falls back to
+`~/.config/tuilib/config.yaml`, via `pkg/config`), and `Palettes[0]`; and
+the starting surface the same way, from `SurfaceEnvVar`, `surface:`, and
+`Surfaces[0]`:
 
 ```go
 m := app.New(app.Options{
-    Root:        newRoot(),
-    Themes:      theme.All(),
-    ThemeEnvVar: "MY_APP_THEME",
+    Root:          newRoot(),
+    Palettes:      palette.All(),
+    Surfaces:      surface.Builtins(),
+    PaletteEnvVar: "MY_APP_PALETTE",
     // ...
 })
 ```
@@ -324,18 +334,19 @@ m := app.New(app.Options{
 User-side, `~/.config/tuilib/config.yaml`:
 
 ```yaml
-theme: dracula
+palette: dracula
+surface: elevated
+block_glyphs: false   # this terminal draws ▄ ▀ ▌ with seams
 ```
 
 The library never writes the file and never creates the directory — config
-is opt-in. A missing file is the steady state. Unknown theme names fall
-through silently (typo `dracla` just leaves `Themes[0]` as the default);
+is opt-in. A missing file is the steady state. Unknown names fall through
+silently (typo `dracla` just leaves `Palettes[0]` as the default);
 malformed YAML surfaces as an error only if you call `config.Load`
-directly. Leave `ThemeEnvVar` empty to skip the env-var step and rely on
-the config file alone, or set `Options.SkipConfig = true` to disable
-resolution entirely (useful for tests, or when the app should always pin
-to `Themes[0]`). The underlying `theme.Resolve(themes, envVar)` is still
-exported if you need the resolved order outside `app.New`.
+directly. Set `Options.SkipConfig = true` to ignore the env vars and the
+file entirely (useful for tests, or when the app should always pin to its
+first palette and surface). When the terminal can't draw the chosen
+surface, the shell draws its fallback and says why in the output console.
 
 The shared file lives in `pkg/config` — as other components grow
 user-tunable knobs (logview defaults, key remaps, custom palettes) their
@@ -377,8 +388,8 @@ section.
 | Tabs | Three sub-screens (filterable list / streaming logview / counter) behind one strip; switch via shift+arrows, `1`/`2`/`3`, or a click on a label. Each body keeps its own state, and the logs keep streaming while you are on another tab |
 | Status | Screens emit `app.Info` / `app.Error` / `app.ClearStatus` as `tea.Cmd`s and the shell paints the statusbar's center slot. Auto-clears on the next keypress, which is why anything worth reading twice belongs in the console |
 | Output | The app-wide console: `app.Info` / `app.ErrorDetail` / `app.ErrorOf`, plus `runner.Capture` streaming a live subprocess. `o` opens it, `c` clears, `x` kills a running capture, `w` exports. Note the `OnEnter` guard on `app.OutputClosed` — closing the console must not look like a fresh activation |
-| Themes | Live palette picker — moving the cursor re-skins the whole app, enter shows a theme's field palette. Also the package every other example's theme list comes from |
-| Chrome | The two border-shape slots a `Theme` carries, one for ordinary components and one for overlays. Pick a shape and every component on screen is rebuilt from the modified theme. Set both pickers the same to see why the overlay slot is separate: the modal flattens into the content behind it |
+| Themes | Live palette picker — moving the cursor re-skins the whole app, enter shows a palette's fields. Also the package every other example's palette list comes from |
+| Surfaces | Live surface picker: moving the cursor redraws the whole app as a line border, a filled card, a header band, a drop shadow or an accent bar (what `T` cycles). The list gets the surface, the input and toggle its field form, the modal its overlay form, and one pane pins itself to Outlined. Ruled and Lipped are custom surfaces defined in the example |
 | Prescreen | The "log in before you can use this" shape — a root screen pushes a child from `OnEnter`, takes its result on `Pop`, and can re-push it later (`L` logs out) without the child living permanently on the stack |
 
 ### `examples/patterns/` — composition idioms

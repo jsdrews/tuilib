@@ -15,7 +15,8 @@ is written for people and coding agents alike.
    `Fixed`/`Flex`. Never `height - 2`.
 3. **Start from a theme builder.** `t.List()`, `t.Table()`, …; set only
    instance-specific fields. Don't set `Width`/`Height` on components placed
-   with `layout.Sized`.
+   with `layout.Sized`, and don't set `Surface` except to pin one component
+   with `t.Resolve(s)`: the builder already chose the right form.
 4. **Rebuild in `SetTheme`, carrying `State()` / `Restore()`.** Never restore
    field by field.
 5. **Gate global keys with `IsCapturingKeys()`.** True while any embedded

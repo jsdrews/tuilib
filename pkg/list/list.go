@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/activity"
+	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -25,6 +26,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Options configures a new list. Zero-value fields fall back to sane defaults
@@ -50,6 +52,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// HScrollbar reserves a row at the bottom of the list pane for a
 	// horizontal scrollbar and lets ←/h and →/l scroll long rows
@@ -62,6 +68,10 @@ type Options struct {
 	// Style, so a list that only accepted a foreground color was the one
 	// place a caller could not give the cursor a background.
 	SelectedStyle lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
 
 	// Markable adds a mark column and binds x / X / A / D, so the
 	// user can build a multi-selection the screen reads back with Selection().
@@ -256,9 +266,10 @@ type Model struct {
 	filter     filter.Model
 	filterable bool
 
-	body          pane.Pane
-	selectedStyle lipgloss.Style
-	hScrollbar    bool
+	body            pane.Pane
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	hScrollbar      bool
 
 	// marks holds the multi-selection by item key. See mark.go.
 	markable bool
@@ -321,6 +332,7 @@ func New(opts Options) Model {
 		items:              append([]string(nil), opts.Items...),
 		filterable:         opts.Filterable,
 		selectedStyle:      opts.SelectedStyle,
+		selectedBlurred:    opts.SelectedBlurredStyle,
 		hScrollbar:         opts.HScrollbar,
 		keys:               opts.Keys,
 		markable:           opts.Markable,
@@ -340,20 +352,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -409,19 +424,21 @@ func (m *Model) refresh() {
 		var row string
 		switch {
 		case i == m.cursor:
-			// One styled run over the whole row: a nested mark style would
-			// close the highlight at its first reset (rule 19).
-			row = m.selectedStyle.Render(m.prefixFor(i) + it)
+			row = m.withBadge(i, m.prefixFor(i)+it)
+			if pad := m.body.ContentRect().W - lipgloss.Width(row); pad > 0 {
+				row += strings.Repeat(" ", pad)
+			}
+			row = ansi.RenderFill(m.selection().Render, row)
 		case m.markable && m.isMarkedAt(i):
-			row = " " + m.markStyle.Render(m.glyphs.Mark) + " " + it
+			row = m.withBadge(i, " "+m.markStyle.Render(m.glyphs.Mark)+" "+it)
 		default:
-			row = m.prefixFor(i) + it
+			row = m.withBadge(i, m.prefixFor(i)+it)
 		}
-		b.WriteString(m.withBadge(i, row))
+		b.WriteString(row)
 		b.WriteString("\n")
 	}
 	if m.filterable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	m.body.SetContent(strings.TrimRight(b.String(), "\n"))
 	m.body.EnsureVisible(m.cursor)
@@ -851,10 +868,10 @@ func (m *Model) SetRect(r geom.Rect) {
 		// so place the pane, measure, then fill the header and let the pane
 		// re-measure.
 		inner := m.body.ContentRect()
-		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
-		m.body.SetHeader(m.filterHeader())
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, Gen: r.Gen, H: 1})
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		inner = m.body.ContentRect()
-		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, Gen: r.Gen, H: 1})
+		m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, Gen: r.Gen, H: 1})
 	}
 	m.refresh()
 }
@@ -865,11 +882,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // SetItems replaces the item set, re-applies the current filter, and redraws.
@@ -963,6 +976,23 @@ func (m *Model) SetValue(s string) {
 	m.refresh()
 }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // A filterable list has two focusable regions behind one Focusable, so this
@@ -972,6 +1002,7 @@ func (m *Model) SetValue(s string) {
 // while the filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -980,9 +1011,10 @@ func (m *Model) Focus() tea.Cmd {
 // up invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -1001,7 +1033,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -1012,7 +1044,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetTitle updates the title rendered on the body pane's top border.

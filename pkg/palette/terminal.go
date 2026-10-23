@@ -1,4 +1,4 @@
-package theme
+package palette
 
 import (
 	"os"
@@ -8,9 +8,9 @@ import (
 	"github.com/muesli/termenv"
 )
 
-// Terminal builds a Theme from the user's terminal colorscheme — the actual
+// Terminal builds a Palette from the user's terminal colorscheme — the actual
 // foreground and background are queried via OSC 10/11 (termenv does the
-// raw-mode handshake), and the rest of the Theme uses ANSI color indices
+// raw-mode handshake), and the rest of the Palette uses ANSI color indices
 // 0–15, which the terminal renders using its configured 16-color palette.
 // So a user with Catppuccin configured at the terminal level gets a
 // Catppuccin-colored tuilib UI, with no further config.
@@ -21,7 +21,7 @@ import (
 //
 // Call BEFORE tea.NewProgram.Run(). termenv needs stdin to read the
 // replies, and bubbletea takes ownership of stdin once Run begins.
-func Terminal() Theme {
+func Terminal() Palette {
 	if !isatty.IsTerminal(os.Stdin.Fd()) || !isatty.IsTerminal(os.Stdout.Fd()) {
 		return fallback()
 	}
@@ -36,8 +36,10 @@ func Terminal() Theme {
 	// ANSI index colors ("0"–"15") are rendered by the terminal using its
 	// configured palette — so these four picks inherit the user's blue,
 	// green, red, magenta, etc.
-	return Theme{
+	return Palette{
 		Name:           "terminal",
+		Background:     lipgloss.Color(bg),
+		Foreground:     lipgloss.Color(fg),
 		BarBG:          lipgloss.Color(bg),
 		BarFG:          lipgloss.Color(fg),
 		Current:        lipgloss.Color(fg),
@@ -71,7 +73,7 @@ func hex(c termenv.Color) (string, bool) {
 // fallback picks Dark or Light based on lipgloss's background-brightness
 // guess (which uses its own OSC 11 query with a short timeout — and has
 // its own per-terminal fallbacks).
-func fallback() Theme {
+func fallback() Palette {
 	if lipgloss.HasDarkBackground() {
 		t := Dark()
 		t.Name = "terminal (fallback → dark)"

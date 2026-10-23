@@ -1,10 +1,12 @@
 package main
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/jsdrews/tuilib/pkg/mouse"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -27,7 +29,7 @@ func TestEveryLauncherEntryConstructsAndRenders(t *testing.T) {
 					t.Fatalf("panicked: %v", r)
 				}
 			}()
-			s := e.build(theme.Dark())
+			s := e.build(theme.New(palette.Dark()))
 			if s == nil {
 				t.Fatal("New returned nil")
 			}
@@ -62,7 +64,7 @@ func TestDriveEveryEntry(t *testing.T) {
 					t.Fatalf("panicked: %v", r)
 				}
 			}()
-			s := e.build(theme.Dark())
+			s := e.build(theme.New(palette.Dark()))
 			s.Init()
 			r := geom.New(0, 0, 90, 26)
 			s.Layout().Render(r)

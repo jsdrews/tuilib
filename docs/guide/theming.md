@@ -2,9 +2,12 @@
 
 ## One palette, many components
 
-`theme.Theme` is a struct of semantic tokens: bar colors, emphasis, borders,
-message colors, an accent, border shapes and glyphs. Every component has a
-builder method on it that returns pre-styled Options:
+An app is drawn in a **palette** (the colours) with a **surface** (how each
+component's edge and body are drawn: a line border, a filled card, a header
+band, a drop shadow). The user picks the two independently, and the app shell
+composes them, with the glyphs, into the `theme.Theme` every screen receives
+in `SetTheme`. Every component has a builder method on it that returns
+pre-styled Options:
 
 ```go
 opts := t.Table()          // colors, borders, glyphs, keys, filter options
@@ -41,7 +44,9 @@ overriding one; a per-instance value always wins over the theme.
 | `t.Activity()` | `activity.Options` |
 | `output.OptionsFrom(t)` | `output.Options`, inverted to avoid an import cycle |
 
-## Built-in themes
+## Built-in palettes
+
+Palettes live in `pkg/palette`:
 
 | Function | `Name` |
 |---|---|
@@ -61,58 +66,76 @@ overriding one; a per-instance value always wins over the theme.
 | `Base16Ocean()`, `Base16Eighties()`, `Base16Railscasts()`, `Base16TomorrowNight()` | `base16-…` |
 | `Terminal()` | `terminal`: reads your terminal's own palette |
 
-`theme.All()` returns every theme except `Terminal()`, in display order.
+`palette.All()` returns every palette except `Terminal()`, in display order.
 `Terminal()` queries the terminal's foreground and background (OSC 10/11) and
 uses ANSI indices 0–15 for the rest, so a user with Catppuccin configured in
 their terminal gets a Catppuccin UI. Call it **before**
 `tea.NewProgram(...).Run()`, which takes over stdin. It falls back to `Dark()`
 or `Light()` when the terminal doesn't answer.
 
-### Your own theme
+### Your own palette
 
-Write a `Theme` literal, or convert any [Base16](https://github.com/chriskempson/base16)
-scheme with `theme.FromBase16(name, theme.Base16{Base00: "1d1f21", …})`.
-Hex values have no leading `#`. Every token is listed in the
-[theme token reference](../reference/theme.md).
+Write a `palette.Palette` literal, or convert any [Base16](https://github.com/chriskempson/base16)
+scheme with `palette.FromBase16(name, palette.Base16{Base00: "1d1f21", …})`.
+Hex values have no leading `#`. Set `Background` and `Foreground` to the
+scheme's own pair: every surface tone is derived from them. Every token is
+listed in the [theme token reference](../reference/theme.md).
 
 ## User defaults
 
-`app.New` picks the initial theme from, in order, the env var named by
-`app.Options.ThemeEnvVar`, the user's config file, and `Themes[0]`:
+`app.New` picks the starting palette from, in order, the env var named by
+`app.Options.PaletteEnvVar`, the user's config file, and `Palettes[0]`; and
+the starting surface the same way, from `SurfaceEnvVar`, the config file, and
+`Surfaces[0]`:
 
 ```yaml
 # ~/.config/tuilib/config.yaml (or $XDG_CONFIG_HOME/tuilib/config.yaml)
-theme: dracula
+palette: dracula        # theme: is still read when palette: is unset
+surface: elevated
+block_glyphs: false     # this terminal draws ▄ ▀ ▌ with seams
 double_click_ms: 400
 ```
 
-The library never writes this file. A missing file is normal; an unknown theme
-name is ignored. Call `config.Load()` yourself if you want malformed YAML
-reported. Outside the shell, `theme.Resolve(themes, envVar)` returns the
-reordered list.
+The library never writes this file. A missing file is normal; an unknown name
+is ignored. Call `config.Load()` yourself if you want malformed YAML reported.
 
-## Border shapes and glyphs
+## Surfaces and glyphs
 
-Three border tokens set component chrome app-wide:
+Five surfaces ship in `pkg/surface`: `Outlined` (the default, a line border),
+`Filled`, `Banded`, `Elevated` and `Accented`. Offer them with
+`app.Options.Surfaces` and let the user cycle with `SurfaceKey`. A surface is
+data, so a custom one is a struct literal; see [Surfaces](../surfaces.md).
 
-- `BorderShapeActive` / `BorderShapeInactive`: ordinary components, focused
-  and not. Both default to the normal border: focus is shown by color, so the
-  layout's visual weight doesn't shift when focus moves.
-- `BorderShapeOverlay`: confirm, alert, the action menu. Defaults to thick, so
-  an overlay reads as floating above the pane it covers.
+Border shape is surface data. `surface.OutlinedWith(lipgloss.RoundedBorder())`
+is Outlined drawn rounded; its `Overlay` form (thick lines by default) is what
+confirm, alert and the action menu draw, so an overlay reads as floating above
+the pane it covers. Its `Brackets` decide how titles meet the border:
+`BracketsNone` (`── title ──`), `BracketsCorners` (`┐ title ┌`) or
+`BracketsTees` (`─┤ title ├─`). Its `Divider` is the rule under an inline
+filter. To pin one component to a different surface:
 
-`SlotBrackets` decides how titles meet the border: `SlotBracketsNone`
-(`── title ──`), `SlotBracketsCorners` (`┐ title ┌`) or `SlotBracketsTees`
-(`─┤ title ├─`).
+```go
+opts := t.Logview()
+opts.Surface = t.Resolve(surface.Outlined)
+```
+
+The builders hand each component the form of the surface it needs: the
+surface itself for panes, lists and tables; its **field form** for input,
+filter and toggle, which screens place in three-row slots; its **overlay
+form** for confirm, alert and the menus, which is always filled so a modal
+covers what is under it. On a filled surface a selected row dims when its
+pane loses focus, and the bars move onto the screen colour, with their text
+switched to the surface's `Text` colour if the palette's bar text wouldn't
+read there.
 
 `Glyphs` (a `glyph.Set`) holds every mark components draw: cursor `▸`, mark
-`✓`, expand `▾`/`▸`, rule `─`, scrollbar thumb and track, sort `▲`/`▼`, column
+`✓`, expand `▾`/`▸`, scrollbar thumb and track, sort `▲`/`▼`, column
 separator `│`, placeholder `·`. Empty fields fall back to `glyph.Default()`,
 so setting one doesn't blank the rest.
 
 ## Rebuilding on a theme swap
 
-When the theme changes, the shell calls `SetTheme(t)` on every screen on the
+When the palette or surface changes, the shell calls `SetTheme(t)` on every screen on the
 stack, including covered ones, so they're already in the new palette when
 uncovered. A screen rebuilds each themed component and carries its state
 across with `State()` and `Restore()`:

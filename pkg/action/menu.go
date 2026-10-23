@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Sizing caps. A menu is a picker, not a document: it takes only the width
@@ -105,6 +106,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// MultiReason and RunningReason override the stock text the menu fills
 	// into Disabled for a non-Multi action under a multi-selection, and for
@@ -167,6 +172,7 @@ func New(opts Options) Menu {
 		Focused:        true,
 		Glyphs:         opts.Glyphs,
 		SlotBrackets:   opts.SlotBrackets,
+		Surface:        opts.Surface,
 		ActiveColor:    opts.ActiveColor,
 		InactiveColor:  opts.InactiveColor,
 		ActiveBorder:   opts.ActiveBorder,
@@ -319,9 +325,12 @@ func (m *Menu) measure() {
 	maxW := clampCap(m.outer.W, menuWidthNum, menuWidthDen, menuMinWidth)
 	maxH := clampCap(m.outer.H, menuHeightNum, menuHeightDen, menuMinHeight)
 
-	// The pane spends two columns on borders and always reserves one more
-	// for its vertical scrollbar (see pane.applySize).
-	chromeW := 2 + pane.ScrollbarWidth
+	// The pane's edge takes cells on each side — one for a line border, more
+	// for a filled surface — and it always reserves a column for its vertical
+	// scrollbar (see pane.applySize).
+	edge := m.pane.Insets()
+	chromeW := edge.Left + edge.Right + pane.ScrollbarWidth
+	chromeH := edge.Top + edge.Bottom
 	maxInner := max(1, maxW-chromeW)
 	m.fitColumns(maxInner)
 
@@ -338,7 +347,10 @@ func (m *Menu) measure() {
 	inner = min(inner, maxInner)
 
 	m.menuW = min(inner+chromeW, m.outer.W)
-	m.menuH = min(max(len(m.set.Actions)+2, menuMinHeight), min(maxH, m.outer.H))
+	// Every action gets a row, up to the height cap — which a deep edge must
+	// not push below room for one row.
+	want := max(len(m.set.Actions), 1) + chromeH
+	m.menuH = min(want, max(maxH, 1+chromeH), m.outer.H)
 
 	if m.anchored {
 		m.placed = geom.AnchorIn(m.outer, m.ax, m.ay, m.menuW, m.menuH)

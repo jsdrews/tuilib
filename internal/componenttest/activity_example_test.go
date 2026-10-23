@@ -13,6 +13,7 @@ import (
 	exactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/poll"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -75,7 +76,7 @@ func pump(s screen.Screen, cmd tea.Cmd) screen.Screen {
 
 func newActivityExample(t *testing.T) screen.Screen {
 	t.Helper()
-	s := exactivity.New(theme.Dark())
+	s := exactivity.New(theme.New(palette.Dark()))
 	s = pump(s, s.Init())
 	s.Layout().Render(geom.New(0, 0, exW, exH))
 	return s

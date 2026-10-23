@@ -33,6 +33,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -40,6 +41,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Field is one record entry. Value renders to the right of Label; pass an
@@ -80,6 +82,10 @@ type Options struct {
 	// CurrentLineStyle is applied to the entire row holding the cursor,
 	// padded out to the pane's inner width.
 	CurrentLineStyle lipgloss.Style
+	// CurrentLineBlurredStyle replaces CurrentLineStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise CurrentLineStyle applies whatever the focus.
+	CurrentLineBlurredStyle lipgloss.Style
 
 	// Pane pass-throughs.
 	ActiveColor    lipgloss.TerminalColor
@@ -91,7 +97,11 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
-	HScrollbar   bool
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface    surface.Resolved
+	HScrollbar bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// inspector is in its loading state (see SetLoading).
@@ -227,10 +237,11 @@ type Model struct {
 	filter     filter.Model
 	filterable bool
 
-	labelStyle       lipgloss.Style
-	valueStyle       lipgloss.Style
-	matchStyle       lipgloss.Style
-	currentLineStyle lipgloss.Style
+	labelStyle         lipgloss.Style
+	valueStyle         lipgloss.Style
+	matchStyle         lipgloss.Style
+	currentLineStyle   lipgloss.Style
+	currentLineBlurred lipgloss.Style
 
 	keys Keys
 
@@ -270,18 +281,19 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:           opts.Glyphs.Resolve(),
-		token:            focus.NewToken(),
-		fields:           append([]Field(nil), opts.Fields...),
-		expanded:         map[string]bool{},
-		filterable:       opts.Filterable,
-		labelStyle:       opts.LabelStyle,
-		valueStyle:       opts.ValueStyle,
-		matchStyle:       opts.MatchStyle,
-		currentLineStyle: opts.CurrentLineStyle,
-		keys:             opts.Keys,
-		matchIdx:         -1,
-		initialDepth:     opts.InitialDepth,
+		glyphs:             opts.Glyphs.Resolve(),
+		token:              focus.NewToken(),
+		fields:             append([]Field(nil), opts.Fields...),
+		expanded:           map[string]bool{},
+		filterable:         opts.Filterable,
+		labelStyle:         opts.LabelStyle,
+		valueStyle:         opts.ValueStyle,
+		matchStyle:         opts.MatchStyle,
+		currentLineStyle:   opts.CurrentLineStyle,
+		currentLineBlurred: opts.CurrentLineBlurredStyle,
+		keys:               opts.Keys,
+		matchIdx:           -1,
+		initialDepth:       opts.InitialDepth,
 	}
 
 	bodyH := opts.Height
@@ -293,20 +305,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 
 	m.preExpand(m.fields, "", 0, m.initialDepth)
@@ -452,7 +467,7 @@ func (m *Model) SetRect(r geom.Rect) {
 		// it reads as belonging to what it filters. Placing the pane first
 		// gives the header its width; setting the header then re-measures.
 		m.placeInlineFilter(r)
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		m.placeInlineFilter(r)
 	}
 	m.refresh()
@@ -461,7 +476,7 @@ func (m *Model) SetRect(r geom.Rect) {
 // placeInlineFilter puts the filter on the pane's first inner row.
 func (m *Model) placeInlineFilter(r geom.Rect) {
 	inner := m.body.ContentRect()
-	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the filter row plus a rule separating it from the content.
@@ -470,11 +485,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // SetFields replaces the record. Expansion state is preserved by row
@@ -510,6 +521,23 @@ func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 // Title returns the label on the pane's border.
 func (m Model) Title() string { return m.body.Title() }
 
+// selection is the selected row's style: currentLineStyle, or currentLineBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.currentLineBlurred
+	}
+	return m.currentLineStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -518,6 +546,7 @@ func (m Model) Title() string { return m.body.Title() }
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -526,9 +555,10 @@ func (m *Model) Focus() tea.Cmd {
 // invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -547,7 +577,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -558,7 +588,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetActiveColor / SetInactiveColor update the body pane's border colors.
@@ -1022,10 +1052,10 @@ func (m *Model) draw() {
 	// spans the whole visible band rather than ending at the cursor row's
 	// natural text width.
 	if cur := m.cursor - start; cur >= 0 && cur < len(lines) {
-		lines[cur] = m.currentLineStyle.Render(padToWidth(lines[cur], maxW))
+		lines[cur] = tuiansi.RenderFill(m.selection().Render, padToWidth(lines[cur], maxW))
 	}
 	if m.filterable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	m.body.SetContent(strings.Join(lines, "\n"))
 	m.body.SetVirtualScroll(len(m.rows), visible, start)

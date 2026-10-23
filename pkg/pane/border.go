@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 type BorderPosition int
@@ -19,22 +21,21 @@ const (
 )
 
 // SlotBracketStyle controls how embedded slot text (titles, labels, scroll
-// percentages) is bracketed against the surrounding border line.
-type SlotBracketStyle int
+// percentages) is bracketed against the surrounding border line. It is the
+// surface's Brackets: how slot text meets a line is surface data.
+type SlotBracketStyle = surface.Brackets
 
 const (
 	// SlotBracketsNone draws the border edge straight through the slot region,
 	// so text sits inline on the border line: `── text ──`. This is the
-	// default — a titled pane reads as a plain rectangle with the title
-	// floating on its top edge.
-	SlotBracketsNone SlotBracketStyle = iota
+	// default.
+	SlotBracketsNone = surface.BracketsNone
 	// SlotBracketsCorners wraps slot text with inverted corner glyphs so it
-	// looks like a tab dipping into the pane: `┐ text ┌`. Matches pug's
-	// aesthetic; useful when you want the title to read as a labeled tab.
-	SlotBracketsCorners
+	// looks like a tab dipping into the pane: `┐ text ┌`.
+	SlotBracketsCorners = surface.BracketsCorners
 	// SlotBracketsTees uses junction tees pointing into the slot text:
 	// `─┤ text ├─`.
-	SlotBracketsTees
+	SlotBracketsTees = surface.BracketsTees
 )
 
 // Borderize wraps content in the given border with up to six embedded text

@@ -51,12 +51,14 @@ type Field struct {
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"details"` | Border title. |
+| `Surface` | `surface.Resolved` | the app's surface (`t.Surface`) | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Fields` | `[]inspector.Field` | | The record. |
 | `Filterable` | `bool` | `false` | Search row inside the pane; `/` focuses it. |
 | `InitialDepth` | `int` | `0` | Pre-expand fields shallower than this. Re-applied by `SetFields`. |
 | `LabelStyle`, `ValueStyle` | `lipgloss.Style` | theme | Label and value text. |
 | `MatchStyle` | `lipgloss.Style` | theme | Search highlight. |
 | `CurrentLineStyle` | `lipgloss.Style` | theme | The cursor row. |
+| `CurrentLineBlurredStyle` | `lipgloss.Style` | unset | `CurrentLineStyle` while the inspector doesn't have focus. Used only when it sets a background; filled surfaces set it to `SelectionDim`. |
 | `Filter` | `filter.Options` | theme | Styles the search field. |
 | `HScrollbar`, `SpinnerStyle`, `LoadingLabel` | | theme | |
 | `Keys` | `inspector.Keys` | `DefaultKeys()` | Key bindings. |

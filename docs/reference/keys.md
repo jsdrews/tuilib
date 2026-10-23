@@ -12,7 +12,8 @@ Every binding a component dispatches lives in its `Options.Keys` struct (from
 | `esc` | pop the stack (when deeper than one) | `DisableAutoEscPop` |
 | `?` | key overlay | `HelpKey` |
 | `ctrl+z` | suspend | `SuspendKey`, `DisableSuspend` |
-| none | cycle theme | `ThemeKey` (opt-in) |
+| none | cycle palette | `ThemeKey` (opt-in; `t` by convention) |
+| none | cycle surface | `SurfaceKey` (opt-in; `T` by convention) |
 | none | output console | `OutputKey` (opt-in) |
 | none | action menu | `ActionsKey` (opt-in) |
 

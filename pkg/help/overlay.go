@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Section is a named group of bindings. Grouping is the whole reason the
@@ -259,6 +260,10 @@ type OverlayOptions struct {
 	InactiveBorder lipgloss.Border
 	Glyphs         glyph.Set
 	SlotBrackets   pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// FilterRule styles the line separating the inline filter row from the
 	// content — an inline filter has no border of its own to light up, so
@@ -331,15 +336,18 @@ func NewOverlay(opts OverlayOptions) Overlay {
 		o.filter = filter.New(opts.Filter)
 	}
 	o.body = pane.New(pane.Options{
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       o.filterRuleInactive,
+		DividerActiveStyle: o.filterRuleActive,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		Keys:               opts.Keys.Pane,
 	})
 	return o
 }
@@ -420,7 +428,7 @@ func (o *Overlay) SetRect(r geom.Rect) {
 	o.body.SetRect(geom.CenterIn(r, w, h))
 	if o.searchable {
 		o.placeInlineFilter(r)
-		o.body.SetHeader(o.filterHeader())
+		o.body.SetDividedHeader(o.filterHeader(), o.filter.Focused())
 		o.placeInlineFilter(r)
 	}
 	o.refresh()
@@ -440,7 +448,7 @@ func (o *Overlay) FocusFilter() tea.Cmd {
 		return nil
 	}
 	cmd := o.filter.Focus()
-	o.body.SetHeader(o.filterHeader())
+	o.body.SetDividedHeader(o.filterHeader(), o.filter.Focused())
 	return cmd
 }
 
@@ -450,7 +458,7 @@ func (o *Overlay) BlurFilter() {
 		return
 	}
 	o.filter.Blur()
-	o.body.SetHeader(o.filterHeader())
+	o.body.SetDividedHeader(o.filterHeader(), o.filter.Focused())
 }
 
 // IsCapturingKeys reports whether the search field is swallowing keys.
@@ -506,7 +514,7 @@ func (o Overlay) handleMouse(e mouse.Msg) (Overlay, tea.Cmd) {
 // placeInlineFilter puts the search field on the pane's first inner row.
 func (o *Overlay) placeInlineFilter(r geom.Rect) {
 	inner := o.body.ContentRect()
-	o.filter.SetInlineRect(geom.Rect{X: inner.X, Y: o.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	o.filter.SetInlineRect(geom.Rect{X: inner.X, Y: o.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the search row plus the rule separating it from the list.
@@ -515,11 +523,7 @@ func (o Overlay) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := o.filterRuleInactive
-	if o.filter.Focused() {
-		rule = o.filterRuleActive
-	}
-	return o.filter.InlineView() + "\n" + rule.Render(strings.Repeat(o.glyphs.Rule, inner))
+	return o.filter.InlineView()
 }
 
 // applyQuery re-reads the filter and rebuilds the body when it changed.
@@ -529,7 +533,7 @@ func (o *Overlay) applyQuery() {
 		o.query = q
 		o.body.GotoTop()
 	}
-	o.body.SetHeader(o.filterHeader())
+	o.body.SetDividedHeader(o.filterHeader(), o.filter.Focused())
 	o.refresh()
 }
 
@@ -657,17 +661,19 @@ func (o Overlay) renderColumn(col []block) (lines []string, width int) {
 func (o Overlay) plan(r geom.Rect) (rows []string, w, h int) {
 	rows, contentW := o.renderColumn(o.blocks())
 
-	chromeH := 2 // borders
+	// The pane's edge takes cells on each side — one for a line border, more
+	// for a filled surface — and it always reserves a column for the
+	// scrollbar track, drawn or not; content measured against the outer size
+	// alone loses its last rows and cell to them.
+	edge := o.body.Insets()
+	chromeH := edge.Top + edge.Bottom
 	if o.searchable {
 		chromeH += 2 // filter row + rule
 	}
-	// The pane's border takes two columns and it always reserves one more for
-	// the scrollbar track, drawn or not — content measured against the outer
-	// width alone loses its last cell to it.
-	chromeW := 2 + pane.ScrollbarWidth
+	chromeW := edge.Left + edge.Right + pane.ScrollbarWidth
 
 	w = clampSize(contentW+chromeW, overlayMinWidth, r.W, overlayWidthNum, overlayWidthDen)
-	h = clampSize(len(rows)+chromeH, overlayMinHeight, r.H, overlayHeightNum, overlayHeightDen)
+	h = clampSize(len(rows)+chromeH, max(overlayMinHeight, chromeH+1), r.H, overlayHeightNum, overlayHeightDen)
 	return rows, w, h
 }
 

@@ -57,12 +57,12 @@ import (
 	patremote "github.com/jsdrews/tuilib/examples/patterns/remote"
 	patrunner "github.com/jsdrews/tuilib/examples/patterns/runner"
 	pattreeactions "github.com/jsdrews/tuilib/examples/patterns/treeactions"
-	shellchrome "github.com/jsdrews/tuilib/examples/shell/chrome"
 	shelllayouts "github.com/jsdrews/tuilib/examples/shell/layouts"
 	shelloutput "github.com/jsdrews/tuilib/examples/shell/output"
 	shellprescreen "github.com/jsdrews/tuilib/examples/shell/prescreen"
 	shellstack "github.com/jsdrews/tuilib/examples/shell/stack"
 	shellstatus "github.com/jsdrews/tuilib/examples/shell/status"
+	shellsurfaces "github.com/jsdrews/tuilib/examples/shell/surfaces"
 	shelltabs "github.com/jsdrews/tuilib/examples/shell/tabs"
 	shellthemes "github.com/jsdrews/tuilib/examples/shell/themes"
 )
@@ -135,9 +135,9 @@ var entries = []entry{
 	{groupShell, "Themes", "shell/themes",
 		"Live palette picker: moving the cursor re-skins the whole app, and enter shows a theme's field palette. Also the package every other example's theme list comes from.",
 		shellthemes.New},
-	{groupShell, "Chrome", "shell/chrome",
-		"The two border-shape slots a Theme carries: one for ordinary components, one for overlays. Pick a shape on the left and every component on screen — the pickers included — is rebuilt from the modified theme, the same path any app gets from th.List() / th.Input() / th.Confirm(). Set both pickers to the same shape to see why the overlay slot is separate: the modal flattens into the content behind it.",
-		shellchrome.New},
+	{groupShell, "Surfaces", "shell/surfaces",
+		"Live surface picker: moving the cursor redraws the whole app as a line border, a filled card, a header band, a drop shadow or an accent bar — the same thing T cycles. The list gets the surface, the input and toggle its field form, the modal its overlay form, and one pane pins itself to Outlined. Ruled and Lipped are custom surfaces defined in the example, offered beside the built-ins. Pick a glyph set too; the cursor, marks and scrollbars follow.",
+		shellsurfaces.New},
 	{groupShell, "Prescreen", "shell/prescreen",
 		"The \"log in before you can use this\" shape: a root screen pushes a child from OnEnter, receives its result on Pop, and can re-push it later (L logs out) — all without the child living permanently on the stack. The login form is set dressing; the flow is the point. Every field is clickable.",
 		shellprescreen.New},
@@ -213,7 +213,7 @@ type rootScreen struct {
 
 func newRoot() *rootScreen {
 	s := &rootScreen{}
-	s.SetTheme(shellthemes.Themes()[1]) // start on Dark (index 0 is Terminal())
+	s.SetTheme(theme.New(shellthemes.Palettes()[1])) // start on Dark (index 0 is Terminal())
 	return s
 }
 
@@ -321,11 +321,13 @@ func entryNames() []string {
 
 func main() {
 	m := app.New(app.Options{
-		Root:        newRoot(),
-		Themes:      shellthemes.Themes(),
-		ThemeEnvVar: "TUILIB_THEME",
-		Version:     "examples",
-		ThemeKey:    key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")),
+		Root:          newRoot(),
+		Palettes:      shellthemes.Palettes(),
+		Surfaces:      shellsurfaces.Surfaces(),
+		PaletteEnvVar: "TUILIB_THEME",
+		Version:       "examples",
+		ThemeKey:      key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "palette")),
+		SurfaceKey:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "surface")),
 		// Mouse is opt-in per app, and app.Options is the only place it is
 		// configured — the shell enables reporting from Init, so
 		// tea.NewProgram below needs no mouse option of its own. Turning it

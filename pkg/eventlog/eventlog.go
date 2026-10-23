@@ -52,6 +52,7 @@ import (
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/internal/tick"
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -60,6 +61,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // DefaultMaxItems is the resident cap when Options.MaxItems is zero.
@@ -153,7 +155,11 @@ type Options struct {
 
 	MatchStyle    lipgloss.Style
 	SelectedStyle lipgloss.Style
-	CellStyle     lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
+	CellStyle            lipgloss.Style
 	// GutterStyle draws the gutter of positions or marks down the left.
 	GutterStyle lipgloss.Style
 	// NoGutter hides the gutter. It is on by default: in a long timeline
@@ -174,9 +180,13 @@ type Options struct {
 	InactiveBorder lipgloss.Border
 	Glyphs         glyph.Set
 	SlotBrackets   pane.SlotBracketStyle
-	HScrollbar     bool
-	SpinnerStyle   lipgloss.Style
-	LoadingLabel   string
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface      surface.Resolved
+	HScrollbar   bool
+	SpinnerStyle lipgloss.Style
+	LoadingLabel string
 
 	// Filter styles both the filter and the search field.
 	Filter filter.Options
@@ -279,14 +289,15 @@ type Model struct {
 	// into it — set by Reanchor.
 	replace bool
 
-	placeholder   string
-	gutter        bool
-	gutterStyle   lipgloss.Style
-	matchStyle    lipgloss.Style
-	selectedStyle lipgloss.Style
-	cellStyle     lipgloss.Style
-	ruleActive    lipgloss.Style
-	ruleInactive  lipgloss.Style
+	placeholder     string
+	gutter          bool
+	gutterStyle     lipgloss.Style
+	matchStyle      lipgloss.Style
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	cellStyle       lipgloss.Style
+	ruleActive      lipgloss.Style
+	ruleInactive    lipgloss.Style
 
 	baseTitle string
 	loadCmd   tea.Cmd
@@ -306,24 +317,25 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:        opts.Glyphs.Resolve(),
-		token:         focus.NewToken(),
-		keys:          opts.Keys,
-		maxItems:      opts.MaxItems,
-		following:     true,
-		filterable:    opts.Filterable,
-		searchable:    opts.Searchable,
-		placeholder:   opts.Placeholder,
-		gutter:        !opts.NoGutter,
-		gutterStyle:   opts.GutterStyle,
-		matchStyle:    opts.MatchStyle,
-		selectedStyle: opts.SelectedStyle,
-		cellStyle:     opts.CellStyle,
-		baseTitle:     opts.Title,
-		matchTotal:    -1,
-		landAt:        -1,
-		newStyle:      opts.NewStyle,
-		newFor:        opts.NewFor,
+		glyphs:          opts.Glyphs.Resolve(),
+		token:           focus.NewToken(),
+		keys:            opts.Keys,
+		maxItems:        opts.MaxItems,
+		following:       true,
+		filterable:      opts.Filterable,
+		searchable:      opts.Searchable,
+		placeholder:     opts.Placeholder,
+		gutter:          !opts.NoGutter,
+		gutterStyle:     opts.GutterStyle,
+		matchStyle:      opts.MatchStyle,
+		selectedStyle:   opts.SelectedStyle,
+		selectedBlurred: opts.SelectedBlurredStyle,
+		cellStyle:       opts.CellStyle,
+		baseTitle:       opts.Title,
+		matchTotal:      -1,
+		landAt:          -1,
+		newStyle:        opts.NewStyle,
+		newFor:          opts.NewFor,
 	}
 	if m.placeholder == "" {
 		m.placeholder = m.glyphs.Placeholder
@@ -350,20 +362,23 @@ func New(opts Options) Model {
 	m.ruleActive = lipgloss.NewStyle().Foreground(opts.ActiveColor)
 	m.ruleInactive = lipgloss.NewStyle().Foreground(opts.InactiveColor)
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         opts.Height,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.ruleInactive,
+		DividerActiveStyle: m.ruleActive,
+		Width:              opts.Width,
+		Height:             opts.Height,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.refresh()
 	return m
@@ -1000,7 +1015,7 @@ func (m *Model) SetRect(r geom.Rect) {
 	m.body.SetRect(r)
 	if m.hasHeader() {
 		m.placeHeader(r)
-		m.body.SetHeader(m.header())
+		m.body.SetDividedHeader(m.header(), m.headerInput())
 		m.placeHeader(r)
 	}
 	m.refresh()
@@ -1010,7 +1025,7 @@ func (m Model) hasHeader() bool { return m.filterable || m.searchable }
 
 func (m *Model) placeHeader(r geom.Rect) {
 	inner := m.body.ContentRect()
-	row := geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen}
+	row := geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen}
 	if m.filterable {
 		m.filter.SetInlineRect(row)
 	}
@@ -1019,20 +1034,19 @@ func (m *Model) placeHeader(r geom.Rect) {
 	}
 }
 
-// header is one input row plus a rule: whichever field has input, or a
-// summary of both when neither does.
+// header is the input row above the pane's divider: whichever field has
+// input, or a summary of both when neither does.
 func (m Model) header() string {
 	w := m.body.ContentRect().W
 	if w <= 0 {
 		return ""
 	}
-	rule := m.ruleInactive
 	var row string
 	switch {
 	case m.filterable && m.filter.Focused():
-		row, rule = m.filter.InlineView(), m.ruleActive
+		row = m.filter.InlineView()
 	case m.searchable && m.search.Focused():
-		row, rule = m.search.InlineView(), m.ruleActive
+		row = m.search.InlineView()
 	default:
 		var parts []string
 		if m.filterable {
@@ -1047,7 +1061,12 @@ func (m Model) header() string {
 		}
 		row = strings.Join(parts, "   ")
 	}
-	return xansi.Truncate(row, w, "…") + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, w))
+	return xansi.Truncate(row, w, "…")
+}
+
+// headerInput reports whether a field in the header holds the keys.
+func (m Model) headerInput() bool {
+	return (m.filterable && m.filter.Focused()) || (m.searchable && m.search.Focused())
 }
 
 // height is how many lines item i draws as — never fewer than one.
@@ -1145,7 +1164,7 @@ func (m Model) missing() remoteview.Missing {
 func (m *Model) refresh() {
 	m.adjustTop()
 	if m.hasHeader() {
-		m.body.SetHeader(m.header())
+		m.body.SetDividedHeader(m.header(), m.headerInput())
 	}
 	if cmd := m.body.SetLoading(m.st.Loading()); cmd != nil {
 		m.loadCmd = cmd
@@ -1274,7 +1293,7 @@ func (m Model) render() string {
 		return lipgloss.Place(max(1, c.W), max(1, c.H), lipgloss.Center, lipgloss.Center, "✗ failed to load")
 	}
 	stale := m.Stale()
-	sel, cell := m.selectedStyle, m.cellStyle
+	sel, cell := m.selection(), m.cellStyle
 	if stale {
 		sel, cell = sel.Faint(true), cell.Faint(true)
 	}
@@ -1299,7 +1318,12 @@ func (m Model) render() string {
 			if len(out) >= rows {
 				break
 			}
-			row := style.Render(m.highlight(l))
+			var row string
+			if i == m.cursor {
+				row = m.selectedRow(m.highlight(l), style, width)
+			} else {
+				row = style.Render(m.highlight(l))
+			}
 			if width > 0 {
 				label := ""
 				if n == 0 {
@@ -1311,6 +1335,19 @@ func (m Model) render() string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// selectedRow paints the cursor item's line with style across the whole
+// content width, through any styling the line carries itself.
+func (m Model) selectedRow(line string, style lipgloss.Style, gutter int) string {
+	w := m.body.ContentRect().W
+	if gutter > 0 {
+		w -= xansi.StringWidth(m.gutterCell("", gutter, false, false))
+	}
+	if pad := w - xansi.StringWidth(line); pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	return tuiansi.RenderFill(style.Render, line)
 }
 
 // label is what the gutter shows for item i: its Mark, else its position
@@ -1395,15 +1432,34 @@ func (m Model) Loading() bool { return m.body.Loading() }
 // FocusToken returns the eventlog's focus identity.
 func (m Model) FocusToken() focus.Token { return m.token }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the eventlog the keyboard.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
 // Blur releases the keyboard, clearing both input fields.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
 	}
@@ -1506,7 +1562,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 	if !m.body.Rect().Hit(e.X, e.Y) {
 		return m, nil
 	}
-	if m.hasHeader() && e.Y == m.body.Rect().Y+1 {
+	if m.hasHeader() && e.Y == m.body.InnerRect().Y {
 		if e.IsPointPress() {
 			if m.searchable && !m.filterable {
 				return m, tea.Batch(m.FocusSearch(), focus.RequestSelf(m.token), m.flush())

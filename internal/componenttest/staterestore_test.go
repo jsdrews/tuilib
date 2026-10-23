@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -60,7 +61,7 @@ func lines(n int, f string) []string {
 }
 
 func TestStateRestoreRedrawsTheSame(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 	cases := []roundTrip{
 		{
 			name: "list",
@@ -401,7 +402,7 @@ func sampleTree() tree.Node {
 // built yet — and restores it onto one freshly built with Options that
 // already carry data. That restore must change nothing.
 func TestRestoringAZeroStateLeavesOptionsAlone(t *testing.T) {
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 
 	lo := th.List()
 	lo.Title, lo.Items = "l", lines(5, "item %d")

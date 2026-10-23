@@ -7,6 +7,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -15,7 +16,7 @@ var hostRect = geom.Rect{X: 0, Y: 0, W: 60, H: 12}
 func newMouseTabs(t *testing.T, pos StripPos) Model {
 	t.Helper()
 	m := New(Options{
-		Theme:    theme.Dark(),
+		Theme:    theme.New(palette.Dark()),
 		StripPos: pos,
 		Tabs: []Tab{
 			{Label: "Cities", Body: &stubBody{label: "cities"}},

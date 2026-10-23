@@ -11,6 +11,7 @@ import (
 	patmouse "github.com/jsdrews/tuilib/examples/patterns/mouse"
 	shelloutput "github.com/jsdrews/tuilib/examples/shell/output"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -41,7 +42,7 @@ func TestScreensFanMouseOutToEveryComponent(t *testing.T) {
 
 	for name, build := range screens {
 		t.Run(name, func(t *testing.T) {
-			s := build(theme.Dark())
+			s := build(theme.New(palette.Dark()))
 			s.Init()
 			s.OnEnter(nil)
 			// Render once so every component holds a rect stamped in the
@@ -89,7 +90,7 @@ func TestClickOnUnfocusedPaneIsDelivered(t *testing.T) {
 		// fan-out test above, which is the general assertion.
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := build(theme.Dark())
+			s := build(theme.New(palette.Dark()))
 			s.Init()
 			s.OnEnter(nil)
 			geom.NextGen()

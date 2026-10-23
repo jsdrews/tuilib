@@ -93,6 +93,7 @@ import (
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/pkg/activity"
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -101,6 +102,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/query"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Column declares one column's title, width (in visible cells), and cell
@@ -342,6 +344,10 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface surface.Resolved
 
 	// HScrollbar reserves a row at the bottom of the body pane and lets
 	// ←/h and →/l scroll wide tables horizontally. theme.Table() enables
@@ -354,6 +360,10 @@ type Options struct {
 	// SelectedStyle is applied to the highlighted row. theme.Table()
 	// uses bold + Accent fg + Subtle bg.
 	SelectedStyle lipgloss.Style
+	// SelectedBlurredStyle replaces SelectedStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise SelectedStyle applies whatever the focus.
+	SelectedBlurredStyle lipgloss.Style
 
 	// Markable adds a mark gutter and binds x / X / A / D, so the
 	// user can build a multi-selection the screen reads back with Selection().
@@ -654,11 +664,12 @@ type Model struct {
 	// SetRows / SetColumns so per-keystroke lookups stay cheap.
 	distinct [][]string
 
-	body          pane.Pane
-	headerStyle   lipgloss.Style
-	selectedStyle lipgloss.Style
-	cellStyle     lipgloss.Style
-	hScrollbar    bool
+	body            pane.Pane
+	headerStyle     lipgloss.Style
+	selectedStyle   lipgloss.Style
+	selectedBlurred lipgloss.Style
+	cellStyle       lipgloss.Style
+	hScrollbar      bool
 
 	colSep     string
 	headerRule string
@@ -708,36 +719,37 @@ func New(opts Options) Model {
 		colSep = " " + opts.Borders.Vertical + " "
 	}
 	m := Model{
-		glyphs:        opts.Glyphs.Resolve(),
-		cols:          cols,
-		rows:          append([]Row(nil), opts.Rows...),
-		filterable:    opts.Filterable,
-		filterMode:    opts.FilterMode,
-		sortMode:      opts.SortMode,
-		sortCol:       -1,
-		qSortCol:      -1,
-		winTotal:      -1,
-		phGlyph:       opts.Placeholder,
-		headerStyle:   opts.HeaderStyle,
-		selectedStyle: opts.SelectedStyle,
-		cellStyle:     opts.CellStyle,
-		markable:      opts.Markable,
-		marks:         map[string]bool{},
-		markStyle:     opts.MarkStyle,
-		act:           activity.New(opts.Activity),
-		actEnabled:    opts.ActivityColumn != "" || opts.BusyWhen != nil,
-		actColName:    opts.ActivityColumn,
-		busyWhen:      opts.BusyWhen,
-		revision:      opts.Revision,
-		hScrollbar:    opts.HScrollbar,
-		colSep:        colSep,
-		headerRule:    opts.Borders.HeaderRule,
-		keys:          opts.Keys,
-		token:         focus.NewToken(),
-		vpFirst:       -1,
-		vpLast:        -1,
-		vpTotal:       -1,
-		focusIdx:      -1,
+		glyphs:          opts.Glyphs.Resolve(),
+		cols:            cols,
+		rows:            append([]Row(nil), opts.Rows...),
+		filterable:      opts.Filterable,
+		filterMode:      opts.FilterMode,
+		sortMode:        opts.SortMode,
+		sortCol:         -1,
+		qSortCol:        -1,
+		winTotal:        -1,
+		phGlyph:         opts.Placeholder,
+		headerStyle:     opts.HeaderStyle,
+		selectedStyle:   opts.SelectedStyle,
+		selectedBlurred: opts.SelectedBlurredStyle,
+		cellStyle:       opts.CellStyle,
+		markable:        opts.Markable,
+		marks:           map[string]bool{},
+		markStyle:       opts.MarkStyle,
+		act:             activity.New(opts.Activity),
+		actEnabled:      opts.ActivityColumn != "" || opts.BusyWhen != nil,
+		actColName:      opts.ActivityColumn,
+		busyWhen:        opts.BusyWhen,
+		revision:        opts.Revision,
+		hScrollbar:      opts.HScrollbar,
+		colSep:          colSep,
+		headerRule:      opts.Borders.HeaderRule,
+		keys:            opts.Keys,
+		token:           focus.NewToken(),
+		vpFirst:         -1,
+		vpLast:          -1,
+		vpTotal:         -1,
+		focusIdx:        -1,
 	}
 	m.rq = remoteState{debounce: opts.SortDebounce, cSortCol: -1, baseTitle: opts.Title}
 	switch {
@@ -776,20 +788,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 	m.recomputeWidths()
 	m.refresh()
@@ -993,7 +1008,7 @@ func (m *Model) SetRect(r geom.Rect) {
 		// it reads as belonging to what it filters. Placing the pane first
 		// gives the header its width; setting the header then re-measures.
 		m.placeInlineFilter(r)
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		m.placeInlineFilter(r)
 	}
 	m.recomputeWidths()
@@ -1003,7 +1018,7 @@ func (m *Model) SetRect(r geom.Rect) {
 // placeInlineFilter puts the filter on the pane's first inner row.
 func (m *Model) placeInlineFilter(r geom.Rect) {
 	inner := m.body.ContentRect()
-	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the filter row plus a rule separating it from the content.
@@ -1012,11 +1027,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // rowCount is the number of rows the cursor can reach — the logical total
@@ -1247,6 +1258,23 @@ func (m *Model) SetTitle(s string) {
 // query they answer and the one in flight; Title returns the label alone.
 func (m Model) Title() string { return m.rq.baseTitle }
 
+// selection is the selected row's style: selectedStyle, or selectedBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.selectedBlurred
+	}
+	return m.selectedStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.selectedBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
+
 // Focus gives the component the keyboard, highlighting the body pane.
 //
 // It deliberately does nothing when the filter already owns input: a click on
@@ -1255,6 +1283,7 @@ func (m Model) Title() string { return m.rq.baseTitle }
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -1263,9 +1292,10 @@ func (m *Model) Focus() tea.Cmd {
 // invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.filterable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -1284,7 +1314,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -1295,7 +1325,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetActiveColor / SetInactiveColor update the body pane's border colors.
@@ -2245,16 +2275,17 @@ func (m *Model) refresh() {
 		}
 		cells = m.withActivity(i, cells)
 		row := renderRow([]string(cells), m.cols, m.widths, m.colSep)
-		sel, cell := m.selectedStyle, m.cellStyle
+		sel, cell := m.selection(), m.cellStyle
 		if stale {
 			sel, cell = sel.Faint(true), cell.Faint(true)
 		}
 		switch {
 		case i == m.cursor:
-			// One styled run over the whole row, gutter included: a nested
-			// mark style would close the highlight at its first reset and
-			// punch a hole in the selected row's background (rule 19).
-			b.WriteString(sel.Render(m.gutterFor(i) + row))
+			line := m.gutterFor(i) + row
+			if pad := m.body.ContentRect().W - ansi.StringWidth(line); pad > 0 {
+				line += strings.Repeat(" ", pad)
+			}
+			b.WriteString(tuiansi.RenderFill(sel.Render, line))
 		case m.markable && m.isMarkedAt(i):
 			b.WriteString(m.markStyle.Render(m.glyphs.Mark) +
 				cell.Render(" "+m.actGutterFor(i)+row))
@@ -2263,7 +2294,7 @@ func (m *Model) refresh() {
 		}
 	}
 	if m.filterable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	if m.remote() && m.rq.st.Failed && !m.rq.st.HasAnswer {
 		m.body.SetContent(m.failedBody())

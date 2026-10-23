@@ -9,6 +9,7 @@ import (
 	"github.com/jsdrews/tuilib/examples/patterns/multiselect"
 	"github.com/jsdrews/tuilib/pkg/action"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -23,7 +24,7 @@ const exW, exH = 100, 30
 
 func newMultiselect(t *testing.T) screen.Screen {
 	t.Helper()
-	s := multiselect.New(theme.Dark())
+	s := multiselect.New(theme.New(palette.Dark()))
 	s.Init()
 	s.OnEnter(nil)
 	render(s)
@@ -149,7 +150,7 @@ func TestMultiselectExampleMarksSurviveThemeSwap(t *testing.T) {
 	if !ok {
 		t.Fatal("multiselect screen no longer implements SetTheme")
 	}
-	th.SetTheme(theme.Light())
+	th.SetTheme(theme.New(palette.Light()))
 	render(s)
 
 	if got := actionsOf(t, s).Count; got != before {

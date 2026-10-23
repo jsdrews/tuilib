@@ -15,6 +15,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -36,7 +37,7 @@ type sectioned interface {
 
 func components(t *testing.T) map[string]sectioned {
 	t.Helper()
-	th := theme.Dark()
+	th := theme.New(palette.Dark())
 
 	lo := th.List()
 	lo.Filterable, lo.Markable = true, true

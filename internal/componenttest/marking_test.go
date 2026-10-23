@@ -9,6 +9,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
@@ -44,7 +45,7 @@ type markable interface {
 type listMark struct{ m list.Model }
 
 func newListMark(keyed bool) markable {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.Markable = true
 	o.Filterable = true
 	l := list.New(o)
@@ -82,7 +83,7 @@ func (l *listMark) filterTo(q string) {
 type tableMark struct{ m table.Model }
 
 func newTableMark(keyed bool) markable {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Markable = true
 	o.Filterable = true
 	o.Columns = []table.Column{{Title: "Name", Width: 16}, {Title: "Ready", Width: 6}}
@@ -124,7 +125,7 @@ func (t *tableMark) filterTo(q string) {
 // plainMarkableList / plainMarkableTable are the click fixtures: markable,
 // keyed, and *not* filterable, so no inline filter header shifts the rows.
 func plainMarkableList() *list.Model {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.Markable = true
 	l := list.New(o)
 	l.SetKeyedItems([]list.KeyedItem{
@@ -136,7 +137,7 @@ func plainMarkableList() *list.Model {
 }
 
 func plainMarkableTable() *table.Model {
-	o := theme.Dark().Table()
+	o := theme.New(palette.Dark()).Table()
 	o.Markable = true
 	o.Columns = []table.Column{{Title: "Name", Width: 16}}
 	tb := table.New(o)
@@ -173,7 +174,7 @@ func (n treeNode) Children() []tree.Node { return n.children }
 // different here: there is no anonymous tree. keyed=false turns marking off
 // instead, which is the tree's version of "the feature is inert".
 func newTreeMark(keyed bool) markable {
-	o := theme.Dark().Tree()
+	o := theme.New(palette.Dark()).Tree()
 	o.Markable = keyed
 	o.Searchable = true
 	o.InitialDepth = 9
@@ -530,7 +531,7 @@ func TestClickingTheRowBodyStillSelects(t *testing.T) {
 
 // Turning marking off must cost a row nothing.
 func TestGutterIsAbsentWhenMarkingIsOff(t *testing.T) {
-	o := theme.Dark().List()
+	o := theme.New(palette.Dark()).List()
 	o.Markable = false
 	l := list.New(o)
 	l.SetItems([]string{"alpha"})

@@ -30,10 +30,12 @@ import (
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/output"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/runner"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/source"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -42,9 +44,28 @@ type Options struct {
 	// Root is the root screen — the bottom of the nav stack. Required.
 	Root screen.Screen
 
-	// Themes is the list the user cycles through. At least one entry is
-	// required; Themes[0] is the initial theme.
-	Themes []theme.Theme
+	// Palettes and Surfaces are the two axes a user picks independently:
+	// the colours, and how components' edges and bodies are drawn. ThemeKey
+	// cycles palettes, SurfaceKey cycles surfaces, and every screen is
+	// themed with the pair composed (theme.Compose). Palettes defaults to
+	// [palette.Dark()] and Surfaces to [surface.Outlined]. The user's
+	// config file and the env vars below pick where each starts. See
+	// docs/surfaces.md.
+	Palettes []palette.Palette
+	Surfaces []surface.Surface
+
+	// SurfaceKey cycles Surfaces. Opt-in like ThemeKey: leave it zero and
+	// the app stays on its first surface (or the user's config choice).
+	SurfaceKey key.Binding
+
+	// PaletteEnvVar and SurfaceEnvVar name environment variables consulted
+	// for the starting palette and surface, before the user's config file.
+	PaletteEnvVar, SurfaceEnvVar string
+
+	// Capabilities pins what the terminal is assumed to offer — colour
+	// profile and block glyphs — instead of detecting it. For tests and
+	// screenshots; leave nil.
+	Capabilities *surface.Caps
 
 	// Version is rendered on the right side of the statusbar.
 	Version string
@@ -153,18 +174,9 @@ type Options struct {
 	// file, then to mouse.DefaultDoubleClickInterval.
 	DoubleClickInterval time.Duration
 
-	// ThemeEnvVar names an environment variable consulted for the initial
-	// theme during app.New (e.g. "MYAPP_THEME"). When the var is set to a
-	// theme's Name, that theme becomes Themes[0]. Empty string disables
-	// env-var lookup but the user config file is still consulted; see
-	// SkipConfig to disable both.
-	ThemeEnvVar string
-
-	// SkipConfig disables the automatic theme.Resolve call inside app.New.
-	// By default app.New reorders Themes so Themes[0] reflects the user's
-	// $XDG_CONFIG_HOME/tuilib/config.yaml `theme:` field (and ThemeEnvVar,
-	// when set) — set this to true if you've already called theme.Resolve
-	// yourself, or if you want to pin the app to Themes[0] regardless.
+	// SkipConfig ignores the user's config file and the env vars, so the
+	// app starts on Palettes[0] and Surfaces[0] with the double-click
+	// default — for tests, and apps pinned to one look.
 	SkipConfig bool
 
 	// DisableAutoEscPop turns off automatic esc→pop handling. When false
@@ -203,16 +215,28 @@ func (m MouseMode) enableCmd() tea.Cmd {
 	return nil
 }
 
-// SetThemeMsg asks the app to switch to the named theme and rebroadcast it
-// across the stack. Emit via SetTheme(name) from any screen.
-type SetThemeMsg struct{ Name string }
+// SetPaletteMsg asks the app to switch to the named palette and rebroadcast
+// the theme across the stack. Emit via SetPalette(name) from any screen.
+type SetPaletteMsg struct{ Name string }
 
-// SetTheme returns a command that tells the app shell to switch to the theme
-// whose Name matches. Useful for a theme-picker screen that wants to preview
-// palettes live as the cursor moves. No-op if no theme with that name is in
-// the app's Themes list.
-func SetTheme(name string) tea.Cmd {
-	return func() tea.Msg { return SetThemeMsg{Name: name} }
+// SetPalette returns a command that tells the app shell to switch to the
+// palette whose Name matches. Useful for a picker screen that previews
+// palettes live as the cursor moves. No-op if the app offers no palette by
+// that name.
+func SetPalette(name string) tea.Cmd {
+	return func() tea.Msg { return SetPaletteMsg{Name: name} }
+}
+
+// SetSurfaceMsg asks the app to switch to the named surface. Emit via
+// SetSurface(name) from any screen.
+type SetSurfaceMsg struct{ Name string }
+
+// SetSurface returns a command that tells the app shell to switch to the
+// surface whose Name matches — the surface counterpart of SetPalette, for a
+// picker that previews surfaces live. No-op if the app offers no surface by
+// that name.
+func SetSurface(name string) tea.Cmd {
+	return func() tea.Msg { return SetSurfaceMsg{Name: name} }
 }
 
 // StatusInfoMsg asks the app to show Text as an info message in the
@@ -311,9 +335,12 @@ type OutputClosed = output.Closed
 type Model struct {
 	w, h int
 
-	themes   []theme.Theme
-	themeIdx int
-	version  string
+	version string
+
+	// ax is the palette × surface state the theme is composed from.
+	ax           *axes
+	surfaceKey   key.Binding
+	lastFallback string
 
 	stack screen.Stack
 
@@ -428,21 +455,18 @@ func (m Model) overlayUp() bool { return m.menuUp || m.confUp || m.helpUp }
 // outputEnabled reports whether the console exists for this app.
 func (m Model) outputEnabled() bool { return m.outBuf != nil }
 
-// New constructs an app shell. By default it reorders Themes via
-// theme.Resolve so Themes[0] reflects the user's config file (and
-// ThemeEnvVar, when set) — pass SkipConfig=true to opt out. The root
-// screen's SetTheme is then called with the resulting Themes[0] so the
-// root renders in the initial palette immediately.
+// New constructs an app shell. The starting palette and surface come from
+// the env vars and the user's config file, unless SkipConfig; the root
+// screen's SetTheme is then called with the composed theme so the root
+// renders in it immediately.
 func New(opts Options) Model {
 	if opts.Root == nil {
 		panic("app.New: Options.Root is required")
 	}
-	if len(opts.Themes) == 0 {
-		opts.Themes = []theme.Theme{theme.Dark()}
+	if len(opts.Palettes) == 0 {
+		opts.Palettes = []palette.Palette{palette.Dark()}
 	}
-	if !opts.SkipConfig {
-		opts.Themes = theme.Resolve(opts.Themes, opts.ThemeEnvVar)
-	}
+	ax := newAxes(opts)
 	if opts.QuitKey.Keys() == nil {
 		opts.QuitKey = key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
@@ -472,16 +496,16 @@ func New(opts Options) Model {
 		}
 	}
 
-	t := opts.Themes[0]
+	t := ax.theme
 	opts.Root.SetTheme(t)
 
 	m := Model{
-		themes:      opts.Themes,
-		themeIdx:    0,
 		version:     opts.Version,
 		stack:       screen.NewStack(opts.Root),
 		quitKey:     opts.QuitKey,
 		themeKey:    opts.ThemeKey,
+		surfaceKey:  opts.SurfaceKey,
+		ax:          ax,
 		helpKey:     opts.HelpKey,
 		suspendKey:  opts.SuspendKey,
 		helpMinimal: !opts.HelpVerbose,
@@ -504,6 +528,7 @@ func New(opts Options) Model {
 		m.outBuf = output.NewBuffer(m.outOpts.MaxRecords)
 	}
 	m.apply()
+	m.logFallback()
 	return m
 }
 
@@ -558,7 +583,9 @@ func (m Model) Init() tea.Cmd {
 }
 
 // theme returns the currently-active palette.
-func (m Model) theme() theme.Theme { return m.themes[m.themeIdx] }
+func (m Model) theme() theme.Theme {
+	return m.ax.theme
+}
 
 // retheme pushes the current palette through the stack and the console, then
 // rebuilds the chrome.
@@ -588,6 +615,7 @@ func (m *Model) retheme() {
 		}
 	}
 	m.apply()
+	m.logFallback()
 }
 
 // apply rebuilds breadcrumb + statusbar from the current theme and stack.
@@ -912,13 +940,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.apply()
 		return m, cmd
 
-	case SetThemeMsg:
-		for i, t := range m.themes {
-			if t.Name == msg.Name {
-				m.themeIdx = i
-				m.retheme()
-				break
-			}
+	case SetPaletteMsg:
+		if m.ax.selectPalette(msg.Name) {
+			m.retheme()
+		}
+		return m, nil
+
+	case SetSurfaceMsg:
+		if m.ax.selectSurface(msg.Name) {
+			m.retheme()
 		}
 		return m, nil
 
@@ -1064,7 +1094,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			if m.themeKey.Keys() != nil && key.Matches(msg, m.themeKey) {
-				m.themeIdx = (m.themeIdx + 1) % len(m.themes)
+				m.ax.nextPalette()
+				m.retheme()
+				return m, nil
+			}
+			if m.surfaceKey.Keys() != nil && key.Matches(msg, m.surfaceKey) {
+				m.ax.nextSurface()
 				m.retheme()
 				return m, nil
 			}
@@ -1407,7 +1442,10 @@ func (m Model) View() string {
 	// while the menu is up.
 	switch {
 	case m.confUp:
-		body = layout.ZStack(body, layout.Center(52, 7, layout.Sized(m.conf)))
+		// Sized for five rows and fifty columns of content inside whatever
+		// edge the overlay form draws.
+		edge := m.theme().Surface.Overlay().Insets()
+		body = layout.ZStack(body, layout.Center(50+edge.Left+edge.Right, 5+edge.Top+edge.Bottom, layout.Sized(m.conf)))
 	case m.menuUp:
 		// No layout.Center wrapper — the menu treats the rect as outer
 		// bounds and places itself inside them.
@@ -1418,11 +1456,11 @@ func (m Model) View() string {
 		body = layout.ZStack(body, layout.Sized(m.helpOv))
 	}
 
-	return layout.VStack(
+	return m.screenPass(layout.VStack(
 		layout.Fixed(1, layout.Bar(&m.bc)),
-		layout.Flex(1, body),
+		layout.Flex(1, m.surfaceBody(body)),
 		layout.Fixed(1, layout.Bar(&m.sb)),
-	).Render(geom.New(0, 0, m.w, m.h))
+	).Render(geom.New(0, 0, m.w, m.h)))
 }
 
 // Theme exposes the app's current palette for screens that need it outside
@@ -1500,6 +1538,9 @@ func (m Model) helpSections() []help.Section {
 	}
 	if m.themeKey.Keys() != nil {
 		globals = append(globals, m.themeKey)
+	}
+	if m.surfaceKey.Keys() != nil {
+		globals = append(globals, m.surfaceKey)
 	}
 	if m.autoEscPop && m.stack.Depth() > 1 {
 		globals = append(globals, key.NewBinding(

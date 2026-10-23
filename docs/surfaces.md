@@ -1,6 +1,6 @@
 # Surfaces — spec
 
-Status: **specified, not built.** Every decision here was made on the map
+Status: **built.** Every decision here was made on the map
 [Map: surfaces — card-style theming](https://github.com/jsdrews/tuilib/issues/111),
 and each section links the ticket that holds its reasoning. The vocabulary is in
 `CONTEXT.md` § Surfaces.
@@ -49,8 +49,9 @@ Each step ships on its own and leaves the library working.
    surface's role, fallback logging, config keys.
 7. **Migration** of the library's examples and the six downstream modules,
    with a "Migrating to surfaces" section in this doc's successor guide.
-8. **The surface demo** (`examples/shell/chrome` becomes it), defining one
-   custom surface as a struct literal.
+8. **The surface demo**: `examples/shell/surfaces` (was `shell/chrome`), a
+   live surface picker that defines two custom surfaces, Ruled and Lipped,
+   as struct literals offered beside the built-ins.
 
 ## Packages
 
@@ -61,7 +62,9 @@ Imports point one way: `pane → surface`, `palette → surface`, and
   `Resolve`, and the resolved type. All colour maths lives here.
 - **`pkg/palette`** (leaf, imports `surface`): `Palette`, the 19 named palettes
   (`palette.Dark()`, `palette.FromBase16`, `palette.Terminal()`, `palette.All()`),
-  `ByName`, `Resolve`.
+  `ByName`. Picking the starting palette and surface from env and config lives
+  in the app shell, which already reads `pkg/config`, so `palette` depends on
+  nothing but `surface`.
 - **`pkg/theme`** keeps `Theme` = palette + surface + glyphs, and the
   `th.Component()` builders, which need all three. It is not renamed.
 
@@ -75,9 +78,10 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
 
 - **Name**, for config matching and pickers.
 - **Edges per side:** glyphs, the cells each side takes, and where each glyph's
-  background comes from: the **card**, the **parent** (whatever contains the
-  surface), or **reversed** (Textual's `BORDER_LOCATIONS`; it is what makes
-  half-block edges expressible).
+  background comes from: the **card** (the `Fill` role), or the **parent**
+  (whatever contains the surface; the `Parent` role). Textual's "reversed"
+  placement needs no third value: a half-block lip is a glyph in `Fill` on
+  `Parent`, which is what makes half-block edges expressible.
 - **Text rows:** every surface has a top and a bottom text row, so all five
   slots (title, top-right, bottom-left, bottom-middle, bottom-right) exist on
   every surface. The surface decides how each row looks: a line with text
@@ -91,6 +95,11 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
 - **Selection treatment** (see [Selection](#selection)).
 - **Bar role:** which role the breadcrumb and statusbar sit on.
 - **Overlay form:** another surface value for modals (see [Overlays](#overlays)).
+- **Field form:** another surface value for single-line components — input,
+  filter, toggle — which screens place in three-row slots, so it takes at
+  most one cell of edge per side. Nil derives it: a lined surface is its own
+  field, and anything else draws an outlined field (Material's outlined text
+  field). Theme builders hand `Input()`, `Filter()` and `Toggle()` this form.
 - **Needs and fallback:** minimum colour depth, whether it uses block glyphs, and
   the `Fallback` surface (see [Degraded terminals](#degraded-terminals)).
 
@@ -104,10 +113,17 @@ Colours appear only as roles, never as literals.
 - **Margins:** a filled surface's edge includes one cell on its right and bottom,
   drawn with no background, so whatever contains it paints it: an outer pane's
   fill pass, or at the top level the shell's screen pass. Adjacent cards end up
-  exactly one cell apart. Elevated's shadow *is* its margin. Outlined has none.
-- **The shell pads the body** one column on the left and one row on top when the
-  current surface has margins, so the screen's edges match. `layout` knows
-  nothing about any of this.
+  exactly one cell apart. Elevated's shadow *is* its margin. Filled keeps a
+  right margin only: its lips are its vertical margin, since the lower half of
+  one card's `▀` and the upper half of the next card's `▄` leave exactly one
+  row of screen between them. Outlined has none.
+- **The shell pads the body** one column on the left when the current surface
+  has a right margin (`Surface.Margined`), so the screen's left edge matches
+  the gaps between cards; and one row under the breadcrumb when the surface's
+  top edge starts with a solid row (`Surface.TopGap`: Banded, Elevated,
+  Accented), which would otherwise sit jammed against it. A top edge that is
+  already a lip or a line (Filled, Outlined) brings its own gap. `layout`
+  knows nothing about any of this.
 - **Hit-testing:** `pane.RowAt`, scrollbar hits and slot clicks derive from the
   surface's per-side edge space. A click on a margin or shadow cell is in the
   rect but outside the card, so the component declines it (rule 28).
@@ -125,29 +141,77 @@ Every role is **derived** from the palette, and any role can be **overridden**
 per palette with `Palette.Surface map[surface.Role]lipgloss.TerminalColor`, where
 a missing key means derive.
 
-"Lift" mixes toward `Foreground` in OKLab. On light palettes, cards lift toward
-white.
+"Lift" raises OKLab lightness toward the `Foreground`'s while keeping the
+background's own hue and chroma — tonal elevation, as in Material's dark
+surfaces. Mixing toward the text colour instead dragged its tint in: Gruvbox's
+neutral screen grew beige cards, and Everforest's tones each landed on a
+different hue. On light palettes, cards lift toward white.
 
 | Role | Used for | Derived (dark) | Derived (light) |
 |---|---|---|---|
-| `Screen` | behind and between surfaces | `Background` | `Background` |
-| `Card` | surface fill | lift 8% | toward white 70% |
-| `CardRaised` | focused fill | lift 13% | toward white 90% |
-| `Band` | Banded's header, Filled's divider step | lift 18% | darken 6% |
-| `Overlay` | overlay-form fill | lift 16% | white |
+| `Screen` | behind and between surfaces | `Background` | `Background`, a step darker (−0.05 lightness) so near-white cards stand off it |
+| `Card` | surface fill | lift 3.5% | toward white 70% |
+| `CardRaised` | focused fill | lift 6.5% | toward white 90% |
+| `Band` | Banded's header, Filled's divider step | lift 10% | darken `Card` 6% |
+| `Overlay` | overlay-form fill | lift 17% | white |
 | `Shadow` | Elevated's shadow | darken `Screen` 60% | darken `Screen` 22% |
-| `Selection` | focused selected row | `Card` mixed 45% toward `EdgeActive` | same |
+| `Selection` | focused selected row | `Card` mixed 22% toward `EdgeActive` | 45% |
 | `SelectionDim` | blurred selected row | lift `Card` 12% | same |
 | `Bar` | bars under Outlined | `BarBG` | same |
 | `Text` / `TextMuted` | body text on filled surfaces | `Foreground` / `Muted` | same |
-| `Edge` / `EdgeActive` | lines, the active band | `BorderInactive` / `BorderActive` | same |
-| `Divider` / `Accent` | | `Subtle` / `Accent` | same |
+| `Edge` / `EdgeActive` | lines, the active band | `BorderInactive` (kept clear of `CardRaised`) / `BorderActive` | same |
+| `Divider` / `Accent` | rules, separators, placeholders / emphasis | `Subtle` (kept clear of `CardRaised`) / `Accent` | same |
 
 The percentages are starting points to tune, not spec.
 
 - **Contrast floor:** a derived tone too close in lightness to the role beneath
   it is pushed further: `Card` on `Screen`, `CardRaised` on `Card`, `Band` on
-  `Card`, `Selection` on `Card`.
+  `Card`, `Selection` on `Card`, and `Overlay` on `CardRaised` — wider, 0.05,
+  on a dark palette, since a modal opens over a focused card and one tone step
+  above it reads as the same surface.
+- **Elevation only rises.** On a dark palette a card, a focused card, a band
+  and a modal are each pushed *up* from what they sit on when they fall
+  inside the floor, never back down — at truecolor and after rounding to
+  xterm-256. Pushing whichever way a tone leaned once landed Solarized's
+  focused card exactly on its screen colour: its card had been pushed above
+  the focused card's lift, and the focused card was then pushed back past it.
+- **Minimum span.** Dark lifts are fractions of the span from background to
+  text, but at least 0.55 of it. A deliberately low-contrast palette —
+  Solarized's text is a mid-grey, a span of 0.39 — would otherwise get cards
+  that barely rise.
+- **Chrome floor:** `Divider` and `Edge` keep at least 0.12 lightness from a
+  focused card. The palette chose `Subtle` and `BorderInactive` to sit on its
+  own background, and a card lifts away from it: on a dark palette the rules,
+  separators and placeholders inside a card would otherwise vanish into it
+  (Nord's and Dracula's sat 0.01–0.02 from a focused card). On a filled
+  surface the theme's `Subtle` is the `Divider` tone, so everything drawn
+  with it inside a card follows.
+- **Selection on dark palettes** is a state layer, a 22% tint of the accent
+  over the card, rather than the 45% mix light palettes use: on a dark card
+  the stronger mix made a bright, saturated block that outshone everything
+  around it.
+- **Vibrance:** before the contrast floor, text colours' chroma is boosted in
+  their own hue — `Accent` ×1.3, `TextMuted` ×1.2, `Text` ×1.15 — as far as
+  the RGB gamut allows without shifting hue. A card's tone sits between the
+  palette's background and text, which mutes what is drawn on it; the boost
+  gives the colour back.
+- **Text contrast floor:** on every card tone, body text (`Text`, and the
+  theme's `Current` emphasis) keeps at least a 14:1 WCAG contrast ratio,
+  secondary text (`TextMuted`, the theme's `Muted`) at least 8:1, and
+  `Accent` at least 7:1 (further would wash out its colour). A colour is
+  moved in its own hue first; when the hue runs out — a tinted colour can't
+  get as bright as white — it gives up tint, blending toward white or black
+  only as far as the floor needs. Past pure white there is nowhere left:
+  Nord's text tops out at 10.2:1 on a focused card, Dracula's at 11.8:1,
+  Gruvbox's at 12.3:1. Each is moved in lightness, in its own hue, against whichever card
+  is worst for it. Dark palettes need it because every lift moves a card
+  toward its text: Nord's text went from 9.2:1 on the screen to 6.8:1 on a
+  focused card, and Dracula's secondary text sat at 2.1:1. Light palettes
+  need it because pale accents sink into near-white cards: Catppuccin
+  Latte's accent was 2.5:1. On a filled surface the theme's `Muted`,
+  `Accent` and `Current` are the floored colours, since components draw
+  labels, headers and titles with them directly. `surface.Contrast` and
+  `surface.EnsureContrast` are the helpers.
 - **Text:** filled surfaces paint body text in `Text`, and the fill pass
   re-opens the foreground as well as the background. Outlined keeps the
   terminal's own colours.
@@ -192,7 +256,11 @@ findings in `research/background-fill-audit.md`)
   list's bold `Accent` foreground with no background, a `Subtle` background in
   the others, and no difference on blur. Filled, Banded, Elevated and Accented
   declare a `Selection` background with `Text` foreground in every component,
-  and `SelectionDim` when the pane is blurred.
+  and `SelectionDim` when the pane is blurred. Each row component carries the
+  blurred style as its own option (`SelectedBlurredStyle` on list, table and
+  eventlog; `CurrentLineBlurredStyle` on tree, inspector, logview and
+  textview), set by the theme and used only when it sets a background, and
+  redraws its rows on a focus change when it has one.
 
 ([Selection on filled surfaces](https://github.com/jsdrews/tuilib/issues/124))
 
@@ -217,8 +285,10 @@ findings in `research/background-fill-audit.md`)
 The surface names the role the breadcrumb and statusbar sit on. Outlined uses
 `Bar` (byte-identical). Filled, Banded, Elevated and Accented use `Screen`, so
 the cards float in one field. Bar text keeps `BarFG`, falling back to `Text`
-under the contrast floor. Info and Error keep their own bands. The `? help`
-affordance and the inline hints take the bar's role as their background.
+when it isn't legible there (`surface.Legible`: an OKLab lightness distance of
+at least 0.25, well above the tone floor). Outlined keeps the palette's own
+pair untouched. Info and Error keep their own bands. The `? help` affordance
+and the inline hints take the bar's role as their background.
 
 ([Bars on filled surfaces](https://github.com/jsdrews/tuilib/issues/123))
 
@@ -230,13 +300,14 @@ affordance and the inline hints take the bar's role as their background.
 - **Config:** `config.yaml` gains `palette:` (with `theme:` read as an alias),
   `surface:` (matched by name from what the app offers, ignored when it offers
   one) and `block_glyphs:`.
-- **Env:** `ThemeEnvVar` becomes `PaletteEnvVar`, plus a new `SurfaceEnvVar`.
+- **Env:** `PaletteEnvVar` (was `ThemeEnvVar`) and `SurfaceEnvVar`.
+- **Live preview:** `app.SetPalette(name)` (was `SetTheme`).
 - **Screens need nothing new.** A swap is a new `Theme` through the existing
   `SetTheme` path, and rule 4's `State`/`Restore` covers it.
 - **Chrome moves:** `BorderShapeActive`/`Inactive` become Outlined's edge glyphs
   (`surface.OutlinedWith(lipgloss.RoundedBorder())` for a variant).
-  `SlotBrackets` become text-row data. `Glyphs` stay on `Theme`, except
-  `Glyphs.Rule`, which is the divider now.
+  `SlotBrackets` become `Surface.Brackets`. `Glyphs` stay on `Theme`, except
+  `Glyphs.Rule`, which is `Surface.Divider.Glyph` now.
 
 ### Per-component overrides
 
@@ -304,22 +375,36 @@ Downstream apps get the same assertions as a `pkg/screentest` rule,
 
 ## Migration
 
-This is a clean break in one minor version. There are no Go shims.
+This is a clean break in one minor version. There are no Go shims. The one
+thing kept is the config key: users' config files are outside any app's
+control, so `theme:` is still read when `palette:` is unset.
 
 | Before | After |
 |---|---|
-| `theme.Dark()` (and every named palette) | `palette.Dark()` |
-| `theme.All()`, `theme.ByName`, `theme.Resolve` | `palette.All()`, `palette.ByName`, `palette.Resolve` |
-| `app.Options.Themes` | `app.Options.Palettes` |
+| `theme.Dark()` (and every named palette), as a `Theme` | `theme.New(palette.Dark())`; as a palette, `palette.Dark()` |
+| `theme.All()` | `palette.All()` |
+| `theme.ByName(themes, name)` | `palette.ByName(palettes, name)` |
+| `theme.Resolve(themes, envVar)` | gone: `app.New` picks the start from `PaletteEnvVar` and the config file |
+| `theme.FromBase16`, `theme.Base16` | `palette.FromBase16`, `palette.Base16` |
+| `theme.Terminal()` | `palette.Terminal()` |
+| a `Theme` literal | a `palette.Palette` literal; `Theme` embeds it, so `t.Accent` still reads |
+| `app.Options.Themes: []theme.Theme{…}` | `app.Options.Palettes: []palette.Palette{…}` |
 | `app.Options.ThemeEnvVar` | `app.Options.PaletteEnvVar` |
-| `Theme.BorderShapeActive/Inactive` | a surface: `surface.OutlinedWith(shape)` |
-| `Theme.BorderShapeOverlay` | the surface's `Overlay` form |
-| `Theme.SlotBrackets` | text-row data on the surface |
-| `Glyphs.Rule` | the surface's divider |
+| `app.SetTheme(name)`, `app.SetThemeMsg` | `app.SetPalette(name)`, `app.SetPaletteMsg` |
+| `Theme.BorderShapeActive/Inactive` | a surface: `t.Surface = t.Resolve(surface.OutlinedWith(shape))` |
+| `Theme.BorderShapeOverlay` | the surface's `Overlay` form: `s.Overlay = &overlay` |
+| `Theme.SlotBrackets` | `Surface.Brackets` (`pane.SlotBracketStyle` is now `surface.Brackets`) |
+| `Glyphs.Rule` | `Surface.Divider.Glyph` |
 | `config.yaml` `theme:` | `palette:` (`theme:` still read) |
 
-Six local modules need migrating: tui-builder, tuiquery, tuiquery_old,
-tuilib-skills and its golden app, and tuilib-detailed-progress.
+`Options.Surfaces` defaults to `[surface.Outlined]`, so an app that migrates
+these calls and nothing else draws exactly what it drew before; the Outlined
+goldens hold that.
+
+The local modules that use tuilib — tui-builder (v0.35.0), tuiquery (v0.21.0)
+and tuiquery_old — pin released versions, so they migrate when a release
+carries this change. tuilib-skills and tuilib-detailed-progress are other
+checkouts of tuilib itself, not consumers.
 
 ## Out of scope
 

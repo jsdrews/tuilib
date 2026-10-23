@@ -39,6 +39,7 @@ Masking is display-only, so "reveal password" is just
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"input"` | Border title; use the field's label. |
+| `Surface` | `surface.Resolved` | the surface's field form, which fits a three-row slot | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Placeholder` | `string` | `""` | Shown while empty. |
 | `Initial` | `string` | `""` | Pre-filled value. |
 | `Prompt` | `string` | `""` | Drawn before the cursor. |

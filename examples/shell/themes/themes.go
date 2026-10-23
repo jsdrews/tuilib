@@ -1,6 +1,6 @@
-// Package themecheck is an interactive theme picker. The list screen shows
-// every built-in theme; moving the cursor re-skins the whole app live via
-// app.SetTheme. Enter drills into a detail screen that dumps every Theme
+// Package themes is an interactive palette picker. The list screen shows
+// every built-in palette; moving the cursor re-skins the whole app live via
+// app.SetPalette. Enter drills into a detail screen that dumps every palette
 // field with a swatch and the value rendered in that color.
 package themes
 
@@ -16,27 +16,28 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// Themes is the picker's full theme set: theme.Terminal() first (live palette
-// read at startup), then every built-in. Launchers can reuse this as the
-// app-wide Themes list so SetTheme names resolve.
-func Themes() []theme.Theme {
-	return append([]theme.Theme{theme.Terminal()}, theme.All()...)
+// Palettes is the picker's full palette set: palette.Terminal() first (read
+// from the terminal at startup), then every built-in. Launchers can reuse
+// this as the app-wide Palettes list so SetPalette names resolve.
+func Palettes() []palette.Palette {
+	return append([]palette.Palette{palette.Terminal()}, palette.All()...)
 }
 
 type listScreen struct {
-	t      theme.Theme
-	themes []theme.Theme
-	list   list.Model
+	t        theme.Theme
+	palettes []palette.Palette
+	list     list.Model
 }
 
 // New constructs the picker's root screen.
 func New(t theme.Theme) screen.Screen {
-	s := &listScreen{themes: Themes()}
+	s := &listScreen{palettes: Palettes()}
 	s.SetTheme(t)
 	return s
 }
@@ -53,15 +54,15 @@ func (s *listScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	s.list, cmd = s.list.Update(msg)
 
 	// Live preview: cursor moved → tell the app to swap to that theme.
-	if c := s.list.Cursor(); c != prevCursor && c < len(s.themes) {
-		return s, tea.Batch(cmd, app.SetTheme(s.themes[c].Name))
+	if c := s.list.Cursor(); c != prevCursor && c < len(s.palettes) {
+		return s, tea.Batch(cmd, app.SetPalette(s.palettes[c].Name))
 	}
 
 	if s.list.IsActivate(msg) {
 		if name, ok := s.list.Selected(); ok {
-			for _, th := range s.themes {
-				if th.Name == name {
-					return s, tea.Batch(cmd, screen.Push(newDetailScreen(th)))
+			for _, p := range s.palettes {
+				if p.Name == name {
+					return s, tea.Batch(cmd, screen.Push(newDetailScreen(theme.New(p))))
 				}
 			}
 		}
@@ -85,15 +86,15 @@ func (s *listScreen) SetTheme(t theme.Theme) {
 	cursor := s.list.Cursor()
 	opts := t.List()
 	opts.Title = "Themes"
-	opts.Items = themeNames(s.themes)
+	opts.Items = paletteNames(s.palettes)
 	s.list = list.New(opts)
 	s.list.SetCursor(cursor)
 }
 
-func themeNames(ts []theme.Theme) []string {
-	out := make([]string, len(ts))
-	for i, t := range ts {
-		out[i] = t.Name
+func paletteNames(ps []palette.Palette) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Name
 	}
 	return out
 }

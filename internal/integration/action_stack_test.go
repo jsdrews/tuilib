@@ -15,6 +15,7 @@ import (
 	exactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/glyph"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -54,8 +55,8 @@ func newActionApp(t *testing.T) (*harness, *httptest.Server) {
 	t.Setenv(demoapi.EnvBase, srv.URL)
 
 	m := app.New(app.Options{
-		Root:       exactivity.New(theme.Dark()),
-		Themes:     []theme.Theme{theme.Dark()},
+		Root:       exactivity.New(theme.New(palette.Dark())),
+		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Mouse:      app.MouseClick,
 		ActionsKey: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "actions")),

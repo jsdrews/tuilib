@@ -9,6 +9,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/help"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
@@ -16,7 +17,7 @@ func press(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: [
 
 func newTestScreen(t *testing.T, buf *Buffer) *Screen {
 	t.Helper()
-	opts := OptionsFrom(theme.Dark())
+	opts := OptionsFrom(theme.New(palette.Dark()))
 	opts.ExportDir = t.TempDir()
 	s := NewScreen(buf, opts)
 	// Give the logview a rect, as layout would.

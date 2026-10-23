@@ -1,0 +1,36 @@
+[48;5;236m [0m[38;5;252;48;5;236m[1;38;5;255;48;5;236mTextView[0m[0m[48;5;236m [0m[48;5;236m                                                                                                              [0m
+[94m┌[0m[94m[0m README.md [94m[0m[94m────────────────────────────────────────────────[0m[94m───────────────────────────────────────────────────────────[0m[94m┐[0m
+[94m│[0m[1;38;5;240m/ [0m[38;5;240ms[0m[38;5;240mearch…[0m                                                                                                             [94m│[0m
+[94m│[0m───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── [94m│[0m
+[94m│[0m# tuilib                                                                                                             █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0mtuilib is a set of Bubble Tea components for building TUIs where the                                                 █[94m│[0m
+[94m│[0mnon-domain work — layout math, theme swap, focus routing, statusbar                                                  █[94m│[0m
+[94m│[0mmessages — is handled by the framework so screens can focus on data.                                                 █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0m## What it gives you                                                                                                 █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0m- pkg/app: the root shell (breadcrumb, statusbar, esc-pop, theme cycle).                                             █[94m│[0m
+[94m│[0m- pkg/layout: declarative VStack/HStack/ZStack layout — no "m.h - 2" math.                                           █[94m│[0m
+[94m│[0m- pkg/list, pkg/table, pkg/tree, pkg/inspector: cursor-driven viewers.                                               █[94m│[0m
+[94m│[0m- pkg/logview: streaming log tail with search and follow.                                                            █[94m│[0m
+[94m│[0m- pkg/textview: static text viewer with search + wrap.                                                               █[94m│[0m
+[94m│[0m- pkg/form, pkg/input, pkg/toggle, pkg/filter: bordered inputs.                                                      █[94m│[0m
+[94m│[0m- pkg/confirm, pkg/alert: modal dialogs with typed result messages.                                                  █[94m│[0m
+[94m│[0m- pkg/poll: interval ticker for auto-refresh screens.                                                                █[94m│[0m
+[94m│[0m- pkg/runner: run an editor / pager / TUI subprocess and get a Result back.                                          █[94m│[0m
+[94m│[0m- pkg/theme: one palette, many components, live cycling.                                                             █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0m## Getting started                                                                                                   █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0m    go get github.com/jsdrews/tuilib                                                                                 █[94m│[0m
+[94m│[0m                                                                                                                     █[94m│[0m
+[94m│[0mThen compose a screen inside the app shell — see examples/shell/stack for                                            █[94m│[0m
+[94m│[0mthe canonical "one master list pushing a detail screen" shape, or                                                    ░[94m│[0m
+[94m│[0mexamples/launcher for how the examples themselves are wired.                                                         ░[94m│[0m
+[94m│[0m                                                                                                                     ░[94m│[0m
+[94m│[0m## Design principles                                                                                                 ░[94m│[0m
+[94m│[0m                                                                                                                     ░[94m│[0m
+[94m│[0m1. Data-first components — pass a slice, get a view; no template layer.                                              ░[94m│[0m
+[94m└[0m[94m───────────────────────────────────────────────────────────[0m[94m───────────────────────────────────────────────────────[0m[94m[0m 0% [94m[0m[94m┘[0m
+[48;5;236m [0m[38;5;252;48;5;236m[1;38;5;75;48;5;236m?[0m[38;5;252;48;5;236m [0m[38;5;252;48;5;236mhelp[0m[38;5;252;48;5;236m                                                                                                      [0m[0m[48;5;236m [0m[48;5;236m [0m[38;5;252;48;5;236mexamples[0m[48;5;236m [0m

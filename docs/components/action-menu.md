@@ -61,6 +61,7 @@ The menu reports what was chosen and never runs anything; the host decides
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"Actions"` | Border title; the set's `Target` is appended. |
+| `Surface` | `surface.Resolved` | the surface's overlay form, filled so it covers what is under it | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Set` | `action.Set` | | The verbs and what they act on. |
 | `LabelStyle`, `DescStyle`, `KeyStyle` | `lipgloss.Style` | theme | Row text. |
 | `SelectedStyle` | `lipgloss.Style` | bold accent | Cursor row. |

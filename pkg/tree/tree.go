@@ -36,6 +36,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/activity"
+	"github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
@@ -43,6 +44,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // Node is the minimal contract a caller's data must satisfy. Label is the
@@ -103,6 +105,10 @@ type Options struct {
 	// padded out to the pane's inner width. theme.Tree() seeds a subtle
 	// background.
 	CurrentLineStyle lipgloss.Style
+	// CurrentLineBlurredStyle replaces CurrentLineStyle while the component doesn't have focus,
+	// so the selected row says which pane the keys go to. Used only when it
+	// sets a background; otherwise CurrentLineStyle applies whatever the focus.
+	CurrentLineBlurredStyle lipgloss.Style
 
 	// Pane pass-throughs. See pkg/pane.Options for defaults.
 	ActiveColor    lipgloss.TerminalColor
@@ -114,7 +120,11 @@ type Options struct {
 	// glyph.Default.
 	Glyphs       glyph.Set
 	SlotBrackets pane.SlotBracketStyle
-	HScrollbar   bool
+	// Surface is how the component's edge and body are drawn. Zero keeps the
+	// line border; a theme sets it from the app's chosen surface. See
+	// docs/surfaces.md.
+	Surface    surface.Resolved
+	HScrollbar bool
 
 	// SpinnerStyle is applied to the spinner glyph rendered while the
 	// tree is in its loading state (see SetLoading). Pass via theme.Tree()
@@ -301,8 +311,9 @@ type Model struct {
 	// return value, flushed on the next Update.
 	actCmd tea.Cmd
 
-	matchStyle       lipgloss.Style
-	currentLineStyle lipgloss.Style
+	matchStyle         lipgloss.Style
+	currentLineStyle   lipgloss.Style
+	currentLineBlurred lipgloss.Style
 
 	keys Keys
 
@@ -348,20 +359,21 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:           opts.Glyphs.Resolve(),
-		token:            focus.NewToken(),
-		root:             opts.Root,
-		expanded:         map[string]bool{},
-		searchable:       opts.Searchable,
-		markable:         opts.Markable,
-		markStyle:        opts.MarkStyle,
-		act:              activity.New(opts.Activity),
-		busyWhen:         opts.BusyWhen,
-		revision:         opts.Revision,
-		matchStyle:       opts.MatchStyle,
-		currentLineStyle: opts.CurrentLineStyle,
-		keys:             opts.Keys,
-		matchIdx:         -1,
+		glyphs:             opts.Glyphs.Resolve(),
+		token:              focus.NewToken(),
+		root:               opts.Root,
+		expanded:           map[string]bool{},
+		searchable:         opts.Searchable,
+		markable:           opts.Markable,
+		markStyle:          opts.MarkStyle,
+		act:                activity.New(opts.Activity),
+		busyWhen:           opts.BusyWhen,
+		revision:           opts.Revision,
+		matchStyle:         opts.MatchStyle,
+		currentLineStyle:   opts.CurrentLineStyle,
+		currentLineBlurred: opts.CurrentLineBlurredStyle,
+		keys:               opts.Keys,
+		matchIdx:           -1,
 	}
 
 	bodyH := opts.Height
@@ -373,20 +385,23 @@ func New(opts Options) Model {
 	}
 
 	m.body = pane.New(pane.Options{
-		Width:          opts.Width,
-		Height:         bodyH,
-		Title:          opts.Title,
-		Focused:        true,
-		ActiveColor:    opts.ActiveColor,
-		InactiveColor:  opts.InactiveColor,
-		ActiveBorder:   opts.ActiveBorder,
-		InactiveBorder: opts.InactiveBorder,
-		Glyphs:         opts.Glyphs,
-		SlotBrackets:   opts.SlotBrackets,
-		HScrollbar:     opts.HScrollbar,
-		SpinnerStyle:   opts.SpinnerStyle,
-		LoadingLabel:   opts.LoadingLabel,
-		Keys:           opts.Keys.Pane,
+		DividerStyle:       m.filterRuleInactive,
+		DividerActiveStyle: m.filterRuleActive,
+		Width:              opts.Width,
+		Height:             bodyH,
+		Title:              opts.Title,
+		Focused:            true,
+		ActiveColor:        opts.ActiveColor,
+		InactiveColor:      opts.InactiveColor,
+		ActiveBorder:       opts.ActiveBorder,
+		InactiveBorder:     opts.InactiveBorder,
+		Glyphs:             opts.Glyphs,
+		SlotBrackets:       opts.SlotBrackets,
+		Surface:            opts.Surface,
+		HScrollbar:         opts.HScrollbar,
+		SpinnerStyle:       opts.SpinnerStyle,
+		LoadingLabel:       opts.LoadingLabel,
+		Keys:               opts.Keys.Pane,
 	})
 
 	if opts.Root != nil {
@@ -689,7 +704,7 @@ func (m *Model) SetRect(r geom.Rect) {
 		// it reads as belonging to what it filters. Placing the pane first
 		// gives the header its width; setting the header then re-measures.
 		m.placeInlineFilter(r)
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 		m.placeInlineFilter(r)
 	}
 	m.refresh()
@@ -698,7 +713,7 @@ func (m *Model) SetRect(r geom.Rect) {
 // placeInlineFilter puts the filter on the pane's first inner row.
 func (m *Model) placeInlineFilter(r geom.Rect) {
 	inner := m.body.ContentRect()
-	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.Rect().Y + 1, W: inner.W, H: 1, Gen: r.Gen})
+	m.filter.SetInlineRect(geom.Rect{X: inner.X, Y: m.body.InnerRect().Y, W: inner.W, H: 1, Gen: r.Gen})
 }
 
 // filterHeader is the filter row plus a rule separating it from the content.
@@ -707,11 +722,7 @@ func (m Model) filterHeader() string {
 	if inner <= 0 {
 		return ""
 	}
-	rule := m.filterRuleInactive
-	if m.filter.Focused() {
-		rule = m.filterRuleActive
-	}
-	return m.filter.InlineView() + "\n" + rule.Render(strings.Repeat(m.glyphs.Rule, inner))
+	return m.filter.InlineView()
 }
 
 // SetTitle sets the pane's top-left title.
@@ -719,6 +730,23 @@ func (m *Model) SetTitle(s string) { m.body.SetTitle(s) }
 
 // Title returns the label on the pane's border.
 func (m Model) Title() string { return m.body.Title() }
+
+// selection is the selected row's style: currentLineStyle, or currentLineBlurred
+// while the component is blurred and that style sets a background.
+func (m Model) selection() lipgloss.Style {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !m.body.Focused() && !unset {
+		return m.currentLineBlurred
+	}
+	return m.currentLineStyle
+}
+
+// refocused redraws the rows after a focus change, when the selected row
+// looks different blurred.
+func (m *Model) refocused() {
+	if _, unset := m.currentLineBlurred.GetBackground().(lipgloss.NoColor); !unset {
+		m.refresh()
+	}
+}
 
 // Focus gives the component the keyboard, highlighting the body pane.
 //
@@ -728,6 +756,7 @@ func (m Model) Title() string { return m.body.Title() }
 // filter kept the keystrokes.
 func (m *Model) Focus() tea.Cmd {
 	m.body.SetFocused(true)
+	m.refocused()
 	return nil
 }
 
@@ -736,9 +765,10 @@ func (m *Model) Focus() tea.Cmd {
 // invisibly eating keys.
 func (m *Model) Blur() {
 	m.body.SetFocused(false)
+	m.refocused()
 	if m.searchable {
 		m.filter.Blur()
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 }
 
@@ -757,7 +787,7 @@ func (m *Model) FocusFilter() tea.Cmd {
 	// the component that has focus. The filter row shows where input goes.
 	m.body.SetFocused(true)
 	cmd := m.filter.Focus()
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	return cmd
 }
 
@@ -768,7 +798,7 @@ func (m *Model) BlurFilter() {
 	}
 	m.filter.Blur()
 	m.body.SetFocused(true)
-	m.body.SetHeader(m.filterHeader())
+	m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 }
 
 // SetActiveColor updates the body pane's active border color.
@@ -1031,7 +1061,7 @@ func (m *Model) refresh() {
 	}
 
 	if m.searchable {
-		m.body.SetHeader(m.filterHeader())
+		m.body.SetDividedHeader(m.filterHeader(), m.filter.Focused())
 	}
 	m.body.SetContent(m.renderContent())
 	m.body.EnsureVisible(m.cursor)
@@ -1311,72 +1341,40 @@ func (m *Model) formatRow(r row, current bool) string {
 		return gutter + indent + glyph + m.highlightLabel(label)
 	}
 
-	base := m.currentLineStyle
+	base := m.selection()
 	matchOnRow := m.matchStyle.Inherit(base)
 	var b strings.Builder
-	b.WriteString(renderPreserving(base, gutter+indent+glyph))
+	b.WriteString(ansi.RenderFill(base.Render, gutter+indent+glyph))
 	b.WriteString(m.renderHighlightedSegments(label, base, matchOnRow))
 
-	inner := max(0, m.body.Width()-2-pane.ScrollbarWidth)
+	inner := m.body.ContentRect().W
 	if pad := inner - lipgloss.Width(b.String()); pad > 0 {
-		b.WriteString(renderPreserving(base, strings.Repeat(" ", pad)))
+		b.WriteString(ansi.RenderFill(base.Render, strings.Repeat(" ", pad)))
 	}
 	return b.String()
 }
 
 func (m *Model) renderHighlightedSegments(label string, base, matchOnRow lipgloss.Style) string {
 	if m.query == "" {
-		return renderPreserving(base, label)
+		return ansi.RenderFill(base.Render, label)
 	}
 	spans := matchSpans(label, m.query)
 	if len(spans) == 0 {
-		return renderPreserving(base, label)
+		return ansi.RenderFill(base.Render, label)
 	}
 	var b strings.Builder
 	cursor := 0
 	for _, sp := range spans {
 		if sp[0] > cursor {
-			b.WriteString(renderPreserving(base, label[cursor:sp[0]]))
+			b.WriteString(ansi.RenderFill(base.Render, label[cursor:sp[0]]))
 		}
-		b.WriteString(renderPreserving(matchOnRow, label[sp[0]:sp[1]]))
+		b.WriteString(ansi.RenderFill(matchOnRow.Render, label[sp[0]:sp[1]]))
 		cursor = sp[1]
 	}
 	if cursor < len(label) {
-		b.WriteString(renderPreserving(base, label[cursor:]))
+		b.WriteString(ansi.RenderFill(base.Render, label[cursor:]))
 	}
 	return b.String()
-}
-
-// renderPreserving wraps text with style s, like s.Render, but re-emits
-// the open SGR after every embedded `\x1b[0m` reset inside text. This
-// keeps the outer background (or any other styling) intact when the
-// inner text includes ANSI-styled segments — e.g. a Node label that
-// returns lipgloss-colored status icons. Without this, the inner reset
-// would clobber the row-level highlight bg from the colored point on.
-func renderPreserving(s lipgloss.Style, text string) string {
-	if !strings.ContainsRune(text, '\x1b') {
-		return s.Render(text)
-	}
-	open, close := styleSGR(s)
-	if open == "" {
-		return s.Render(text)
-	}
-	fixed := strings.ReplaceAll(text, "\x1b[0m", "\x1b[0m"+open)
-	fixed = strings.ReplaceAll(fixed, "\x1b[m", "\x1b[m"+open)
-	return open + fixed + close
-}
-
-// styleSGR returns the open and close SGR sequences a style emits around
-// its content. Works by rendering a unique probe and slicing on either
-// side. Returns "", "" for styles that produce no SGR codes.
-func styleSGR(s lipgloss.Style) (open, close string) {
-	const probe = "\x00\x00tuilib-tree-probe\x00\x00"
-	r := s.Render(probe)
-	i := strings.Index(r, probe)
-	if i < 0 {
-		return "", ""
-	}
-	return r[:i], r[i+len(probe):]
 }
 
 func (m *Model) highlightLabel(label string) string {

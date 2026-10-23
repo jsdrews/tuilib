@@ -26,6 +26,7 @@ send := s.notify.Value()
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Title` | `string` | `"toggle"` | Border title; use the question. |
+| `Surface` | `surface.Resolved` | the surface's field form, which fits a three-row slot | How the edge and body are drawn. Set by the theme; set it yourself only to pin this component to another surface, with `t.Resolve(s)`. See [Surfaces](../surfaces.md). |
 | `Initial` | `bool` | `false` | Starting value. |
 | `YesLabel`, `NoLabel` | `string` | `"yes"`, `"no"` | Button labels. |
 | `SelectedStyle`, `UnselectedStyle` | `lipgloss.Style` | theme | The chosen and unchosen sides. |

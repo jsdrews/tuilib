@@ -1,7 +1,8 @@
 // Package config carries the user-supplied YAML config that any tuilib
-// component can consult. Today only the theme name lives here; as other
-// packages grow user-tunable knobs (logview defaults, runner clear-screen,
-// custom keymaps, custom palettes), their fields land on Config too.
+// component can consult: the starting palette and surface, block-glyph
+// support, the double-click window. As other packages grow user-tunable
+// knobs (logview defaults, runner clear-screen, custom keymaps, custom
+// palettes), their fields land on Config too.
 //
 // The library never writes the file and never creates the directory —
 // config is opt-in. A missing file is the steady state for users who
@@ -12,9 +13,9 @@
 // Cross-package usage:
 //
 //	cfg, _ := config.Load()
-//	themes := theme.Resolve(theme.All(), "TUILIB_THEME") // already calls Load
+//	start := cfg.Palette                // pkg/app reads this at app.New
 //	// later, hypothetically:
-//	lvOpts := logview.FromConfig(cfg)                    // reads cfg.Logview
+//	lvOpts := logview.FromConfig(cfg)   // reads cfg.Logview
 //
 // Each consumer pulls just the fields it cares about; this package owns
 // only the file shape and I/O.
@@ -33,9 +34,25 @@ import (
 // Unknown YAML keys are tolerated by yaml.Unmarshal so adding new fields is
 // backwards-compatible.
 type Config struct {
-	// Theme names a theme to use as the initial palette. Matched against
-	// theme.Theme.Name by theme.Resolve. Empty string disables the lookup.
+	// Theme is the old name for Palette, still read when Palette is unset:
+	// a user's config file is outside any app's control, and a renamed key
+	// would silently reset their choice.
 	Theme string `yaml:"theme"`
+
+	// Palette names the palette to start in, for apps that choose palette
+	// and surface separately. Theme is read as an alias when it is unset.
+	Palette string `yaml:"palette"`
+
+	// Surface names the surface to start in — outlined, filled, banded,
+	// elevated, accented, or one the app defines. Ignored when the app
+	// offers only one.
+	Surface string `yaml:"surface"`
+
+	// BlockGlyphs says whether the terminal draws block elements (▄ ▀ ▌)
+	// without seams. Unset, it is assumed off for terminals known to draw
+	// them from the font (macOS Terminal) and on everywhere else; surfaces
+	// that need block glyphs fall back when it is off.
+	BlockGlyphs *bool `yaml:"block_glyphs"`
 
 	// DoubleClickMs is the window, in milliseconds, in which a second press
 	// in the same cell counts as a double click. Comfortable timing varies

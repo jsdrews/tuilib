@@ -14,6 +14,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -35,7 +36,7 @@ func TestClickingAPaneMovesTheKeyboard(t *testing.T) {
 		"patterns/capture": patcapture.New,
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := build(theme.Dark())
+			s := build(theme.New(palette.Dark()))
 			s.Init()
 			s.OnEnter(nil)
 			render := func() { geom.NextGen(); s.Layout().Render(geom.New(0, 0, w, h)) }
@@ -72,7 +73,7 @@ func TestClickingAPaneMovesTheKeyboard(t *testing.T) {
 // typeMarker opens a filter with "/" and types marker, optionally clicking
 // the right-hand pane first. It reports where the marker was drawn.
 func typeMarker(build func(theme.Theme) screen.Screen, click bool, w, h int) (int, bool) {
-	s := build(theme.Dark())
+	s := build(theme.New(palette.Dark()))
 	s.Init()
 	s.OnEnter(nil)
 	render := func() { geom.NextGen(); s.Layout().Render(geom.New(0, 0, w, h)) }
@@ -155,7 +156,7 @@ func flatten(cmd tea.Cmd) []tea.Msg {
 func TestCaptureDoubleClickStartsACommand(t *testing.T) {
 	const w, h = 100, 30
 
-	s := patcapture.New(theme.Dark())
+	s := patcapture.New(theme.New(palette.Dark()))
 	s.Init()
 	s.OnEnter(nil)
 	render := func() string {

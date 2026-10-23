@@ -32,6 +32,7 @@ package layout
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -191,14 +192,10 @@ func (z zstack) Render(r geom.Rect) string {
 		if i >= len(baseLines) {
 			break
 		}
-		plain := stripANSI(ol)
-		if strings.TrimSpace(plain) == "" {
-			continue
-		}
-		// Cell-aware compositing: find the first and last non-space cell
-		// in the overlay, then splice those columns from overlay into
-		// the base, leaving the surrounding base cells intact.
-		left, right := nonSpaceBounds(plain)
+		// Cell-aware compositing: find the first and last painted cell in
+		// the overlay row, then splice those columns from overlay into the
+		// base, leaving the surrounding base cells intact.
+		left, right := paintedBounds(ol)
 		if left < 0 {
 			continue
 		}
@@ -219,17 +216,45 @@ func padCells(s string, width int) string {
 	return s
 }
 
-// nonSpaceBounds returns the cell-index of the first and last non-space
-// rune in s (which must be ANSI-stripped). Returns (-1, -1) when s is
-// entirely whitespace.
-func nonSpaceBounds(s string) (int, int) {
+// paintedBounds returns the cell index of the first and last painted cell in
+// s, or (-1, -1) when none is. A cell is painted when it draws a glyph or
+// carries a background: a filled modal's blank rows and padding cover the
+// base, while the plain padding Center adds around it, and a margin drawn on
+// its parent, stay transparent.
+func paintedBounds(s string) (int, int) {
 	left, right, cell := -1, -1, 0
-	for _, r := range s {
+	bg := false
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) {
+			switch s[i+1] {
+			case '[':
+				j := i + 2
+				for j < len(s) && !(s[j] >= '@' && s[j] <= '~') {
+					j++
+				}
+				if j < len(s) && s[j] == 'm' {
+					bg = sgrBackground(bg, s[i+2:j])
+				}
+				i = j + 1
+				continue
+			case ']':
+				if k := strings.Index(s[i:], "\x1b\\"); k >= 0 {
+					i += k + 2
+				} else if k := strings.IndexByte(s[i:], 0x07); k >= 0 {
+					i += k + 1
+				} else {
+					i = len(s)
+				}
+				continue
+			}
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
 		w := ansi.StringWidth(string(r))
 		if w == 0 {
 			continue
 		}
-		if r != ' ' {
+		if r != ' ' || bg {
 			if left < 0 {
 				left = cell
 			}
@@ -238,6 +263,38 @@ func nonSpaceBounds(s string) (int, int) {
 		cell += w
 	}
 	return left, right
+}
+
+// sgrBackground reports whether a background is set after the SGR
+// parameters params, given whether one was before. Extended-colour operands
+// are skipped, so the 0 in 38;2;255;0;0 isn't read as a reset.
+func sgrBackground(bg bool, params string) bool {
+	toks := strings.Split(params, ";")
+	for i := 0; i < len(toks); i++ {
+		t, _, sub := strings.Cut(toks[i], ":")
+		switch {
+		case (t == "" || t == "0") && !sub, t == "49":
+			bg = false
+		case t == "38" || t == "48" || t == "58":
+			n := 1
+			if !sub && i+1 < len(toks) {
+				switch toks[i+1] {
+				case "5":
+					n = 3
+				case "2":
+					n = 5
+				}
+			}
+			if t == "48" {
+				bg = true
+			}
+			i += min(n, len(toks)-i) - 1
+		case len(t) == 2 && t[0] == '4' && t[1] <= '7',
+			len(t) == 3 && t[:2] == "10" && t[2] <= '7':
+			bg = true
+		}
+	}
+	return bg
 }
 
 // distribute divides total among items. Fixed items take their declared

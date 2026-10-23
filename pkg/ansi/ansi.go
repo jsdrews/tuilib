@@ -3,6 +3,11 @@
 // most notably cells inside a styled row (e.g. pkg/table's selected row)
 // where an inner reset would clobber the row's background.
 //
+// Fill (and RenderFill, its lipgloss-friendly form) is the general answer:
+// it wraps content in a highlight and re-opens whatever the content's own
+// escapes turn off, so a selected row's background spans the row. Every
+// component that paints a selected row goes through it.
+//
 // Components that own their own pane (pkg/list, pkg/tree, pkg/logview, …)
 // render with their own per-row styling and you can keep using lipgloss
 // inside them. Reach for this package only when downstream rendering will
