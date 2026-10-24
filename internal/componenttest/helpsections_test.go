@@ -15,6 +15,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
@@ -64,6 +65,11 @@ func components(t *testing.T) map[string]sectioned {
 	tvo.Searchable = true
 	tv := textview.New(tvo)
 
+	mo := th.Menu()
+	mo.Filterable = true
+	mo.Items = []menu.Item{{Label: "a", Group: "x"}, {Label: "b", Group: "y"}}
+	mn := menu.New(mo)
+
 	am := action.New(th.Actions())
 	cf := confirm.New(th.Confirm())
 	al := alert.New(th.Alert())
@@ -75,6 +81,7 @@ func components(t *testing.T) map[string]sectioned {
 		"list": &l, "table": &tb, "tree": &tr, "inspector": &ins,
 		"logview": &lv, "textview": &tv, "input": &in, "toggle": &tg,
 		"form": &fm, "confirm": &cf, "alert": &al, "action": &am,
+		"menu": &mn,
 	}
 }
 

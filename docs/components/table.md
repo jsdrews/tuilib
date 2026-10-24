@@ -79,11 +79,11 @@ if s.table.IsActivate(msg) {
 | `Title` | Header text. Also the name `key:value` filter terms and `ActivityColumn` match against. |
 | `Width` | Visible cell width. ANSI escapes don't count. |
 | `Align` | `lipgloss.Left` (default), `lipgloss.Right`, `lipgloss.Center`. |
-| `Sortable` | Opt the column into sorting. |
+| `Sortable` | Opt the column into sorting. A sortable column is 2 cells wider than its base width, so the ▲ / ▼ is never cut off. |
 | `Less` | Custom comparator for the column (numbers, dates, "8.3M"). Default is case-insensitive on the ANSI-stripped text. |
 | `Flex` | Weight for a share of leftover width; `Width` becomes a minimum. |
 | `MaxWidth` | Cap on the effective width; surplus goes to other flex columns. |
-| `Hidden` | Keep the column in the data (filterable, in `Selected`, in messages) without drawing it. |
+| `Hidden` | Keep the column in the data (filterable, in `Selected`, in messages) without drawing it. A hidden column is left out of the `[` / `]` sort cycle. |
 
 | `Width` | `Flex` | Sizing |
 |---|---|---|
@@ -139,11 +139,22 @@ The filter splits on whitespace into AND-ed terms:
 | `region:eu` | the column whose title starts with "region" |
 | `~^new` | any cell matching the regex (case-insensitive) |
 | `region:~^euro` | a regex scoped to one column |
+| `name=tolkien` | the column's value equals "tolkien" (case-insensitive) |
+| `status!=done` | the column's value isn't "done" |
+| `year>1950`, `year>=1950` | greater than (or equal to) 1950 |
+| `year<2000`, `year<=2000` | less than (or equal to) 2000 |
+
+The ordering operators compare numerically when both the cell and the value
+are numbers, and as case-insensitive text otherwise. Operators apply to
+scoped terms only: a bare `>=5` is the text ">=5". Each term's `Op` says
+which comparison it makes, so a remote source gets `year>=1950` as a
+comparison it can translate rather than as text.
 
 An ambiguous or unknown key is treated as literal text, as is a regex that
 doesn't compile, so the filter never refuses input. While typing a
 `key:value` term, the filter's bottom-left slot lists that column's matching
-values and `tab` completes to their longest common prefix. The grammar lives
+values and `tab` completes to their longest common prefix, after any
+operator. The grammar lives
 in [`pkg/query`](../reference/packages.md#query).
 
 ## Data and selection
@@ -175,9 +186,28 @@ in [`pkg/query`](../reference/packages.md#query).
 | `SetFailed(answer)` | The fetch for this query failed. |
 | `Stale()`, `Failed()`, `Answered()`, `Committed()` | Remote state. |
 | `CommittedSort()`, `StagedSort()`, `SetStagedSort()` | Debounced remote sort state. |
+| `RefuseSort(col)`, `SortUnavailable(col)`, `ColumnByTitle(title)` | A sort the source refused (see below). |
 | `AppendRows`, `PrependRows`, `Edges()`, `SetMore`, `Reanchor()` | Anchored spans. |
 
 `table.Answer{Raw, Sort, Desc}` names the query a set of rows answers.
+
+**Refused sorts.** Some APIs list columns as sortable and then reject sorting
+by them with a 400. The fetch marks that error with `remote.Refused(err)`,
+and the table then:
+
+- goes back to the sort its rows answer, without a request, so the rows are
+  current again and the border goes back to normal;
+- makes the column **unavailable** for the life of the table: `[`, `]`, `s`
+  and header clicks skip it, and its title is drawn with
+  `Options.UnavailableTitle` (the theme dims it). This survives a theme swap
+  through `State` / `Restore`;
+- on the first load, with nothing to go back to, drops the sort and asks once
+  more unsorted;
+- returns `table.SortRefusedMsg{Column, Title, Err}` and posts nothing
+  itself. The screen decides what to tell the user.
+
+It's a sort refusal only when the failed query differs from the answered one
+in its sort alone. Any other refused query is an ordinary failure.
 Prefer [`pkg/remote`](../guide/remote.md#binding-a-view-pkgremote), which
 does all of this for you.
 
@@ -189,6 +219,7 @@ does all of this for you.
 | `table.RowFocusedMsg{Row, Cells, Columns, Empty}` | the cursor lands on a different row |
 | `table.ViewportChangedMsg{FirstVisible, LastVisible, TotalRows}` | the visible slice changed: the signal to fetch |
 | `table.QueryChangedMsg{Raw, Terms, Sort, SortColumn, Desc}` | (remote modes) a filter was committed or a sort settled |
+| `table.SortRefusedMsg{Column, Title, Err}` | (from `pkg/remote`) the source refused a sort; the table has gone back to the answered one |
 
 Filters are reported on commit (`enter`, `esc` or blur), never per keystroke.
 

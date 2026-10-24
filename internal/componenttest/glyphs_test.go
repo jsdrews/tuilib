@@ -11,6 +11,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -100,6 +101,13 @@ func TestComponentsDrawThemeGlyphs(t *testing.T) {
 			m := tree.New(o)
 			m.SetRect(glyphRect())
 			m.ToggleMark()
+			return m.View()
+		}},
+		{"menu cursor", "»", "the row cursor", func() string {
+			o := th.Menu()
+			o.Items = []menu.Item{{Label: "alpha", Group: "a"}, {Label: "beta", Group: "b"}}
+			m := menu.New(o)
+			m.SetRect(glyphRect())
 			return m.View()
 		}},
 		{"action cursor", "»", "the menu cursor", func() string {

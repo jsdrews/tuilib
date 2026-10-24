@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/jsdrews/tuilib/internal/grouping"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/help"
@@ -43,21 +44,31 @@ type Keys struct {
 	Up, Down         key.Binding
 	Top, Bottom      key.Binding
 	HalfUp, HalfDown key.Binding
-	Choose           key.Binding
-	Cancel           key.Binding
+	// PrevGroup and NextGroup jump to the first enabled action of the
+	// previous or next group. They do nothing in a menu without headers.
+	//
+	// tab is free here, where it is reserved for focus cycling everywhere
+	// else: the menu is modal, so there are no panes behind it to cycle
+	// while it is up. pkg/menu, which draws the same groups beside other
+	// components, uses [ and ] instead.
+	PrevGroup, NextGroup key.Binding
+	Choose               key.Binding
+	Cancel               key.Binding
 }
 
 // DefaultKeys returns the menu's stock keymap.
 func DefaultKeys() Keys {
 	return Keys{
-		Up:       key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:     key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Top:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
-		Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
-		HalfUp:   key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
-		HalfDown: key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
-		Choose:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
-		Cancel:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+		Top:       key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+		Bottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
+		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
+		PrevGroup: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧tab", "prev group")),
+		NextGroup: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next group")),
+		Choose:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
+		Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 	}
 }
 
@@ -72,6 +83,7 @@ func (k *Keys) FillDefaults() {
 		{&k.Up, d.Up}, {&k.Down, d.Down},
 		{&k.Top, d.Top}, {&k.Bottom, d.Bottom},
 		{&k.HalfUp, d.HalfUp}, {&k.HalfDown, d.HalfDown},
+		{&k.PrevGroup, d.PrevGroup}, {&k.NextGroup, d.NextGroup},
 		{&k.Choose, d.Choose}, {&k.Cancel, d.Cancel},
 	} {
 		if len(p.dst.Keys()) == 0 {
@@ -96,6 +108,13 @@ type Options struct {
 	KeyStyle      lipgloss.Style
 	SelectedStyle lipgloss.Style
 	DisabledStyle lipgloss.Style
+
+	// HeaderStyle styles the group headers, drawn once the Set's actions name
+	// two or more groups (Action.Group). GroupStyle, when set, styles each
+	// header by its group instead — a write group in a warning colour, say.
+	// Only headers are styled this way; the rows under them are not.
+	HeaderStyle lipgloss.Style
+	GroupStyle  func(group string) lipgloss.Style
 
 	ActiveColor    lipgloss.TerminalColor
 	InactiveColor  lipgloss.TerminalColor
@@ -140,6 +159,11 @@ type Menu struct {
 	cursor  int
 	running map[string]bool
 
+	// layout is the actions in display order, under their group headers.
+	// The cursor stays an index into set.Actions; layout maps it to a row.
+	layout  grouping.Layout
+	headers grouping.Styles
+
 	// outer is the bounds last handed to SetRect; placed is where the box
 	// actually landed inside them, which is what it hit-tests against.
 	outer, placed geom.Rect
@@ -148,6 +172,7 @@ type Menu struct {
 	ax, ay   int
 
 	labelW, descW, keyW  int
+	headerW              int
 	menuW, menuH         int
 	multiRsn, runningRsn string
 
@@ -193,10 +218,20 @@ func New(opts Options) Menu {
 		keyStyle:      opts.KeyStyle,
 		selectedStyle: opts.SelectedStyle,
 		disabledStyle: opts.DisabledStyle,
+		headers:       grouping.Styles{Header: opts.HeaderStyle, Group: opts.GroupStyle},
 	}
+	m.layout = layoutOf(m.set)
 	m.pane.SetTitle(m.paneTitle())
 	m.cursor = m.firstEnabled()
 	return m
+}
+
+func layoutOf(s Set) grouping.Layout {
+	groups := make([]string, len(s.Actions))
+	for i, a := range s.Actions {
+		groups[i] = a.Group
+	}
+	return grouping.New(groups, nil)
 }
 
 // Init satisfies tea.Model — nothing to kick off.
@@ -206,6 +241,7 @@ func (m Menu) Init() tea.Cmd { return nil }
 // selectable row.
 func (m *Menu) SetActions(s Set) {
 	m.set = s
+	m.layout = layoutOf(s)
 	m.cursor = m.firstEnabled()
 	m.pane.SetTitle(m.paneTitle())
 	m.reflow()
@@ -304,13 +340,23 @@ func (m *Menu) reflow() {
 	m.pane.SetRect(m.placed)
 	m.pane.SetContent(m.renderRows())
 	if m.cursor >= 0 {
-		m.pane.EnsureVisible(m.cursor)
+		// The header first, so landing on a group's first action shows the
+		// name it was filed under rather than scrolling it just out of view.
+		if m.layout.HeaderAbove(m.cursor) {
+			m.pane.EnsureVisible(m.layout.RowOf(m.cursor) - 1)
+		}
+		m.pane.EnsureVisible(m.layout.RowOf(m.cursor))
 	}
 }
 
 // measure computes the column widths, the box size, and where it lands.
 func (m *Menu) measure() {
-	m.labelW, m.descW, m.keyW = 0, 0, 0
+	m.labelW, m.descW, m.keyW, m.headerW = 0, 0, 0, 0
+	for _, r := range m.layout.Rows() {
+		if r.Header {
+			m.headerW = max(m.headerW, ansi.StringWidth(r.Group))
+		}
+	}
 	for i := range m.set.Actions {
 		a := m.set.Actions[i]
 		m.labelW = max(m.labelW, ansi.StringWidth(a.Label))
@@ -343,13 +389,13 @@ func (m *Menu) measure() {
 	}
 	// The title sits on the top border and is the one piece of content that
 	// is not a row; a box narrower than its own title reads as truncated.
-	inner = max(inner, ansi.StringWidth(m.paneTitle())+2)
+	inner = max(inner, ansi.StringWidth(m.paneTitle())+2, m.headerW)
 	inner = min(inner, maxInner)
 
 	m.menuW = min(inner+chromeW, m.outer.W)
-	// Every action gets a row, up to the height cap — which a deep edge must
-	// not push below room for one row.
-	want := max(len(m.set.Actions), 1) + chromeH
+	// Every action and header gets a row, up to the height cap — which a
+	// deep edge must not push below room for one row.
+	want := max(m.layout.Len(), 1) + chromeH
 	m.menuH = min(want, max(maxH, 1+chromeH), m.outer.H)
 
 	if m.anchored {
@@ -479,11 +525,23 @@ func (m Menu) renderRows() string {
 	if innerW <= 0 || len(m.set.Actions) == 0 {
 		return ""
 	}
-	rows := make([]string, len(m.set.Actions))
-	for i := range m.set.Actions {
-		rows[i] = m.renderRow(i, innerW)
+	rows := make([]string, 0, m.layout.Len())
+	for _, r := range m.layout.Rows() {
+		if r.Header {
+			rows = append(rows, m.renderHeader(r.Group, innerW))
+			continue
+		}
+		rows = append(rows, m.renderRow(r.Item, innerW))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// renderHeader draws a group's name flush left, outdented from the rows'
+// cursor column so it reads as a heading rather than one more verb.
+func (m Menu) renderHeader(group string, innerW int) string {
+	text := fit(group, innerW)
+	name := strings.TrimRight(text, " ")
+	return m.headers.For(group).Render(name) + text[len(name):]
 }
 
 // seg is one styled run of a row. Rows are assembled as segments so the
@@ -602,10 +660,16 @@ func (m Menu) Update(msg tea.Msg) (Menu, tea.Cmd) {
 			m.move(1)
 			return m, nil
 		case key.Matches(msg, m.keys.Top):
-			m.jump(0, 1)
+			m.moveTo(m.layout.First(m.enabled))
 			return m, nil
 		case key.Matches(msg, m.keys.Bottom):
-			m.jump(len(m.set.Actions)-1, -1)
+			m.moveTo(m.layout.Last(m.enabled))
+			return m, nil
+		case key.Matches(msg, m.keys.PrevGroup):
+			m.moveTo(m.layout.JumpGroup(m.cursor, -1, m.enabled))
+			return m, nil
+		case key.Matches(msg, m.keys.NextGroup):
+			m.moveTo(m.layout.JumpGroup(m.cursor, 1, m.enabled))
 			return m, nil
 		case key.Matches(msg, m.keys.HalfUp):
 			m.move(-m.halfPage())
@@ -680,10 +744,15 @@ func (m Menu) handleMouse(e mouse.Msg) (Menu, tea.Cmd) {
 		if !inside {
 			return m, cancelled()
 		}
-		row, ok := m.pane.RowAt(e.X, e.Y)
-		if !ok || row >= len(m.set.Actions) {
+		at, ok := m.pane.RowAt(e.X, e.Y)
+		if !ok {
 			return m, nil
 		}
+		r, ok := m.layout.At(at)
+		if !ok || r.Header {
+			return m, nil
+		}
+		row := r.Item
 		if m.reasonAt(row) != "" {
 			return m, nil
 		}
@@ -698,70 +767,34 @@ func (m Menu) handleMouse(e mouse.Msg) (Menu, tea.Cmd) {
 	return m, nil
 }
 
-// move steps the cursor by delta, skipping disabled rows and stopping at the
-// ends rather than wrapping — matching list and table.
+// move steps the cursor by delta in display order, skipping headers and
+// disabled rows and stopping at the ends rather than wrapping — matching list
+// and table.
 func (m *Menu) move(delta int) {
-	n := len(m.set.Actions)
-	if n == 0 || delta == 0 {
-		return
-	}
-	step := 1
-	if delta < 0 {
-		step = -1
-	}
-	remaining := delta
-	if remaining < 0 {
-		remaining = -remaining
-	}
-	i := m.cursor
-	if i < 0 {
-		i = -step // so the first step lands on 0 or n-1
-		if step < 0 {
-			i = n
-		}
-	}
-	for remaining > 0 {
-		next := i + step
-		for next >= 0 && next < n && m.reasonAt(next) != "" {
-			next += step
-		}
-		if next < 0 || next >= n {
-			break
-		}
-		i = next
-		remaining--
-	}
-	if i >= 0 && i < n && m.reasonAt(i) == "" {
-		m.cursor = i
-		m.reflow()
-	}
+	m.moveTo(m.layout.Step(m.cursor, delta, m.enabled))
 }
 
-// jump moves to the first selectable row at or after from, walking by step.
-func (m *Menu) jump(from, step int) {
-	for i := from; i >= 0 && i < len(m.set.Actions); i += step {
-		if m.reasonAt(i) == "" {
-			m.cursor = i
-			m.reflow()
-			return
-		}
+// moveTo puts the cursor on action i, when it is one that can be picked.
+func (m *Menu) moveTo(i int) {
+	if i < 0 || i >= len(m.set.Actions) || m.reasonAt(i) != "" || i == m.cursor {
+		return
 	}
+	m.cursor = i
+	m.reflow()
 }
+
+func (m Menu) enabled(i int) bool { return m.reasonAt(i) == "" }
 
 // scrollTo is the scrollbar's entry point. It moves the cursor as well as the
 // view: reflow re-asserts "the cursor is visible" on every frame, so a
-// viewport moved on its own is undone one frame later.
+// viewport moved on its own is undone one frame later. A drag onto a header
+// lands on the first action under it.
 func (m *Menu) scrollTo(row int) {
-	n := len(m.set.Actions)
-	if n == 0 {
+	if m.layout.Len() == 0 {
 		return
 	}
-	row = min(max(row, 0), n-1)
-	if m.reasonAt(row) != "" {
-		return
-	}
-	m.cursor = row
-	m.reflow()
+	row = min(max(row, 0), m.layout.Len()-1)
+	m.moveTo(m.layout.ItemNear(row))
 }
 
 func (m Menu) choose() tea.Cmd {
@@ -776,18 +809,11 @@ func (m Menu) halfPage() int {
 	return max(1, m.pane.VisibleRows()/2)
 }
 
-func (m Menu) firstEnabled() int {
-	for i := range m.set.Actions {
-		if m.reasonAt(i) == "" {
-			return i
-		}
-	}
-	return -1
-}
+func (m Menu) firstEnabled() int { return m.layout.First(m.enabled) }
 
 // CanScroll reports whether the actions overflow the box.
 func (m Menu) CanScroll() bool {
-	return m.pane.VisibleRows() > 0 && len(m.set.Actions) > m.pane.VisibleRows()
+	return m.pane.VisibleRows() > 0 && m.layout.Len() > m.pane.VisibleRows()
 }
 
 // Help returns the bindings the menu currently responds to, including the
@@ -798,9 +824,13 @@ func (m Menu) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
 // HelpSections splits the menu the way a chooser divides: moving the cursor
 // under Navigate, and the keys that commit or abandon a verb under Submit.
 // The jump keys join Navigate only when the actions actually overflow, so a
-// three-item menu advertises three ways to move rather than seven.
+// three-item menu advertises three ways to move rather than seven, and the
+// group keys only when there are headers to jump between.
 func (m Menu) HelpSections() []help.Section {
 	nav := []key.Binding{m.keys.Up, m.keys.Down}
+	if m.layout.Grouped() {
+		nav = append(nav, m.keys.PrevGroup, m.keys.NextGroup)
+	}
 	if m.CanScroll() {
 		nav = append(nav, m.keys.Top, m.keys.Bottom, m.keys.HalfUp, m.keys.HalfDown)
 	}

@@ -876,6 +876,8 @@ that component happens to be focused, so treat them as spoken for.
 | Keys | Owner | Verb |
 |---|---|---|
 | `[` `]` `s` | `pkg/table` | sort column −/+, direction |
+| `[` `]` | `pkg/menu` | previous / next group |
+| `tab` `shift+tab` | `pkg/action` (menu open) | next / previous group — the one place `tab` isn't focus cycling, because the menu is modal |
 | `shift+←` `shift+→` | `pkg/table` | previous / next column edge |
 | `shift+←` `shift+→`, `1`–`9` | `pkg/tab` | switch tab |
 | `space` | `pkg/tree`, `pkg/inspector`, `pkg/toggle` | toggle (expand/collapse in tree — never marking) |
@@ -1058,6 +1060,17 @@ failure it prevents is silent — the modal simply stops responding.
 This surfaced as a bug during implementation, not in review: the first version
 handled the results inside the overlay's input router, where a message that is
 neither a key nor a click never reaches.
+
+### 23. The action menu jumps groups with `tab`; `pkg/menu` with `[` / `]`.
+
+`Action.Group` files verbs under headers. The action menu jumps between
+groups with `tab` / `shift+tab`, an exception to the focus-cycling
+reservation above. It's safe because the menu is modal: while it's up there
+are no panes behind it to cycle. `pkg/menu` draws the same groups, but it
+sits beside other components, where `tab` has to keep cycling focus, so it
+uses `[` / `]`. That's the same pair `pkg/table` uses for its sort column;
+they never collide, because only one component has the keys at a time. The
+header and skip rules live once, in `internal/grouping`.
 
 ## Open questions
 

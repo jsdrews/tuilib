@@ -39,6 +39,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/statusbar"
@@ -444,11 +445,35 @@ func (t Theme) Alert() alert.Options {
 	return o
 }
 
+// Menu returns menu.Options pre-filled from the theme — labels in the body's
+// own colour, descriptions dimmed in Muted, group headers bold in Current (as
+// the action menu draws them), the cursor row bold in Accent, border colours
+// matching pane, and the embedded filter using theme.Filter(). Set Title,
+// Items and Filterable before passing to menu.New.
+func (t Theme) Menu() menu.Options {
+	o := menu.Options{
+		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
+		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
+		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
+		SlotBrackets:   t.Surface.Surface().Brackets,
+		Filter:         t.Filter(),
+		Keys:           menu.DefaultKeys(),
+	}
+	o.Surface = t.Surface
+	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
+	return o
+}
+
 // Actions returns action.Options pre-filled from the theme — the label in
 // BarFG, the gloss and the key column in Muted, the cursor row bold in Accent,
 // and disabled rows in Subtle so an unavailable verb reads as present but out
-// of reach rather than as ordinary text. Set Title and Set before passing to
-// action.New.
+// of reach rather than as ordinary text. Group headers are bold in Current,
+// the table header's colour. Set Title and Set before passing to action.New.
 //
 // Unlike pkg/output, this follows rule 3's th.Component() convention: a Menu
 // is a plain component rather than a screen.Screen, so pkg/action never
@@ -460,6 +485,7 @@ func (t Theme) Actions() action.Options {
 		KeyStyle:       lipgloss.NewStyle().Foreground(t.KeyFG),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		DisabledStyle:  lipgloss.NewStyle().Foreground(t.Subtle),
+		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeOverlay(),
@@ -497,7 +523,8 @@ func (t Theme) Table() table.Options {
 			Vertical:   cellColor(t.Subtle, t.glyphs().ColumnSep),
 			HeaderRule: cellColor(t.Subtle, t.Surface.Surface().Divider.Glyph),
 		},
-		Keys: table.DefaultKeys(),
+		UnavailableTitle: func(title string) string { return cellColor(t.Subtle, title) },
+		Keys:             table.DefaultKeys(),
 	}
 	o.Surface = t.Surface
 	o.SelectedStyle, o.SelectedBlurredStyle = t.selection(o.SelectedStyle)
@@ -641,7 +668,13 @@ func (t Theme) Inspector() inspector.Options {
 // (or chain `.With(fields)`). Override individual Styles fields only if you
 // need to deviate from the palette.
 func (t Theme) Form() form.Options {
-	return form.Options{
+	o := form.Options{
+		ActiveColor:    t.BorderActive,
+		InactiveColor:  t.BorderInactive,
+		ActiveBorder:   t.shapeActive(),
+		InactiveBorder: t.shapeInactive(),
+		Glyphs:         t.glyphs(),
+		SlotBrackets:   t.Surface.Surface().Brackets,
 		Styles: form.Styles{
 			Input:               lipgloss.NewStyle().Foreground(t.BarFG),
 			Placeholder:         lipgloss.NewStyle().Foreground(t.Subtle),
@@ -657,6 +690,8 @@ func (t Theme) Form() form.Options {
 			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
 		},
 	}
+	o.Surface = t.Surface
+	return o
 }
 
 // Activity returns activity.Options pre-filled from the theme — the spinner

@@ -70,6 +70,7 @@ screen, titled with the target. The shell runs the chosen action:
 |---|---|
 | `Label` | The verb. Required. |
 | `Desc` | A short gloss beside the label. |
+| `Group` | Files the verb under a header (`read`, `write`, anything). Headers appear once a set names two or more groups; ungrouped verbs go last under `other`. `tab` / `shift+tab` jump between groups. |
 | `Key` | Optional shortcut while the menu is open (shown in its key column, not in the footer). |
 | `Run` | Background work: `func(ctx context.Context, out io.Writer) error`. Prefer it. |
 | `Do` | Escape hatch for verbs that aren't background work (push a screen, open `$EDITOR`). Set exactly one of `Run` and `Do`. |

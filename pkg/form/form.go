@@ -33,10 +33,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/pane"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/toggle"
 )
 
@@ -110,6 +113,23 @@ type Options struct {
 	// for a looser layout.
 	FieldSpacing *int
 	Styles       Styles
+
+	// Title, when set, frames the whole form in a titled pane, the way
+	// pkg/confirm frames its buttons: the fields and the submit button are
+	// laid out inside it. Without a Title the form is a bare stack of
+	// bordered fields, as before. Use it when the form stands on its own — a
+	// prompt, an action's inputs — and needs to say what it is for.
+	Title string
+
+	// Frame pass-throughs, used only with a Title. See pkg/pane.Options;
+	// theme.Form() fills them.
+	ActiveColor    lipgloss.TerminalColor
+	InactiveColor  lipgloss.TerminalColor
+	ActiveBorder   lipgloss.Border
+	InactiveBorder lipgloss.Border
+	Glyphs         glyph.Set
+	SlotBrackets   pane.SlotBracketStyle
+	Surface        surface.Resolved
 }
 
 // With returns a copy of opts with Fields replaced — handy when chaining
@@ -135,6 +155,11 @@ type Model struct {
 	submitRect *geom.Rect
 	spacing    int
 	styles     Styles
+
+	// frame is the titled pane around the form, when Options.Title is set.
+	// rect is then its content area, which is where the fields stack.
+	frame  pane.Pane
+	framed bool
 }
 
 // New constructs a Form. Focuses the first field.
@@ -155,6 +180,20 @@ func New(opts Options) Model {
 		submitRect: new(geom.Rect),
 		spacing:    spacing,
 		styles:     opts.Styles,
+		framed:     opts.Title != "",
+	}
+	if m.framed {
+		m.frame = pane.New(pane.Options{
+			Title:          opts.Title,
+			Focused:        true,
+			ActiveColor:    opts.ActiveColor,
+			InactiveColor:  opts.InactiveColor,
+			ActiveBorder:   opts.ActiveBorder,
+			InactiveBorder: opts.InactiveBorder,
+			Glyphs:         opts.Glyphs,
+			SlotBrackets:   opts.SlotBrackets,
+			Surface:        opts.Surface,
+		})
 	}
 	m.propagateStyles()
 	return m
@@ -236,8 +275,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // View renders the form vertically: each field, FieldSpacing blank lines
-// between, then the submit button.
+// between, then the submit button — inside the titled frame when there is
+// one.
 func (m Model) View() string {
+	if !m.framed {
+		return m.stack()
+	}
+	f := m.frame
+	f.SetContent(m.stack())
+	return f.View()
+}
+
+// stack renders the fields and the submit button at m.rect.
+func (m Model) stack() string {
 	sep := "\n" + strings.Repeat("\n", m.spacing)
 	var b strings.Builder
 	// Fields are stacked, so each one's origin is the running total of what
@@ -281,10 +331,43 @@ func (m Model) View() string {
 // SetRect satisfies layout.Sizer so the form can be placed into a layout
 // tree via layout.Sized(&formModel). The rect is retained so View can hand
 // each field its own absolute position as it stacks them.
-func (m *Model) SetRect(r geom.Rect) { m.rect = r; m.w, m.h = r.W, r.H }
+//
+// A framed form places its pane at r and stacks the fields in the pane's
+// content area, so a click resolves against where each field is drawn under
+// any surface.
+func (m *Model) SetRect(r geom.Rect) {
+	if m.framed {
+		m.frame.SetRect(r)
+		r = m.frame.ContentRect()
+	}
+	m.rect = r
+	m.w, m.h = r.W, r.H
+}
 
-// Rect returns the rect the form was last placed at.
-func (m Model) Rect() geom.Rect { return m.rect }
+// Rect returns the rect the form was last placed at: the frame's, when the
+// form has a Title.
+func (m Model) Rect() geom.Rect {
+	if m.framed {
+		return m.frame.Rect()
+	}
+	return m.rect
+}
+
+// SetTitle changes the frame's title. It has no effect on a form built
+// without one, which has no frame to put it on.
+func (m *Model) SetTitle(s string) {
+	if m.framed {
+		m.frame.SetTitle(s)
+	}
+}
+
+// Title is the frame's title, or "" when the form has none.
+func (m Model) Title() string {
+	if !m.framed {
+		return ""
+	}
+	return m.frame.Title()
+}
 
 // validate checks every field, flags the failures, and returns their keys in
 // field order along with the index of the first offender.

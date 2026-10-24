@@ -56,6 +56,37 @@ The menu reports what was chosen and never runs anything; the host decides
 (run `Run` in the background, return `Do()`'s command, confirm first if
 `Confirm` is set).
 
+## Groups
+
+Set `Action.Group` to file verbs under headers, such as read and write:
+
+```
+┏ Actions · cache-redis ━━━━━━━┓
+┃read                          ┃
+┃▸ Describe                    ┃
+┃  Logs                        ┃
+┃write                         ┃
+┃  Restart                     ┃
+┃  Delete                      ┃
+┃other                         ┃
+┃  Shell                       ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+```
+
+Headers appear only when the set names two or more groups, so a menu whose
+verbs are all one kind stays flat. Groups appear in the order first seen, with
+header text as written. Actions without a group go last, under `other`. The
+cursor, clicks and the half-page keys skip headers, and `tab` / `shift+tab`
+jump to the first enabled action of the next or previous group. The menu is
+modal, so `tab` has no panes to cycle while it's up. The group rules are the
+same ones [Menu](menu.md) uses; the menu, which sits beside other
+components, jumps with `[` / `]` instead.
+
+`HeaderStyle` styles every header. `GroupStyle func(group string)
+lipgloss.Style` styles each one by its group instead, for example a write
+group in a warning colour. Only headers take these styles, not the rows
+under them.
+
 ## Options
 
 | Field | Type | Default | Meaning |
@@ -66,6 +97,8 @@ The menu reports what was chosen and never runs anything; the host decides
 | `LabelStyle`, `DescStyle`, `KeyStyle` | `lipgloss.Style` | theme | Row text. |
 | `SelectedStyle` | `lipgloss.Style` | bold accent | Cursor row. |
 | `DisabledStyle` | `lipgloss.Style` | subtle | Unavailable rows. |
+| `HeaderStyle` | `lipgloss.Style` | bold, `Current` | Group headers. |
+| `GroupStyle` | `func(group string) lipgloss.Style` | nil | Per-group header style; replaces `HeaderStyle` when set. |
 | `MultiReason` | `string` | `"one item at a time"` | Reason shown on a non-`Multi` verb under a multi-selection. |
 | `RunningReason` | `string` | `"already running"` | Reason shown on an `Exclusive` verb already in flight. |
 | `Keys` | `action.Keys` | `DefaultKeys()` | Key bindings. |
@@ -77,6 +110,7 @@ The menu reports what was chosen and never runs anything; the host decides
 |---|---|---|
 | `↑`/`k`, `↓`/`j` | `Up`, `Down` | move (skipping disabled rows) |
 | `g`, `G`, `ctrl+u`, `ctrl+d` | `Top`, `Bottom`, `HalfUp`, `HalfDown` | jump (when the menu scrolls) |
+| `shift+tab`, `tab` | `PrevGroup`, `NextGroup` | previous / next group (when grouped) |
 | `enter` | `Choose` | choose |
 | `esc` | `Cancel` | dismiss |
 | an action's `Key` | | choose that action directly |

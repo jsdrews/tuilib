@@ -34,7 +34,7 @@ Colors are `lipgloss.TerminalColor` (e.g. `lipgloss.Color("62")` or
 
 | Field | Default | Drawn as |
 |---|---|---|
-| `Cursor` | `▸` | the cursor row in list, logview, the action menu |
+| `Cursor` | `▸` | the cursor row in list, menu, logview, the action menu |
 | `Mark` | `✓` | a marked row |
 | `ExpandOpen`, `ExpandClosed` | `▾`, `▸` | tree and inspector disclosure |
 | `ScrollThumb`, `ScrollTrack` | `█`, `░` | vertical scrollbar |

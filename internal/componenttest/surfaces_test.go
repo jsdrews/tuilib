@@ -10,11 +10,13 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/eventlog"
+	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
@@ -97,6 +99,22 @@ func TestComponentsDrawEverySurfaceAtTheirRectSize(t *testing.T) {
 				m := eventlog.New(o)
 				m.SetRect(r())
 				m.SetPage([]eventlog.Item{{Key: "1", Lines: []string{"one"}}}, 0, 1, eventlog.Answer{})
+				return m.View()
+			}},
+			{"titled form", func() string {
+				o := th.Form()
+				o.Surface, o.Title = res, "New user"
+				o.Fields = []form.Field{form.Text(form.TextOptions{Key: "n", Label: "Name"})}
+				m := form.New(o)
+				m.SetRect(r())
+				return m.View()
+			}},
+			{"menu", func() string {
+				o := th.Menu()
+				o.Surface, o.Filterable = res, true
+				o.Items = []menu.Item{{Label: "alpha", Group: "a", Description: "first"}, {Label: "beta", Group: "b"}}
+				m := menu.New(o)
+				m.SetRect(r())
 				return m.View()
 			}},
 		} {
@@ -221,6 +239,13 @@ func TestSelectionDimsWhenBlurred(t *testing.T) {
 			m.SetRect(selRect())
 			m.SetPage([]eventlog.Item{{Key: "1", Lines: []string{"SEL line"}}, {Key: "2", Lines: []string{"other"}}}, 0, 2, eventlog.Answer{})
 			m.SetCursor(0)
+			return &m
+		}},
+		{"menu", func() comp {
+			o := th.Menu()
+			o.Items = []menu.Item{{Label: "SEL row", Description: "gloss"}, {Label: "other"}}
+			m := menu.New(o)
+			m.SetRect(selRect())
 			return &m
 		}},
 	} {

@@ -107,6 +107,19 @@ type Anchored struct {
 	pollSeq      int
 	pollArmed    bool
 	pollsFailing bool
+
+	// prev is the last answered query, kept while a newer one has no answer
+	// so Revert can go back to it. The span itself is the component's.
+	prev anchoredQuery
+}
+
+type anchoredQuery struct {
+	ok                   bool
+	raw                  string
+	terms                []query.Term
+	sort                 string
+	desc                 bool
+	moreOlder, moreNewer bool
 }
 
 // NewAnchored constructs an Anchored source anchored at opts.Anchor.
@@ -136,6 +149,10 @@ func (m *Anchored) Init() tea.Cmd { return m.reanchor() }
 // was answered is reported as QueryCancelledMsg.
 func (m *Anchored) SetQuery(raw string, terms []query.Term, sort string, desc bool) tea.Cmd {
 	prev, abandoned := m.live, m.state == unanswered && m.pending
+	if m.state == answered {
+		m.prev = anchoredQuery{ok: true, raw: m.raw, terms: m.terms, sort: m.sort, desc: m.desc,
+			moreOlder: m.moreOlder, moreNewer: m.moreNewer}
+	}
 	m.raw, m.terms, m.sort, m.desc = raw, terms, sort, desc
 	req := m.reanchor()
 	if !abandoned {
@@ -149,7 +166,23 @@ func (m *Anchored) SetQuery(raw string, terms []query.Term, sort string, desc bo
 // search hit re-anchors with At(hit).
 func (m *Anchored) SetAnchor(a Anchor) tea.Cmd {
 	m.anchor = a
+	m.prev = anchoredQuery{}
 	return m.reanchor()
+}
+
+// Revert abandons a committed query that failed before it was answered and
+// goes back to the last query that was, whose span the component is still
+// showing, with no request. See Model.Revert.
+func (m *Anchored) Revert() (ok bool, cmd tea.Cmd) {
+	if m.state != failed || !m.prev.ok {
+		return false, nil
+	}
+	p := m.prev
+	m.raw, m.terms, m.sort, m.desc = p.raw, p.terms, p.sort, p.desc
+	m.moreOlder, m.moreNewer = p.moreOlder, p.moreNewer
+	m.state = answered
+	m.prev = anchoredQuery{}
+	return true, m.maybeRequest()
 }
 
 // Anchor returns the current anchor.
@@ -366,6 +399,7 @@ func (m *Anchored) Deliver(p Page) (bool, tea.Cmd) {
 		return true, tea.Batch(recovered, m.maybeRequest(), m.armPoll())
 	}
 	m.state = answered
+	m.prev = anchoredQuery{}
 	ev := QueryAnsweredMsg{Name: m.name, Query: m.live, Elapsed: elapsed}
 	return true, tea.Batch(func() tea.Msg { return ev }, m.maybeRequest(), m.armPoll())
 }

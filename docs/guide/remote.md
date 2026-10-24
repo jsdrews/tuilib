@@ -135,6 +135,13 @@ With replies taking seconds, the screen still does nothing special:
 - **Failures.** A failed query stays stale with `✗ failed` on the border and
   the user's filter and sort kept. Committing it again, or `Refresh`, retries.
   Nothing retries automatically.
+- **Refused sorts.** When the fetch marks an error with `remote.Refused(err)`
+  (an API answering an unsupported sort with a 400, say) and the query
+  changed only its sort, the table goes back to the answered sort with no
+  request, takes the column out of the sort cycle, and returns
+  `table.SortRefusedMsg`. Your fetch decides what counts as refused: tuilib
+  never guesses from status codes. See
+  [Table](../components/table.md#remote-data).
 - **History.** Each committed query's outcome (answered with timing, failed,
   cancelled) is written to the output console, and failures to the statusbar.
 

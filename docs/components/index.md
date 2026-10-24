@@ -11,6 +11,7 @@ returns a finished box and `Options.Title` draws on its border.
 |---|---|---|
 | [Pane](pane.md) | `pkg/pane` | A bordered, scrollable region for arbitrary text; the primitive under every other component. |
 | [List](list.md) | `pkg/list` | A cursor over strings, optionally filterable and markable. Menus, pickers, master lists. |
+| [Menu](menu.md) | `pkg/menu` | A grouped, filterable list of things to open: an app's sections, a home screen. |
 | [Table](table.md) | `pkg/table` | Records with columns: sort, scoped filters, flex widths, remote paging. |
 | [Tree](tree.md) | `pkg/tree` | Hierarchies: expand/collapse, search, filter that keeps ancestors. |
 | [Inspector](inspector.md) | `pkg/inspector` | One structured record as aligned label/value rows (a k8s manifest, a JSON response). |
@@ -58,18 +59,18 @@ machinery works with any of them.
 | Capability | Methods | Components |
 |---|---|---|
 | Placement | `SetRect(geom.Rect)`, `View()` | all |
-| State across rebuilds | `State()`, `Restore(State)` | list, table, tree, inspector, textview, logview, eventlog, filter, input, toggle |
+| State across rebuilds | `State()`, `Restore(State)` | list, menu, table, tree, inspector, textview, logview, eventlog, filter, input, toggle |
 | Key hints | `Help()`, `HelpSections()` | all interactive (filter has `Help` only) |
-| Focus | `Focus() tea.Cmd`, `Blur()`, `Focused()` (satisfies `focus.Focusable`) | list, table, tree, inspector, textview, logview, eventlog, filter, input, toggle |
-| Key capture | `IsCapturingKeys()` | list, table, tree, inspector, textview, logview, eventlog, filter, input, form |
-| Filter regions | `FocusFilter()`, `BlurFilter()` | list, table, tree, inspector, textview, logview, eventlog |
-| Open the selection | `IsActivate(msg)`, `ActivatedMsg` | list, table, eventlog |
+| Focus | `Focus() tea.Cmd`, `Blur()`, `Focused()` (satisfies `focus.Focusable`) | list, menu, table, tree, inspector, textview, logview, eventlog, filter, input, toggle |
+| Key capture | `IsCapturingKeys()` | list, menu, table, tree, inspector, textview, logview, eventlog, filter, input, form |
+| Filter regions | `FocusFilter()`, `BlurFilter()` | list, menu, table, tree, inspector, textview, logview, eventlog |
+| Open the selection | `IsActivate(msg)`, `ActivatedMsg` | list, table, eventlog (menu: `Chosen(msg)`, `ChosenMsg`) |
 | Loading spinner | `SetLoading(bool) tea.Cmd`, `SetLoadingLabel`, `Loading()` | pane and every pane-owning viewer |
 | Keyed data | `SetKeyedItems` / `SetKeyedRows`, `SelectedKey()` | list, table |
 | Multi-select | `Options.Markable`, `Selection()`, `SelectionLabel()`, `Marks()`, `SetMarks`, `ClearMarks` | list, table, tree |
 | Row activity | `BusyWhen`, `Dispatch`, `DispatchEach`, `Done`, `BeginRead`, `ApplyRead`, `ReadsFailing` | list, table, tree |
 | Restyle in place | `SetActiveColor`, `SetInactiveColor`, `SetActiveBorder`, `SetInactiveBorder`, `SetTitle` | most |
-| Custom keys | `Options.Keys` (from `DefaultKeys()`) | list, table, tree, inspector, textview, logview, eventlog, action menu |
+| Custom keys | `Options.Keys` (from `DefaultKeys()`) | list, menu, table, tree, inspector, textview, logview, eventlog, action menu |
 
 ## Pane pass-through options
 
@@ -109,7 +110,7 @@ theme builders set it, handing each component the form it needs:
 
 | Form | Components |
 |---|---|
-| the surface itself | pane, list, table, tree, inspector, textview, logview, eventlog |
+| the surface itself | pane, list, menu, table, tree, inspector, textview, logview, eventlog |
 | its **field form** (at most one cell of edge per side, so it fits a three-row slot) | filter, input, toggle |
 | its **overlay form** (always filled, so it covers what is under it) | confirm, alert, action menu, help overlay |
 

@@ -39,6 +39,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,6 +48,31 @@ import (
 	"github.com/jsdrews/tuilib/pkg/query"
 	"github.com/jsdrews/tuilib/pkg/source"
 )
+
+// ErrRefused marks an error as the source refusing a request it understood
+// but won't serve — an API answering a sort it can't do with a 400 — rather
+// than failing to serve it. Wrap with Refused; test with errors.Is.
+//
+// The fetch function decides what counts as a refusal; this package never
+// guesses from an error's text or status. A remote Table that gets a refused
+// sort goes back to the sort its rows answer and takes the column out of the
+// sort cycle (table.RefuseSort), returning table.SortRefusedMsg. Any other
+// refused request is an ordinary failure.
+var ErrRefused = errors.New("refused")
+
+// Refused marks err as a refusal. Its message is err's own, and errors.Is
+// and errors.As still reach err. Refused(nil) is nil.
+func Refused(err error) error {
+	if err == nil {
+		return nil
+	}
+	return refusal{err}
+}
+
+type refusal struct{ err error }
+
+func (r refusal) Error() string   { return r.err.Error() }
+func (r refusal) Unwrap() []error { return []error{r.err, ErrRefused} }
 
 // Filter is the committed query a request is for: the filter text as
 // typed, parsed into terms (scoped terms carry their resolved column
@@ -233,6 +259,15 @@ func (d *driver[T]) landsAt(r result[T]) bool {
 	}
 	_, at := d.anch.Anchor().Cursor()
 	return at
+}
+
+// revert puts the source back on its last answered query, without a
+// request for it. See source.Model.Revert.
+func (d *driver[T]) revert() (bool, tea.Cmd) {
+	if d.seek != nil {
+		return d.seek.Revert()
+	}
+	return d.anch.Revert()
 }
 
 func (d *driver[T]) deliver(p source.Page) (bool, tea.Cmd) {

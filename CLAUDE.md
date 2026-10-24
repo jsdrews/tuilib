@@ -37,8 +37,8 @@ example in `examples/`.
 
 4. **Rebuild themed components in `SetTheme(t)`, carrying state with
    `State` / `Restore`.** Every stateful component — `list`, `table`,
-   `tree`, `inspector`, `logview`, `textview`, `eventlog`, `filter`,
-   `input`, `toggle` — snapshots what the user and the data did to it,
+   `tree`, `inspector`, `logview`, `textview`, `eventlog`, `menu`,
+   `filter`, `input`, `toggle` — snapshots what the user and the data did to it,
    and puts it back onto one built from new Options:
 
    ```go
@@ -123,7 +123,7 @@ example in `examples/`.
 
 9. **Components own their pane.** Every interactive component in `pkg/`
    bundles a `pane.Pane` internally — `pkg/list`, `pkg/table`, `pkg/filter`,
-   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/eventlog`, `pkg/textview`, `pkg/tree`, `pkg/inspector` all return a
+   `pkg/input`, `pkg/toggle`, `pkg/logview`, `pkg/eventlog`, `pkg/textview`, `pkg/tree`, `pkg/inspector`, `pkg/menu` all return a
    bordered, titled render from `View()`. To put a label on a component,
    set its `Title` field (which is rendered on the pane's top border) —
    don't render a label line above the component, and don't wrap a
@@ -131,7 +131,10 @@ example in `examples/`.
    pane are bars (`breadcrumb`, `statusbar`), `help.Model` (the footer
    strip — `help.Overlay` does own one), the layout primitives, `pkg/runner` (which is not a UI
    component — it suspends the program to run a subprocess), and
-   `pkg/form` itself, which is a vertical layout of bordered fields. New
+   `pkg/form` itself, which is a vertical layout of bordered fields —
+   unless `form.Options.Title` is set, when it frames the stack in a titled
+   pane the way `pkg/confirm` does (use that for a form that stands alone:
+   a prompt, an action's inputs). New
    input-style components should follow the same shape: `Options.Title` +
    an internal `pane.Pane` + `View()` returns the bordered render.
 
@@ -150,7 +153,7 @@ example in `examples/`.
 
 10. **Components expose `Help() []key.Binding`.** Interactive components
     (`list`, `table`, `filter`, `input`, `toggle`, `logview`, `textview`, `tree`,
-    `inspector`, `form`) return the bindings they currently respond to. Screens compose these into their
+    `inspector`, `menu`, `form`) return the bindings they currently respond to. Screens compose these into their
     own `Help()` so the hint strip updates as state changes — e.g. the
     focused field of a form, or whether a logview's filter is engaged.
     When state changes the relevant bindings (filter focused vs. blurred,
@@ -823,6 +826,19 @@ example in `examples/`.
     - A failed query stays stale, with `✗ failed` on the border and the
       user's filter and sort kept; committing it again, or `Refresh`,
       retries. Nothing retries automatically.
+    - A **refused sort** is not a failure. When the fetch marks its error
+      with `remote.Refused(err)` (an API that lists a sort column and then
+      400s on it) and the query differs from the answered one in its sort
+      alone, the table goes back to the answered sort with **no request**,
+      makes the column unavailable for its life (`[` `]` `s` and header
+      clicks skip it, its title dims; `State`/`Restore` carry it), and
+      `pkg/remote` returns `table.SortRefusedMsg{Column, Title, Err}`. On the
+      first load it drops the sort and asks once more unsorted. Nothing is
+      posted for you: the screen turns the message into a notice. The fetch
+      decides what is a refusal — tuilib never guesses from a status code —
+      and `errors.Is(err, remote.ErrRefused)` checks it. A screen driving
+      `pkg/source` itself does the same with `source.Revert()` and
+      `table.RefuseSort(col)`.
     - The **query history** — each committed query answered (with how
       long it took), failed or cancelled — leaves `pkg/source` as neutral
       messages that the app shell writes to the output console (rule 14),
@@ -1178,6 +1194,50 @@ example in `examples/`.
 
     Outlined is the default and draws byte for byte what tuilib drew before
     surfaces; `examples/launcher`'s goldens hold that. See `docs/surfaces.md`.
+
+36. **For a set of places to go, use `pkg/menu`; file verbs with
+    `Action.Group`.** When a screen's content is a list of things to open
+    (an app's sections, a home screen that leads to twenty others), use
+    `menu.Model` from `t.Menu()`, not a `list.Model` with labels padded to
+    fake a group column. Tabs stop working well past a handful of sections.
+    An item is `menu.Item{ID, Label, Group, Description, Data}`. Enter or a
+    double click emits `menu.ChosenMsg`, and the screen decides what opening
+    means:
+
+    ```go
+    if it, ok := s.menu.Chosen(msg); ok {   // matches this menu's token only
+        return s, screen.Push(newSection(it, s.t))
+    }
+    ```
+
+    It is a pane component: forward every message, gate `IsCapturingKeys`,
+    forward `HelpSections`, and carry `State()` / `Restore` in `SetTheme`
+    (rules 4–6, 10).
+
+    Groups follow one set of rules in both `pkg/menu` and the action menu
+    (`Action.Group`), implemented once in `internal/grouping`:
+
+    - Headers appear only when the items name **two or more groups**.
+      Otherwise the list is flat.
+    - Groups appear in the order first seen, with header text as written.
+      Nothing is title-cased.
+    - Items without a group go **last, under `other`**, merged with any
+      group named `other`.
+    - The cursor, clicks, the wheel and the half-page keys skip headers.
+      In `pkg/menu`, **`[` / `]`** jump to the first item of the previous or
+      next group; **not `tab`**, which cycles focus (rule 27), because a
+      menu sits beside other components. The action menu jumps with
+      **`tab` / `shift+tab`**: it is modal, so there are no panes behind it
+      to cycle while it is up.
+    - The menu's filter matches the **label and the group**, never the
+      description. A group with nothing left loses its header, but a menu
+      that started grouped keeps its headers when the filter narrows it to
+      one group, so the labels still read beside their group.
+
+    `HeaderStyle` styles every header. `GroupStyle func(group) lipgloss.Style`
+    styles each by its group (a write group in a warning colour). Rows under
+    a header never take a group style. See `examples/components/menu` and
+    `docs/components/menu.md`.
 
 ## Anti-patterns
 
@@ -1552,7 +1612,7 @@ path.
 
   | Area | Holds |
   |---|---|
-  | `components/` | one demo per UI component, in isolation — `pane`, `list`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
+  | `components/` | one demo per UI component, in isolation — `pane`, `list`, `menu`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
   | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `surfaces`, `prescreen` |
   | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `activity`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
 
@@ -1605,9 +1665,16 @@ path.
   into a remote request need the identical parse, and neither should
   import the other to get it. `Term.Title` carries the resolved column
   title (not the prefix the user typed) so a scoped term maps onto a
-  query parameter directly. `Parse` never fails — an unresolvable key or
-  an uncompilable regex degrades to a literal substring, so the filter
-  bar never refuses input. Feeding `Distinct` values scraped from one
+  query parameter directly. A scoped term can compare instead of contain —
+  `name=x`, `status!=done`, `year>1950`, `>=`, `<`, `<=` — and `Term.Op`
+  says which (`OpContains` is the zero value, so existing callers read
+  every term as before). `MatchAll` applies the op to rows held locally —
+  numerically when both sides parse as numbers — so local and remote
+  filtering agree on meaning; a remote coordinator maps `Op` to its own
+  parameter and reads the value as typed from `Term.Text` (`Value` is
+  lowercased). Bare terms take no op. `Parse` never fails — an
+  unresolvable key, a missing value or an uncompilable regex degrades to a
+  literal substring, so the filter bar never refuses input. Feeding `Distinct` values scraped from one
   page of a paged source produces completions that are *wrong* rather
   than merely incomplete; a remote caller should pass facet values
   instead.
@@ -1860,6 +1927,12 @@ path.
   `SetRows` / `SetKeyedRows` leave windowed mode, and under a remote mode
   count as the answer to the committed query. See
   `examples/components/table` and `theme.Table()`.
+- **Menu component:** `pkg/menu` is a grouped, filterable list of things to
+  open. Group headers, `[`/`]` jumps and `ChosenMsg` are described in rule 36.
+  Its group layout is `internal/grouping`, which the action menu shares, so
+  a change to the header rules belongs there and nowhere else. Don't confuse
+  it with `pkg/action`'s `Menu`, the popup over a screen's verbs. See
+  `examples/components/menu` and `theme.Menu()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`
   (or `SetContent(s)` at runtime — replaces + resets scroll to top).

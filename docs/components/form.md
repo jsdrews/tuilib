@@ -89,6 +89,8 @@ compare values in the screen on `SubmittedMsg`.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `Fields` | `[]form.Field` | **required** | The fields, top to bottom. |
+| `Title` | `string` | | When set, frames the whole form in a titled pane, the way `confirm` frames its buttons. Use it when the form stands alone, such as a prompt or an action's inputs. Without it the form is a bare stack of bordered fields. |
+| `ActiveColor`, `InactiveColor`, `ActiveBorder`, `InactiveBorder`, `Glyphs`, `SlotBrackets`, `Surface` | | theme | The frame's chrome, used only with `Title`. |
 | `SubmitText` | `string` | `"Submit"` | Submit button label. |
 | `FieldSpacing` | `*int` | 0 | Blank lines between fields. |
 | `Styles` | `form.Styles` | theme | Input, placeholder, cursor, selected, pane colors and border shapes, error color and text, submit button styles. |
@@ -116,6 +118,7 @@ Mouse: clicking a field moves focus to it; clicking submit submits.
 | `Value(key)`, `String(key)`, `Bool(key)` | One value, typed. |
 | `FocusedIndex()` | Which field has the keyboard (`len(Fields)` = submit). |
 | `SetStyles(s)` | Restyle every field. |
+| `SetTitle(s)`, `Title()` | The frame's title (no effect without one). |
 | `FieldRect(i)`, `SubmitRect()` | Geometry. |
 | `IsCapturingKeys()` | Always true while the form is active. |
 

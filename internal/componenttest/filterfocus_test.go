@@ -27,6 +27,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
@@ -215,6 +216,25 @@ func harnesses() []harness {
 		m.SetRect(placed())
 		hs = append(hs, harness{
 			name:          "textview",
+			update:        func(msg tea.Msg) { m, _ = m.Update(msg) },
+			updateCmd:     func(msg tea.Msg) tea.Cmd { var c tea.Cmd; m, c = m.Update(msg); return c },
+			filterFocused: func() bool { return m.IsCapturingKeys() },
+			view:          func() string { return m.View() },
+			focus:         func() { m.Focus() },
+			focusFilter:   func() { m.FocusFilter() },
+			setRect:       func() { m.SetRect(placed()) },
+		})
+	}
+	{
+		var mi []menu.Item
+		for i, s := range items() {
+			mi = append(mi, menu.Item{Label: s, Group: []string{"one", "two"}[i%2]})
+		}
+		m := menu.New(menu.Options{Items: mi, Filterable: true,
+			ActiveColor: active, InactiveColor: inactive, Filter: filterOpts})
+		m.SetRect(placed())
+		hs = append(hs, harness{
+			name:          "menu",
 			update:        func(msg tea.Msg) { m, _ = m.Update(msg) },
 			updateCmd:     func(msg tea.Msg) tea.Cmd { var c tea.Cmd; m, c = m.Update(msg); return c },
 			filterFocused: func() bool { return m.IsCapturingKeys() },
