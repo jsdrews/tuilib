@@ -41,6 +41,17 @@ All are suppressed while the active screen reports `IsCapturingKeys()`.
 | `A` | `MarkAll` | mark all |
 | `D` | `ClearMarks` | drop marks |
 
+## Menu
+
+| Key | Field | Action |
+|---|---|---|
+| `↑`, `k` / `↓`, `j` | `Up` / `Down` | move (skipping headers) |
+| `g` / `G` | `Top` / `Bottom` | first / last |
+| `ctrl+u` / `ctrl+d` | `HalfUp` / `HalfDown` | half page |
+| `[` / `]` | `PrevGroup` / `NextGroup` | previous / next group |
+| `/` | `Filter` | filter |
+| `enter` | `Choose` | open |
+
 ## Table
 
 Everything in List, plus:
@@ -147,6 +158,7 @@ cancel; `enter` commits the highlighted button.
 |---|---|---|
 | `↑`, `k` / `↓`, `j` | `Up` / `Down` | move |
 | `g` / `G`, `ctrl+u` / `ctrl+d` | `Top` / `Bottom`, `HalfUp` / `HalfDown` | jump |
+| `shift+tab` / `tab` | `PrevGroup` / `NextGroup` | previous / next group |
 | `enter` | `Choose` | run |
 | `esc` | `Cancel` | cancel |
 

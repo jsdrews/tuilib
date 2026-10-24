@@ -18,6 +18,14 @@
 // back to a literal substring including the tilde, so Parse never refuses
 // input and never returns an error.
 //
+// A scoped term can compare instead of contain, by putting an operator
+// where the colon goes: "name=tolkien", "status!=done", "year>1950",
+// "year>=1950", "year<2000", "year<=2000". The key resolves the same way,
+// and an unresolvable key or a missing value is a literal bare term, as
+// with ":". Bare terms take no operator: ">=5" is the text ">=5". Term.Op
+// says which comparison a term makes; its zero value is OpContains, so code
+// written before operators existed reads every term as it always did.
+//
 // Matching is ANSI-aware: cells are stripped of escape sequences before
 // comparison, so colored content matches on its visible text.
 //
@@ -30,10 +38,82 @@ package query
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
 )
+
+// Op is the comparison a term makes against a cell.
+type Op int
+
+const (
+	// OpContains is a case-insensitive substring match — "key:value", and
+	// every bare term. The zero value.
+	OpContains Op = iota
+	// OpRegex is a case-insensitive regex match — "key:~pattern" or a bare
+	// "~pattern".
+	OpRegex
+	// OpEq is case-insensitive equality — "key=value".
+	OpEq
+	// OpNe is its negation — "key!=value".
+	OpNe
+	// OpGt, OpGe, OpLt and OpLe order the cell against the value —
+	// "key>v", "key>=v", "key<v", "key<=v" — numerically when both parse
+	// as numbers, and as case-insensitive strings otherwise.
+	OpGt
+	OpGe
+	OpLt
+	OpLe
+)
+
+// ops is every operator as typed, two-character forms first so ">=" is
+// never read as ">" followed by "=".
+var ops = []struct {
+	sep string
+	op  Op
+}{
+	{"!=", OpNe}, {">=", OpGe}, {"<=", OpLe},
+	{":", OpContains}, {"=", OpEq}, {">", OpGt}, {"<", OpLt},
+}
+
+// String is the operator as typed: ":", "~", "=", "!=", ">", ">=", "<", "<=".
+func (o Op) String() string {
+	switch o {
+	case OpRegex:
+		return "~"
+	case OpEq:
+		return "="
+	case OpNe:
+		return "!="
+	case OpGt:
+		return ">"
+	case OpGe:
+		return ">="
+	case OpLt:
+		return "<"
+	case OpLe:
+		return "<="
+	}
+	return ":"
+}
+
+// split finds the first operator in tok and returns the key before it, the
+// operator as typed, its Op, and the value after it. ok is false when there
+// is no operator with text on both sides.
+func split(tok string) (key, sep string, op Op, val string, ok bool) {
+	for i := 1; i < len(tok); i++ {
+		for _, o := range ops {
+			if strings.HasPrefix(tok[i:], o.sep) {
+				if i+len(o.sep) >= len(tok) {
+					return "", "", 0, "", false
+				}
+				return tok[:i], o.sep, o.op, tok[i+len(o.sep):], true
+			}
+		}
+	}
+	return "", "", 0, "", false
+}
 
 // Term is one AND-ed clause from a parsed filter string.
 type Term struct {
@@ -44,9 +124,17 @@ type Term struct {
 	// title, not the prefix the user typed, so a caller building a remote
 	// request can use it as a field name directly. Empty for bare terms.
 	Title string
-	// Value is the lowercased literal matched as a substring. Empty when
-	// Regex is set.
+	// Op is the comparison: OpContains (the zero value), OpRegex, or one of
+	// the comparison operators, which only scoped terms carry.
+	Op Op
+	// Value is the lowercased literal the cell is compared against. Empty
+	// when Regex is set.
 	Value string
+	// Text is the value exactly as typed after the operator — the pattern
+	// without its "~" for a regex, the whole clause for a bare term. Use it
+	// when building a request that is case-sensitive, where Value's
+	// lowercasing would change the answer.
+	Text string
 	// Regex is the compiled pattern for a "~"-prefixed value, already
 	// case-insensitive. Nil for literal terms.
 	Regex *regexp.Regexp
@@ -63,14 +151,13 @@ func Parse(input string, columns []string) []Term {
 	parts := strings.Fields(input)
 	out := make([]Term, 0, len(parts))
 	for _, p := range parts {
-		if i := strings.Index(p, ":"); i > 0 && i < len(p)-1 {
-			key, val := p[:i], p[i+1:]
+		if key, _, op, val, ok := split(p); ok {
 			if col := ColumnByPrefix(key, columns); col >= 0 {
-				out = append(out, compile(col, columns[col], val, p))
+				out = append(out, compile(col, columns[col], op, val, p))
 				continue
 			}
 		}
-		out = append(out, compile(-1, "", p, p))
+		out = append(out, compile(-1, "", OpContains, p, p))
 	}
 	return out
 }
@@ -79,11 +166,11 @@ func Parse(input string, columns []string) []Term {
 // matching; on compile failure the raw value (including the tilde) is kept
 // as a literal substring so the user always sees results for what they
 // typed.
-func compile(col int, title, val, raw string) Term {
-	t := Term{Column: col, Title: title, Raw: raw}
-	if strings.HasPrefix(val, "~") && len(val) > 1 {
+func compile(col int, title string, op Op, val, raw string) Term {
+	t := Term{Column: col, Title: title, Op: op, Raw: raw, Text: val}
+	if op == OpContains && strings.HasPrefix(val, "~") && len(val) > 1 {
 		if re, err := regexp.Compile("(?i)" + val[1:]); err == nil {
-			t.Regex = re
+			t.Op, t.Regex, t.Text = OpRegex, re, val[1:]
 			return t
 		}
 	}
@@ -110,13 +197,49 @@ func ColumnByPrefix(key string, columns []string) int {
 
 // Match reports whether cell satisfies the term. The cell is ANSI-stripped
 // first; literal terms compare lowercased, regex terms rely on the (?i)
-// flag applied at compile time.
+// flag applied at compile time, and the ordering operators compare as
+// numbers when cell and value both parse as one.
 func (t Term) Match(cell string) bool {
 	s := ansi.Strip(cell)
 	if t.Regex != nil {
 		return t.Regex.MatchString(s)
 	}
-	return strings.Contains(strings.ToLower(s), t.Value)
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch t.Op {
+	case OpEq:
+		return s == t.Value
+	case OpNe:
+		return s != t.Value
+	case OpGt, OpGe, OpLt, OpLe:
+		c := compare(s, t.Value)
+		switch t.Op {
+		case OpGt:
+			return c > 0
+		case OpGe:
+			return c >= 0
+		case OpLt:
+			return c < 0
+		}
+		return c <= 0
+	}
+	return strings.Contains(s, t.Value)
+}
+
+// compare orders a against b: numerically when both parse as numbers,
+// otherwise as strings.
+func compare(a, b string) int {
+	x, errA := strconv.ParseFloat(a, 64)
+	y, errB := strconv.ParseFloat(b, 64)
+	if errA == nil && errB == nil {
+		switch {
+		case x < y:
+			return -1
+		case x > y:
+			return 1
+		}
+		return 0
+	}
+	return strings.Compare(a, b)
 }
 
 // MatchAll reports whether every term matches cells. Scoped terms test only

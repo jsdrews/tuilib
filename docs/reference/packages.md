@@ -146,10 +146,11 @@ The filter grammar shared by local and remote filters. A leaf package.
 | Symbol | Does |
 |---|---|
 | `Parse(input, columns) []Term` | Split into AND-ed terms; never fails. |
-| `Term{Column, Title, Value, Regex, Raw}` | One term; `Title` is the resolved column title for scoped terms (`-1`/`""` when bare). |
+| `Term{Column, Title, Op, Value, Text, Regex, Raw}` | One term; `Title` is the resolved column title for scoped terms (`-1`/`""` when bare). `Value` is lowercased, `Text` as typed. |
+| `Op`: `OpContains` (zero value), `OpRegex`, `OpEq`, `OpNe`, `OpGt`, `OpGe`, `OpLt`, `OpLe` | The comparison a term makes: `key:v`, `key:~re`, `key=v`, `key!=v`, `key>v`, `key>=v`, `key<v`, `key<=v`. `Op.String()` is the operator as typed. |
 | `Term.Match(cell)`, `MatchAll(cells, terms)` | Matching (ANSI-stripped, case-insensitive). |
 | `ColumnByPrefix(key, columns)` | Unique column whose title starts with `key`, or `-1`. |
-| `ActiveTerm(input, columns)` | The `key:value` term being typed. |
+| `ActiveTerm(input, columns)` | The scoped term being typed (`key:value`, or with any comparison operator). |
 | `Distinct(rows, ncols)`, `NormalizeValues(values)` | Build completion candidates. |
 | `Candidates(distinct, col, prefix)`, `Complete(input, columns, distinct)` | Hints and tab completion. |
 
@@ -162,6 +163,7 @@ Coordinates paged fetches without doing I/O. See
 |---|---|
 | `New(Options) Model` | Offset or cursor paging. |
 | `Model.Init`, `Viewport(first, last)`, `SetQuery(raw, terms, sort, desc)`, `Deliver(Page)`, `Update`, `Refresh`, `Find`, `SetGrowing`, `SetHeld`, `Cancel` | The loop. |
+| `Model.Revert()`, `Anchored.Revert()` | Go back from a query that failed unanswered to the last answered one, with no request (how a refused sort recovers). |
 | `NewAnchored(AnchoredOptions) Anchored` | Edge paging from an anchor. |
 | `Newest()`, `Oldest()`, `At(cursor)` | Anchors. |
 | `Query` | One request: `Offset`, `Limit`, `Cursor`, `Raw`, `Terms`, `Sort`, `Desc`, `Gen`, `Ctx`, `Poll`, `Probe`, `FromAnchor`, `Find`, `Term`, `Dir`, … |
@@ -188,6 +190,7 @@ Binds a table or eventlog to a source. See
 | `Anchored[T]{Edge, Find, Anchor, Name, PageSize, Follow, ViewportDelay, Context}` | Anchor-walked data. |
 | `Window`, `Edge`, `Find`, `Filter` | Typed requests your fetch functions receive. |
 | `Init`, `Update`, `Restyle`, `Refresh`, `SetGrowing`, `SetAnchor` | The binding's methods; everything else is the embedded component's. |
+| `Refused(err)`, `ErrRefused` | Mark a fetch error as a refusal; `errors.Is(err, remote.ErrRefused)` checks it. A refused sort sends a `Table` back to its answered sort and returns `table.SortRefusedMsg`. |
 
 ## poll
 

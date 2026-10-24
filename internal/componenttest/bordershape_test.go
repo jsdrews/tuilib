@@ -17,6 +17,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/surface"
@@ -84,6 +85,13 @@ func TestThemeOwnsComponentBorderShape(t *testing.T) {
 			o := th.List()
 			o.Items = []string{"a", "b"}
 			m := list.New(o)
+			m.SetRect(shapeRect())
+			return m.View()
+		}},
+		{"menu", func() string {
+			o := th.Menu()
+			o.Items = []menu.Item{{Label: "a"}}
+			m := menu.New(o)
 			m.SetRect(shapeRect())
 			return m.View()
 		}},

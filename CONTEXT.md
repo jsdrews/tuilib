@@ -55,6 +55,16 @@ A whole component having no data yet; its body is replaced. Activity is per-row 
 The user's selection of rows. Activity is the system's state about rows. Both are held by key, so marking rows and then acting on them makes exactly those rows active.
 _Avoid_: select (as a noun for the set)
 
+### Menus
+
+**Menu**:
+A grouped, filterable list of things to open, such as an app's sections, drawn by `pkg/menu`. Choosing an item hands it back to the screen, which decides what opening means.
+_Avoid_: action menu (the popup over a screen's verbs), launcher, nav list
+
+**Action group**:
+The header an action is filed under in the action menu (`Action.Group`), such as read or write. Shares its rules with a menu's groups: headers appear only once there are two or more groups, groups appear in the order first seen, and items with no group go last under `other`.
+_Avoid_: category
+
 ### Remote queries
 
 **Committed query**:
@@ -76,6 +86,14 @@ _Avoid_: loading (which replaces the body), reloading, outdated
 **Failed query**:
 A committed query whose fetch failed. The rows stay stale, still answering the previous query, and the user's input is kept so the same query can be retried or edited.
 _Avoid_: error state, reverted query
+
+**Refusal**:
+A source declining a request it understood but won't serve, such as an API answering a sort it can't do with a 400, marked by the fetch with `remote.Refused`. A sort refusal sends the table back to the sort its rows answer and takes the column out of the sort cycle. Any other refusal is a failed query.
+_Avoid_: rejection, 4xx (the fetch decides which statuses count)
+
+**Comparison**:
+A scoped filter term that compares a column's value instead of searching it: `=`, `!=`, `>`, `>=`, `<`, `<=`, as in `year>=1950`. Its `Op` says which, and a remote source translates it into its own parameter.
+_Avoid_: operator term, predicate
 
 **Query history**:
 The console's record of what happened to each committed query: answered (with how long it took), failed, or cancelled. Routine page fetches are left out; failed ones are not.

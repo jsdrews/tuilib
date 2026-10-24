@@ -34,6 +34,7 @@ import (
 	compinspector "github.com/jsdrews/tuilib/examples/components/inspector"
 	complist "github.com/jsdrews/tuilib/examples/components/list"
 	complogview "github.com/jsdrews/tuilib/examples/components/logview"
+	compmenu "github.com/jsdrews/tuilib/examples/components/menu"
 	compmetrics "github.com/jsdrews/tuilib/examples/components/metrics"
 	comppane "github.com/jsdrews/tuilib/examples/components/pane"
 	comptable "github.com/jsdrews/tuilib/examples/components/table"
@@ -94,6 +95,9 @@ var entries = []entry{
 	{groupComponents, "List", "components/list",
 		"A filterable list.Model with 372 numbered rows, so the scrollbar thumb is small and worth dragging. Every row shows its ordinal, so after a drag or a track click you can read whether the jump landed where the thumb said. Wheel scrolls whether or not the pane has focus; double-click opens a row.",
 		complist.New},
+	{groupComponents, "Menu", "components/menu",
+		"A grouped, filterable menu.Model as the home screen of an app with many sections. Groups are headers the cursor skips; the two items with no group land last under \"other\". [ and ] jump between groups — tab is left for focus cycling. / filters on the label and the group (try network or instance), and a group with nothing left hides its header. Enter or double-click emits ChosenMsg and the screen pushes the section.",
+		compmenu.New},
 	{groupComponents, "Table", "components/table",
 		"table.Model with sticky header and three column sizing modes side-by-side (City uses Flex:1 + MaxWidth:28 to absorb leftover space up to a cap — resize the terminal to watch it stretch then stop; Region/Population fixed; Status uses Width:0 for content-auto). [/] steps the sort column and s toggles direction (Population sorts numerically via a custom Less that parses \"8.3M\"). The Status column uses ansi.CellColor so the selected-row background passes through colored cells; the Wiki column wraps each URL in ansi.Hyperlink, so shift-click launches the full link even when the column truncates it.",
 		comptable.New},

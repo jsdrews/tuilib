@@ -13,6 +13,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/logview"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
@@ -248,6 +249,36 @@ func TestStateRestoreRedrawsTheSame(t *testing.T) {
 				o := th.TextView()
 				o.Title, o.Searchable = "doc", true
 				n := textview.New(o)
+				n.SetRect(placed())
+				n.Restore(st)
+				return &n
+			},
+		},
+		{
+			name: "menu",
+			build: func() restorable {
+				o := th.Menu()
+				o.Title, o.Filterable = "m", true
+				m := menu.New(o)
+				m.SetRect(placed())
+				return &m
+			},
+			use: func(c restorable) restorable {
+				m := c.(*menu.Model)
+				var items []menu.Item
+				for i, s := range lines(40, "section-%02d") {
+					items = append(items, menu.Item{ID: s, Label: s, Group: fmt.Sprint("g", i%3), Description: "about " + s})
+				}
+				m.SetItems(items)
+				m.SetValue("1")
+				m.Select("section-13")
+				return m
+			},
+			swap: func(c restorable) restorable {
+				st := c.(*menu.Model).State()
+				o := th.Menu()
+				o.Title, o.Filterable = "m", true
+				n := menu.New(o)
 				n.SetRect(placed())
 				n.Restore(st)
 				return &n

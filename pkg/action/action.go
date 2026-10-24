@@ -75,6 +75,13 @@ type Action struct {
 	// Desc is an optional gloss rendered beside the label.
 	Desc string
 
+	// Group files the action under a header in the menu. Any name works and
+	// none means anything special. Headers are drawn only once a Set names two
+	// or more groups, so a screen whose verbs are all one kind keeps a flat
+	// menu; groups appear in the order first seen, and actions with no group
+	// go last under "other".
+	Group string
+
 	// Key is an optional shortcut. The menu dispatches it while open and
 	// renders it in a right-hand column; it is deliberately not advertised
 	// in the screen's Help(), since moving discovery off the footer and into

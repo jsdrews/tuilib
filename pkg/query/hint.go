@@ -66,6 +66,10 @@ type Active struct {
 	// Completion writes this back verbatim so finishing a value never
 	// also rewrites "reg" into "Region" under the user's cursor.
 	Key string
+	// Sep is the operator as typed (":", "=", ">=", …), written back with
+	// Key, and Op the comparison it makes.
+	Sep string
+	Op  Op
 	// Value is the partial value typed after the colon, possibly empty.
 	Value string
 	// Start is the byte offset of the term's first character in the input,
@@ -73,10 +77,11 @@ type Active struct {
 	Start int
 }
 
-// ActiveTerm reports the trailing key:value term the user is mid-typing.
-// ok is false when the input is empty, ends in whitespace (the term is
-// finished), has no resolvable key before a colon, or carries a "~" regex
-// value — enumerating a regex's matches isn't a useful hint.
+// ActiveTerm reports the trailing scoped term the user is mid-typing —
+// "key:value", or a comparison such as "key>=value". ok is false when the
+// input is empty, ends in whitespace (the term is finished), has no
+// resolvable key before an operator, or carries a "~" regex value —
+// enumerating a regex's matches isn't a useful hint.
 func ActiveTerm(input string, columns []string) (Active, bool) {
 	if input == "" || strings.HasSuffix(input, " ") || strings.HasSuffix(input, "\t") {
 		return Active{}, false
@@ -85,20 +90,30 @@ func ActiveTerm(input string, columns []string) (Active, bool) {
 	if i := strings.LastIndexAny(input, " \t"); i >= 0 {
 		start = i + 1
 	}
-	tok := input[start:]
-	i := strings.Index(tok, ":")
-	if i <= 0 {
-		return Active{}, false
-	}
-	key, val := tok[:i], tok[i+1:]
-	if strings.HasPrefix(val, "~") {
+	key, sep, op, val, ok := splitActive(input[start:])
+	if !ok || (op == OpContains && strings.HasPrefix(val, "~")) {
 		return Active{}, false
 	}
 	col := ColumnByPrefix(key, columns)
 	if col < 0 {
 		return Active{}, false
 	}
-	return Active{Column: col, Title: columns[col], Key: key, Value: val, Start: start}, true
+	return Active{Column: col, Title: columns[col], Key: key, Sep: sep, Op: op, Value: val, Start: start}, true
+}
+
+// splitActive is split for a term still being typed, whose value may be
+// empty: "region:" is already asking for hints. An operator still being
+// typed — the "!" of "!=", or a ">" that may become ">=" — reads as the
+// shorter one where there is one, and as no term where there isn't.
+func splitActive(tok string) (key, sep string, op Op, val string, ok bool) {
+	for i := 1; i < len(tok); i++ {
+		for _, o := range ops {
+			if strings.HasPrefix(tok[i:], o.sep) {
+				return tok[:i], o.sep, o.op, tok[i+len(o.sep):], true
+			}
+		}
+	}
+	return "", "", 0, "", false
 }
 
 // Candidates returns the values in distinct[col] whose lowercased form
@@ -136,7 +151,7 @@ func Complete(input string, columns []string, distinct [][]string) (string, bool
 	if len(common) <= len(act.Value) {
 		return input, false
 	}
-	next := input[:act.Start] + act.Key + ":" + common
+	next := input[:act.Start] + act.Key + act.Sep + common
 	if next == input {
 		return input, false
 	}

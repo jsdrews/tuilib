@@ -8,6 +8,7 @@ import (
 
 	"github.com/jsdrews/tuilib/internal/remoteview"
 	"github.com/jsdrews/tuilib/internal/tick"
+	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/focus"
 )
 
@@ -47,6 +48,81 @@ type remoteState struct {
 
 	baseTitle string
 	loadCmd   tea.Cmd
+
+	// unavailable holds the columns the source refused to sort by. Replaced
+	// rather than mutated, so a State taken earlier keeps its own copy.
+	unavailable map[int]bool
+}
+
+// SortRefusedMsg reports that the source refused to sort by a column — it
+// answered the sort with an error marked as a refusal, and the table has
+// gone back to the sort its rows answer and taken the column out of the
+// sort cycle. The table posts nothing about it; the screen decides how to
+// tell the user. Err is the source's error, Title the column's.
+type SortRefusedMsg struct {
+	Column int
+	Title  string
+	Err    error
+}
+
+// RefuseSort makes col unavailable to sort for the rest of this table's
+// life — [, ], s and header clicks skip it, and its header title is drawn
+// with Options.UnavailableTitle — and puts the sort back where the rows on
+// screen are: the sort their answered query used, or none before any
+// answer. Like SetSort it reports no query, and it clears the failure, so
+// rows that were stale under the refused sort are current again.
+//
+// pkg/remote calls it when a source refuses a sort (remote.ErrRefused); a
+// screen driving pkg/source itself calls it the same way. The unavailable
+// columns survive a rebuild through State and Restore.
+func (m *Model) RefuseSort(col int) {
+	if col < 0 || col >= len(m.cols) {
+		return
+	}
+	next := make(map[int]bool, len(m.rq.unavailable)+1)
+	for c := range m.rq.unavailable {
+		next[c] = true
+	}
+	next[col] = true
+	m.rq.unavailable = next
+
+	sortCol, desc := -1, false
+	if a, ok := m.Answered(); ok && a.Sort != "" {
+		sortCol, desc = m.columnByTitle(a.Sort), a.Desc
+	}
+	m.sortCol, m.sortDesc = sortCol, desc
+	if sortCol < 0 {
+		m.sortDesc = false
+	}
+	m.rq.cSortCol, m.rq.cSortDesc, m.rq.staged = m.sortCol, m.sortDesc, false
+	m.rq.st.Failed, m.rq.st.Retry = false, false
+	m.applyFilter()
+	m.refresh()
+	m.syncQuery()
+}
+
+// SortUnavailable reports whether the source refused to sort by col.
+func (m Model) SortUnavailable(col int) bool { return m.rq.unavailable[col] }
+
+// ColumnByTitle is the index of the column titled title, or -1 — how a sort
+// named in a query (Answer.Sort, source.Query.Sort) maps back to a column.
+func (m Model) ColumnByTitle(title string) int { return m.columnByTitle(title) }
+
+func (m Model) columnByTitle(title string) int {
+	for i, c := range m.cols {
+		if c.Title == title {
+			return i
+		}
+	}
+	return -1
+}
+
+// dimTitle draws an unavailable column's header title.
+func (m Model) dimTitle(title string) string {
+	if m.unavailableTitle != nil {
+		return m.unavailableTitle(title)
+	}
+	return tuiansi.CellColor(240, title)
 }
 
 func (m Model) remote() bool {

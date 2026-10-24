@@ -1,6 +1,8 @@
 package remote
 
 import (
+	"errors"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/source"
@@ -29,8 +31,15 @@ func NewTable(opts table.Options, s Shape[table.KeyedRow]) *Table {
 	return &Table{Model: table.New(opts), d: d}
 }
 
-// Init requests the first page.
-func (t *Table) Init() tea.Cmd { return t.d.init() }
+// Init requests the first page, under the filter and sort the table
+// already holds — a starting sort set with SetSort before Init, say, which
+// adopts silently and would otherwise never reach the source.
+func (t *Table) Init() tea.Cmd {
+	if q := t.Query(); q.Raw != "" || q.Sort != "" {
+		return t.d.setQuery(Filter{Raw: q.Raw, Terms: q.Terms, Sort: q.Sort, Desc: q.Desc})
+	}
+	return t.d.init()
+}
 
 // SetGrowing says whether rows are still arriving; while they are, the
 // source polls.
@@ -87,6 +96,11 @@ func (t *Table) apply(r result[table.KeyedRow]) tea.Cmd {
 	switch {
 	case r.q.Find || r.q.Probe:
 		// Tables neither search remotely nor count unseen rows.
+	case r.page.Err != nil && errors.Is(r.page.Err, ErrRefused):
+		if refused, rcmd := t.refuseSort(r); refused {
+			return tea.Batch(cmd, rcmd)
+		}
+		t.SetFailed(a)
 	case r.page.Err != nil:
 		t.SetFailed(a)
 	case t.d.seek != nil:
@@ -107,6 +121,42 @@ func (t *Table) apply(r result[table.KeyedRow]) tea.Cmd {
 		t.SetMore(t.d.anch.More())
 	}
 	return cmd
+}
+
+// refuseSort handles a refused fetch that was a sort refusal: the query
+// it failed differs from the one the rows answer in its sort alone, or —
+// on the first load, with no rows yet — asked for a sort at all. Anything
+// else is an ordinary failure, and refused is false.
+//
+// A refusal against rows on screen goes back to their sort with no
+// request. On the first load there is nothing to go back to, so the sort
+// is dropped and the query asked once more unsorted; a failure of that is
+// ordinary, since it has no sort to refuse.
+func (t *Table) refuseSort(r result[table.KeyedRow]) (refused bool, cmd tea.Cmd) {
+	failed := answerOf(r.q).Normalized()
+	col := t.ColumnByTitle(failed.Sort)
+	if failed.Sort == "" || col < 0 {
+		return false, nil
+	}
+	ans, has := t.Answered()
+	if has {
+		ans = ans.Normalized()
+		if ans.Raw != failed.Raw || (ans.Sort == failed.Sort && ans.Desc == failed.Desc) {
+			return false, nil
+		}
+	}
+	msg := table.SortRefusedMsg{Column: col, Title: failed.Sort, Err: r.page.Err}
+	report := func() tea.Msg { return msg }
+	t.RefuseSort(col)
+	if has {
+		if ok, more := t.d.revert(); ok {
+			return true, tea.Batch(report, more)
+		}
+	}
+	// No answered query to go back to in the source: ask for what the table
+	// now shows, which is the answered sort, or none on the first load.
+	q := t.Query()
+	return true, tea.Batch(report, t.d.setQuery(Filter{Raw: q.Raw, Terms: q.Terms, Sort: q.Sort, Desc: q.Desc}))
 }
 
 // Restyle swaps in opts — a new theme — keeping the rows, filter, sort

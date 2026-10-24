@@ -447,6 +447,12 @@ type Options struct {
 	// the corresponding separator. Theme.Table() sets sensible defaults.
 	Borders Borders
 
+	// UnavailableTitle renders the header title of a column the source
+	// refused to sort by (see RefuseSort), so it reads as present but out of
+	// reach. Like Borders, its output is emitted verbatim inside the header
+	// row: keep it foreground-only. Nil uses palette index 240.
+	UnavailableTitle func(title string) string
+
 	// Keys is the table's keymap. Leave zero to use DefaultKeys; set
 	// individual bindings to override (others fall back to defaults via
 	// fillDefaults). theme.Table() pre-populates this.
@@ -664,12 +670,13 @@ type Model struct {
 	// SetRows / SetColumns so per-keystroke lookups stay cheap.
 	distinct [][]string
 
-	body            pane.Pane
-	headerStyle     lipgloss.Style
-	selectedStyle   lipgloss.Style
-	selectedBlurred lipgloss.Style
-	cellStyle       lipgloss.Style
-	hScrollbar      bool
+	body             pane.Pane
+	unavailableTitle func(string) string
+	headerStyle      lipgloss.Style
+	selectedStyle    lipgloss.Style
+	selectedBlurred  lipgloss.Style
+	cellStyle        lipgloss.Style
+	hScrollbar       bool
 
 	colSep     string
 	headerRule string
@@ -719,37 +726,38 @@ func New(opts Options) Model {
 		colSep = " " + opts.Borders.Vertical + " "
 	}
 	m := Model{
-		glyphs:          opts.Glyphs.Resolve(),
-		cols:            cols,
-		rows:            append([]Row(nil), opts.Rows...),
-		filterable:      opts.Filterable,
-		filterMode:      opts.FilterMode,
-		sortMode:        opts.SortMode,
-		sortCol:         -1,
-		qSortCol:        -1,
-		winTotal:        -1,
-		phGlyph:         opts.Placeholder,
-		headerStyle:     opts.HeaderStyle,
-		selectedStyle:   opts.SelectedStyle,
-		selectedBlurred: opts.SelectedBlurredStyle,
-		cellStyle:       opts.CellStyle,
-		markable:        opts.Markable,
-		marks:           map[string]bool{},
-		markStyle:       opts.MarkStyle,
-		act:             activity.New(opts.Activity),
-		actEnabled:      opts.ActivityColumn != "" || opts.BusyWhen != nil,
-		actColName:      opts.ActivityColumn,
-		busyWhen:        opts.BusyWhen,
-		revision:        opts.Revision,
-		hScrollbar:      opts.HScrollbar,
-		colSep:          colSep,
-		headerRule:      opts.Borders.HeaderRule,
-		keys:            opts.Keys,
-		token:           focus.NewToken(),
-		vpFirst:         -1,
-		vpLast:          -1,
-		vpTotal:         -1,
-		focusIdx:        -1,
+		glyphs:           opts.Glyphs.Resolve(),
+		cols:             cols,
+		rows:             append([]Row(nil), opts.Rows...),
+		filterable:       opts.Filterable,
+		filterMode:       opts.FilterMode,
+		sortMode:         opts.SortMode,
+		sortCol:          -1,
+		qSortCol:         -1,
+		winTotal:         -1,
+		phGlyph:          opts.Placeholder,
+		headerStyle:      opts.HeaderStyle,
+		unavailableTitle: opts.UnavailableTitle,
+		selectedStyle:    opts.SelectedStyle,
+		selectedBlurred:  opts.SelectedBlurredStyle,
+		cellStyle:        opts.CellStyle,
+		markable:         opts.Markable,
+		marks:            map[string]bool{},
+		markStyle:        opts.MarkStyle,
+		act:              activity.New(opts.Activity),
+		actEnabled:       opts.ActivityColumn != "" || opts.BusyWhen != nil,
+		actColName:       opts.ActivityColumn,
+		busyWhen:         opts.BusyWhen,
+		revision:         opts.Revision,
+		hScrollbar:       opts.HScrollbar,
+		colSep:           colSep,
+		headerRule:       opts.Borders.HeaderRule,
+		keys:             opts.Keys,
+		token:            focus.NewToken(),
+		vpFirst:          -1,
+		vpLast:           -1,
+		vpTotal:          -1,
+		focusIdx:         -1,
 	}
 	m.rq = remoteState{debounce: opts.SortDebounce, cSortCol: -1, baseTitle: opts.Title}
 	switch {
@@ -1550,27 +1558,31 @@ func cellAt(r Row, i int) string {
 	return r[i]
 }
 
-// hasSortable reports whether any column opts into sort. Used by Help()
+// hasSortable reports whether any column can be sorted on. Used by Help()
 // to surface [/] / s only when they have an effect.
-func (m Model) hasSortable() bool {
-	for _, c := range m.cols {
-		if c.Sortable {
-			return true
-		}
-	}
-	return false
-}
+func (m Model) hasSortable() bool { return len(m.sortableColumns()) > 0 }
 
-// sortableColumns returns the indices of columns where Sortable is true,
-// in column order. Used by stepSortColumn to navigate between them.
+// sortableColumns returns the indices of the columns [ / ] step between, in
+// column order: Sortable ones the user can see. A Hidden column is left out —
+// stepping onto it would sort by something nothing on screen names — and so
+// is one the source refused to sort by.
 func (m Model) sortableColumns() []int {
 	var out []int
-	for i, c := range m.cols {
-		if c.Sortable {
+	for i := range m.cols {
+		if m.canSort(i) {
 			out = append(out, i)
 		}
 	}
 	return out
+}
+
+// canSort reports whether the user may sort by column i.
+func (m Model) canSort(i int) bool {
+	if i < 0 || i >= len(m.cols) {
+		return false
+	}
+	c := m.cols[i]
+	return c.Sortable && !c.Hidden && !m.rq.unavailable[i]
 }
 
 // stepSortColumn moves the active sort column by direction (-1 or +1)
@@ -1607,6 +1619,9 @@ func (m *Model) stepSortColumn(direction int) bool {
 // toggleSortDir flips the sort direction. When no column is active, picks
 // the first sortable column ascending. Returns true when state changed.
 func (m *Model) toggleSortDir() bool {
+	if m.sortCol >= 0 && !m.canSort(m.sortCol) {
+		return false
+	}
 	if m.sortCol < 0 {
 		cols := m.sortableColumns()
 		if len(cols) == 0 {
@@ -1703,12 +1718,18 @@ func (m Model) prevColumnEdge(x int) int {
 //   - Width == 0, no rows → max(visible(Title), 4)
 //   - Width == 0, rows    → max(visible(Title), max cell visible width, 4)
 //
+// and a Sortable column two cells more, for the " ▲" the header appends to
+// its title — so formatCell never cuts the caret off a column sized to fit.
+//
 // Then any leftover horizontal space (body inner width minus base
 // widths and inter-column separators) is distributed across columns
 // with Flex > 0 in proportion to their Flex weights. Flex columns
 // only ever grow — never shrink below their base. If the body is
 // narrower than the sum of bases, no expansion happens; the pane's
 // h-scroll handles overflow.
+// sortCaretW is the room a Sortable column keeps for " ▲" / " ▼".
+const sortCaretW = 2
+
 func (m *Model) recomputeWidths() {
 	n := len(m.cols)
 	m.widths = make([]int, n)
@@ -1719,8 +1740,12 @@ func (m *Model) recomputeWidths() {
 			continue
 		}
 		visibleN++
+		caret := 0
+		if c.Sortable {
+			caret = sortCaretW
+		}
 		if c.Width > 0 {
-			m.widths[i] = c.Width
+			m.widths[i] = c.Width + caret
 			continue
 		}
 		w := ansi.StringWidth(c.Title)
@@ -1734,7 +1759,7 @@ func (m *Model) recomputeWidths() {
 		if w < 4 {
 			w = 4
 		}
-		m.widths[i] = w
+		m.widths[i] = w + caret
 	}
 
 	hasFlex := false
@@ -2137,7 +2162,7 @@ func (m Model) handleMouse(e mouse.Msg) (Model, tea.Cmd) {
 // aren't Sortable ignore the click.
 func (m *Model) clickHeader(x int) tea.Cmd {
 	col, ok := m.columnAt(x)
-	if !ok || col >= len(m.cols) || !m.cols[col].Sortable {
+	if !ok || !m.canSort(col) {
 		return nil
 	}
 	if m.sortCol == col {
@@ -2418,6 +2443,9 @@ func (m Model) headerCells() []string {
 			} else {
 				title += " " + m.glyphs.SortAsc
 			}
+		}
+		if m.rq.unavailable[i] {
+			title = m.dimTitle(title)
 		}
 		out[i] = title
 	}

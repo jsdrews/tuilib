@@ -29,6 +29,7 @@ nav = [
     "components/index.md",
     { "Pane" = "components/pane.md" },
     { "List" = "components/list.md" },
+    { "Menu" = "components/menu.md" },
     { "Table" = "components/table.md" },
     { "Tree" = "components/tree.md" },
     { "Inspector" = "components/inspector.md" },

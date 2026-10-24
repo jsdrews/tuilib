@@ -341,6 +341,24 @@ type Model struct {
 	emptyStart int
 	emptyLimit int
 	emptySeen  bool
+
+	// prev is the last answered query and what was held for it, kept while
+	// a newer query has no answer so Revert can go back to it.
+	prev answeredQuery
+}
+
+// answeredQuery is a Model's answered query and window, as Revert restores it.
+type answeredQuery struct {
+	ok        bool
+	raw       string
+	terms     []query.Term
+	sort      string
+	desc      bool
+	heldStart int
+	heldCount int
+	total     int
+	next      string
+	exhausted bool
 }
 
 // New constructs a coordinator. Nothing is requested until Init.
@@ -532,6 +550,13 @@ func (m *Model) Viewport(first, last int) tea.Cmd {
 // a caller that has gone to the trouble of calling it wants a fetch.
 func (m *Model) SetQuery(raw string, terms []query.Term, sort string, desc bool) tea.Cmd {
 	prev, abandoned := m.live, m.state == unanswered && m.pending
+	if m.state == answered {
+		m.prev = answeredQuery{
+			ok: true, raw: m.raw, terms: m.terms, sort: m.sort, desc: m.desc,
+			heldStart: m.heldStart, heldCount: m.heldCount, total: m.total,
+			next: m.next, exhausted: m.exhausted,
+		}
+	}
 	m.raw, m.terms, m.sort, m.desc = raw, terms, sort, desc
 	m.last -= m.first
 	m.first = 0
@@ -543,6 +568,30 @@ func (m *Model) SetQuery(raw string, terms []query.Term, sort string, desc bool)
 	}
 	ev := QueryCancelledMsg{Name: m.name, Query: prev, By: m.live}
 	return tea.Batch(func() tea.Msg { return ev }, req)
+}
+
+// Revert abandons a committed query that failed before it was answered and
+// goes back to the last query that was, with the window held for it — the
+// rows the component is still showing. It issues no request for the query;
+// the command asks only for rows on screen the held window doesn't cover,
+// as scrolling would. ok is false, and nothing changes, unless the current
+// query failed unanswered and an earlier one had an answer.
+//
+// It exists for a refusal: a source that rejects one parameter of a query
+// (a sort it can't do) leaves the previous answer standing, and the
+// component goes back to it rather than re-asking for what it already holds.
+func (m *Model) Revert() (ok bool, cmd tea.Cmd) {
+	if m.state != failed || !m.prev.ok {
+		return false, nil
+	}
+	p := m.prev
+	m.raw, m.terms, m.sort, m.desc = p.raw, p.terms, p.sort, p.desc
+	m.heldStart, m.heldCount, m.total = p.heldStart, p.heldCount, p.total
+	m.next, m.exhausted = p.next, p.exhausted
+	m.emptySeen = false
+	m.state = answered
+	m.prev = answeredQuery{}
+	return true, m.maybeRequest()
 }
 
 // Refresh re-requests the window currently on screen without changing the
@@ -631,6 +680,7 @@ func (m *Model) Deliver(p Page) (bool, tea.Cmd) {
 	// The first answer: the component moves its cursor to the top, so
 	// wherever the stale rows had been scrolled to no longer applies.
 	m.state = answered
+	m.prev = answeredQuery{}
 	m.last -= m.first
 	m.first = 0
 	ev := QueryAnsweredMsg{Name: m.name, Query: m.live, Elapsed: elapsed}
