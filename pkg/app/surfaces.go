@@ -9,6 +9,7 @@ import (
 	tuiansi "github.com/jsdrews/tuilib/pkg/ansi"
 	"github.com/jsdrews/tuilib/pkg/config"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/output"
 	"github.com/jsdrews/tuilib/pkg/palette"
@@ -17,17 +18,18 @@ import (
 )
 
 // axes is the app's palette × surface state: the two lists, where the user is in each, the terminal's
-// capabilities, and the theme composed from the current pair.
+// capabilities and the app's glyphs, and the theme composed from the current pair.
 type axes struct {
 	palettes []palette.Palette
 	surfaces []surface.Surface
 	pi, si   int
 	caps     surface.Caps
+	glyphs   glyph.Set
 	theme    theme.Theme
 }
 
 func newAxes(opts Options) *axes {
-	a := &axes{palettes: opts.Palettes, surfaces: opts.Surfaces}
+	a := &axes{palettes: opts.Palettes, surfaces: opts.Surfaces, glyphs: opts.Glyphs}
 	if len(a.surfaces) == 0 {
 		a.surfaces = []surface.Surface{surface.Outlined}
 	}
@@ -97,6 +99,7 @@ var fontDrawnBlocks = map[string]bool{"Apple_Terminal": true}
 
 func (a *axes) compose() {
 	a.theme = theme.Compose(a.palettes[a.pi], a.surfaces[a.si], a.caps)
+	a.theme.Glyphs = a.glyphs
 }
 
 func (a *axes) nextPalette() {

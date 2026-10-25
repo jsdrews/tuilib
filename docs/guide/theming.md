@@ -131,7 +131,10 @@ read there.
 `Glyphs` (a `glyph.Set`) holds every mark components draw: cursor `▸`, mark
 `✓`, expand `▾`/`▸`, scrollbar thumb and track, sort `▲`/`▼`, column
 separator `│`, placeholder `·`. Empty fields fall back to `glyph.Default()`,
-so setting one doesn't blank the rest.
+so setting one doesn't blank the rest. Under the app shell, set them once on
+`app.Options.Glyphs`: every theme the shell composes carries them, so the key
+overlay, the action menu and the output console draw them as well as your
+screens.
 
 ## Rebuilding on a theme swap
 

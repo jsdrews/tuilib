@@ -37,3 +37,19 @@ func TestComposeLeavesLegibleBarTextAlone(t *testing.T) {
 		t.Errorf("Outlined keeps its bar, so BarFG should stay %v, got %v", p.BarFG, th.BarFG)
 	}
 }
+
+func TestComposeKeepsAPalettesWarning(t *testing.T) {
+	p := palette.Nord()
+	if th := Compose(p, surface.Outlined, caps); th.Warning != p.Warning {
+		t.Errorf("Warning = %v, want the palette's own %v", th.Warning, p.Warning)
+	}
+}
+
+// A palette written before Warning existed still gets one: its error colour.
+func TestComposeDerivesAnUnsetWarningFromErrorBG(t *testing.T) {
+	p := palette.Nord()
+	p.Warning = nil
+	if th := Compose(p, surface.Outlined, caps); th.Warning != p.ErrorBG {
+		t.Errorf("Warning = %v, want ErrorBG %v", th.Warning, p.ErrorBG)
+	}
+}

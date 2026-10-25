@@ -31,6 +31,7 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 | `Root` | `screen.Screen` | **required** | The bottom of the navigation stack. |
 | `Palettes` | `[]palette.Palette` | `[palette.Dark()]` | Palettes the user cycles through. The first is where the app starts unless the env var or config says otherwise (below). |
 | `Surfaces` | `[]surface.Surface` | `[surface.Outlined]` | Surfaces the user cycles through, independently of the palette. See [Surfaces](../surfaces.md). |
+| `Glyphs` | `glyph.Set` | `glyph.Default()` | Glyphs every composed theme carries, so the shell's own overlays and every screen's `SetTheme` draw the same marks. Empty fields keep the default. |
 | `Version` | `string` | `""` | Drawn on the right of the statusbar. |
 | `QuitKey` | `key.Binding` | `q`, `ctrl+c` | Quits when the stack is at the root and no screen is capturing keys. |
 | `ThemeKey` | `key.Binding` | unset (off) | Cycles palettes. Leave zero to pin the app to one. |
@@ -41,7 +42,8 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 | `OutputKey` | `key.Binding` | unset (off) | Opens the [output console](feedback.md#the-output-console). Setting it is what turns the console on. |
 | `Output` | `output.Options` | `output.OptionsFrom(theme)` | Console configuration: record cap, export directory, keys. |
 | `ActionsKey` | `key.Binding` | unset (off) | Opens the [action menu](actions.md) on screens that implement `action.Provider`. |
-| `Actions` | `action.Options` | `theme.Actions()` | Menu configuration. |
+| `Actions` | `action.Options` | `theme.Actions()` | Menu configuration. Its styles come from the theme on every swap, so a `GroupStyle` set here is ignored; use `ActionGroupStyle`. |
+| `ActionGroupStyle` | `func(group string, t theme.Theme) lipgloss.Style` | nil | Styles the action menu's headers by group, against the current theme, on every swap. See [Actions](actions.md). |
 | `HelpVerbose` | `bool` | `false` | Pack the screen's bindings inline in the footer instead of showing only `? help`. |
 | `DisableHelpSearch` | `bool` | `false` | Remove the `/` search field from the key overlay. |
 | `Mouse` | `app.MouseMode` | `MouseOff` | `MouseClick` enables presses, releases, the wheel and drags. |

@@ -16,6 +16,7 @@ the `Glyphs` and the resolved `Surface`.
 | `BorderActive`, `BorderInactive` | color | Pane borders, focused and not. |
 | `InfoBG`, `InfoFG` | color | Info messages on the statusbar. |
 | `ErrorBG`, `ErrorFG` | color | Error messages; also the conventional override for an error-tinted alert. |
+| `Warning` | color | A foreground for emphasis short of an error, such as a write group's header in the action menu. Unset, `theme.Compose` uses `ErrorBG`. |
 | `Accent` | color | Bold highlight for body content: cursors, matches, spinners, the selected button. |
 | `Background`, `Foreground` | color | The palette's canonical pair: the screen, and text on a filled surface. Every surface tone is derived from them; unset, `BarBG` and `BarFG` stand in. |
 | `Surface` | `map[surface.Role]color` | Overrides for derived surface tones, by role. A missing role is derived. |
@@ -24,7 +25,7 @@ On `theme.Theme`, alongside the embedded palette:
 
 | Field | Type | Used for |
 |---|---|---|
-| `Glyphs` | `glyph.Set` | Every drawn mark; empty fields use `glyph.Default()`. |
+| `Glyphs` | `glyph.Set` | Every drawn mark; empty fields use `glyph.Default()`. Under the app shell, set `app.Options.Glyphs` and every composed theme carries them. |
 | `Surface` | `surface.Resolved` | How components are drawn: border shape, slot brackets, fill, overlay and field forms. See [Surfaces](../surfaces.md). |
 
 Colors are `lipgloss.TerminalColor` (e.g. `lipgloss.Color("62")` or
@@ -61,6 +62,7 @@ Colors are `lipgloss.TerminalColor` (e.g. `lipgloss.Color("62")` or
 | `KeyFG` | base0D |
 | `InfoFG` on `InfoBG` | base0B on base00 |
 | `ErrorFG` on `ErrorBG` | base08 on base07 |
+| `Warning` | base09 |
 | `Accent` | base0E |
 
 If a scheme reads wrong through this mapping, write the `Palette` by hand.

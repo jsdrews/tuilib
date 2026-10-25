@@ -31,6 +31,14 @@ func TestBuiltinsSetBothSeeds(t *testing.T) {
 	}
 }
 
+func TestBuiltinsSetWarning(t *testing.T) {
+	for _, p := range append(All(), Terminal()) {
+		if p.Warning == nil {
+			t.Errorf("%s: no Warning", p.Name)
+		}
+	}
+}
+
 // Every built-in can be drawn on a filled surface at 256 colours and up, with
 // each floor pair still distinct after rounding — the two profiles the
 // fallback chain lets filled surfaces run in.
