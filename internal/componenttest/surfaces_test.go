@@ -4,14 +4,17 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/eventlog"
+	"github.com/jsdrews/tuilib/pkg/filter"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -22,6 +25,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
+	"github.com/jsdrews/tuilib/pkg/toggle"
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
@@ -261,5 +265,80 @@ func TestSelectionDimsWhenBlurred(t *testing.T) {
 				t.Errorf("blurred: selected row background %q, want SelectionDim %q", got, blurredBG)
 			}
 		})
+	}
+}
+
+// TestFieldsFillOnCardSurfaces: on a filled surface the single-line
+// components draw as small cards in the surface's own tone rather than as
+// outlined fields. The card — the title and content rows, short of the right
+// margin — carries a background in every cell, focused and blurred; the
+// margin carries none, so the parent paints it and stacked fields keep a row
+// of screen between them.
+func TestFieldsFillOnCardSurfaces(t *testing.T) {
+	type field interface {
+		View() string
+		Focus() tea.Cmd
+		Blur()
+	}
+	const w = 30
+	r := geom.New(0, 0, w, 3)
+	for _, s := range []surface.Surface{surface.Filled, surface.Banded, surface.Elevated} {
+		th := theme.Compose(palette.Nord(), s, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
+		for _, tc := range []struct {
+			name  string
+			build func() field
+		}{
+			{"input", func() field {
+				o := th.Input()
+				o.Title, o.Placeholder = "name", "type here"
+				m := input.New(o)
+				m.SetRect(r)
+				return &m
+			}},
+			{"toggle", func() field {
+				o := th.Toggle()
+				o.Title = "sure?"
+				m := toggle.New(o)
+				m.SetRect(r)
+				return &m
+			}},
+			{"filter", func() field {
+				o := th.Filter()
+				o.Title = "filter"
+				m := filter.New(o)
+				m.SetRect(r)
+				return &m
+			}},
+		} {
+			t.Run(s.Name+"/"+tc.name, func(t *testing.T) {
+				f := tc.build()
+				for _, focused := range []bool{true, false} {
+					if focused {
+						f.Focus()
+					} else {
+						f.Blur()
+					}
+					lines := strings.Split(f.View(), "\n")
+					if len(lines) != 3 {
+						t.Fatalf("focused=%v: %d rows, want 3", focused, len(lines))
+					}
+					for y, l := range lines {
+						bgs := backgrounds(l)
+						if len(bgs) != w {
+							t.Fatalf("focused=%v: row %d is %d wide, want %d", focused, y, len(bgs), w)
+						}
+						for x, bg := range bgs {
+							margin := y == 2 || x == w-1
+							if margin && bg != "" {
+								t.Fatalf("focused=%v: margin cell (%d,%d) is painted %q: %q", focused, x, y, bg, ansi.Strip(l))
+							}
+							if !margin && bg == "" {
+								t.Fatalf("focused=%v: card cell (%d,%d) is unpainted: %q", focused, x, y, ansi.Strip(l))
+							}
+						}
+					}
+				}
+			})
+		}
 	}
 }

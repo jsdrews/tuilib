@@ -97,9 +97,23 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
 - **Overlay form:** another surface value for modals (see [Overlays](#overlays)).
 - **Field form:** another surface value for single-line components — input,
   filter, toggle — which screens place in three-row slots, so it takes at
-  most one cell of edge per side. Nil derives it: a lined surface is its own
-  field, and anything else draws an outlined field (Material's outlined text
-  field). Theme builders hand `Input()`, `Filter()` and `Toggle()` this form.
+  most one row of edge above and below and one cell on the left; the right
+  may take a margin besides. Nil derives it: a lined surface is its own
+  field, and anything else keeps its inner rings, as many as fit one cell per
+  side counted from the innermost out. A card keeps its text rows and focus
+  effects and drops the lips and shadow, so a field reads as a small card in
+  the tone of the panes around it: Filled's field is its card rows, Banded's
+  its band and card (the band colours on focus), Elevated's its card with the
+  accent stripe. Accented's is its bar.
+  A margined surface's field keeps a margin of its own. One cell on the
+  right lines its card up with the cards around it, which end a cell short
+  of their rect. Below, the card's bottom text row moves onto the parent and
+  becomes the margin, still carrying the bottom slots (a filter's counts), so
+  the card is its title and content rows: two fields stacked in a column
+  keep a row of screen between them instead of running into one card.
+  A surface whose inner rings carry no text rows draws an outlined field. A
+  surface that falls back draws its fallback's field form. Theme builders
+  hand `Input()`, `Filter()` and `Toggle()` this form.
 - **Needs and fallback:** minimum colour depth, whether it uses block glyphs, and
   the `Fallback` surface (see [Degraded terminals](#degraded-terminals)).
 

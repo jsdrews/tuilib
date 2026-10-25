@@ -284,17 +284,102 @@ func TestOverlayForms(t *testing.T) {
 	}
 }
 
-// A field fits a three-row slot: at most one cell of edge on each side.
+// A field fits a three-row slot: at most one row of edge above and below,
+// one cell on the left, and on the right a margin besides.
 func TestFieldFormsFitThreeRows(t *testing.T) {
 	for _, s := range append(Builtins(), accentedLine) {
 		f := resolved(s, rich).Field()
 		in := f.Insets()
-		if in.Top > 1 || in.Bottom > 1 || in.Left > 1 || in.Right > 1 {
-			t.Errorf("%s field insets %+v exceed one cell", s.Name, in)
+		if in.Top > 1 || in.Bottom > 1 || in.Left > 1 || in.Right > 2 {
+			t.Errorf("%s field insets %+v don't fit a three-row slot", s.Name, in)
 		}
 	}
 	if resolved(Outlined, rich).Field().Name() != "outlined" {
 		t.Error("Outlined should be its own field")
+	}
+}
+
+// A card's field is a small card: its title row in the card's tone, with the
+// same focus effects, and none of the lips or shadow around it.
+func TestCardFieldsKeepTheirTextRing(t *testing.T) {
+	for _, s := range []Surface{Filled, Banded, Elevated} {
+		f := resolved(s, rich).Field().Surface()
+		if _, lined := f.Lined(); lined || !f.Filled() {
+			t.Errorf("%s field should be a filled card, got %s", s.Name, f.Name)
+		}
+		if f.Fill != s.Fill || f.FillFocused != s.FillFocused || f.TitleFocused != s.TitleFocused {
+			t.Errorf("%s field lost the surface's focus effects", s.Name)
+		}
+		inner := s.Rings[len(s.Rings)-1]
+		if len(f.Rings) != 2 || f.Rings[1].Top != inner.Top || f.Rings[1].Left != inner.Left {
+			t.Errorf("%s field should be its margin around the text ring's top and sides", s.Name)
+		}
+	}
+	if top := resolved(Banded, rich).Field().Surface().Rings[1].Top; top.BGFocused != EdgeActive {
+		t.Errorf("Banded field's title row focuses to %s, want the band colour", top.BGFocused)
+	}
+}
+
+// A margined surface's field keeps a margin of its own: one cell on the
+// right, so its card ends where the cards around it do, and its bottom text
+// row on the parent, so two fields stacked in a column don't run into one
+// card.
+func TestMarginedFieldsKeepAMargin(t *testing.T) {
+	for _, s := range []Surface{Filled, Banded, Elevated, Accented, accentedLine} {
+		f := resolved(s, rich).Field().Surface()
+		if !f.Margined() {
+			t.Errorf("%s field has no right margin; it overhangs the cards beside it", s.Name)
+		}
+		bottom := f.Rings[0].Bottom
+		if !bottom.Text || bottom.BG != Parent || bottom.BGFocused != None {
+			t.Errorf("%s field's bottom row is %+v, want a text row on the parent", s.Name, bottom)
+		}
+		if in := f.Insets(); in.Bottom != 1 {
+			t.Errorf("%s field takes %d bottom rows, want the margin alone", s.Name, in.Bottom)
+		}
+	}
+}
+
+// Accented's field keeps its bar — and is not a line border, which one ring
+// drawn on every side would otherwise pass for.
+func TestAccentedFieldKeepsItsBar(t *testing.T) {
+	for _, s := range []Surface{Accented, accentedLine} {
+		f := resolved(s, rich).Field().Surface()
+		if _, lined := f.Lined(); lined {
+			t.Errorf("%s field reads as lined", s.Name)
+		}
+		if g := f.Rings[1].Left.Glyph; g != s.Rings[1].Left.Glyph {
+			t.Errorf("%s field's left edge = %q, want its bar", s.Name, g)
+		}
+	}
+}
+
+// A surface that falls back draws its fallback's field form, and a field's
+// own fallback chain stays within field forms.
+func TestFieldFollowsTheFallback(t *testing.T) {
+	noBlocks := Caps{Profile: termenv.TrueColor}
+	if got := resolved(Filled, noBlocks).Field().Name(); got != "banded-field" {
+		t.Errorf("Filled without block glyphs draws %s, want banded-field", got)
+	}
+	if got := resolved(Banded, Caps{Profile: termenv.ANSI}).Field().Name(); got != "outlined" {
+		t.Errorf("Banded below 256 colours draws %s, want outlined", got)
+	}
+	for f := Elevated.fieldForm(); f.Fallback != nil; f = *f.Fallback {
+		in := f.Fallback.Insets()
+		if in.Top > 1 || in.Bottom > 1 || in.Left > 1 || in.Right > 2 {
+			t.Errorf("%s falls back to %s, which is not a field", f.Name, f.Fallback.Name)
+		}
+	}
+}
+
+// A surface whose inner rings carry no text rows can't hold a field's slots,
+// so it draws an outlined one.
+func TestFieldWithoutTextRowsIsOutlined(t *testing.T) {
+	s := Filled
+	s.Name = "deep"
+	s.Rings = []Ring{textRows(), {Left: Side{Cell: Cell{Glyph: " ", BG: Fill}}}}
+	if _, lined := s.fieldForm().Lined(); !lined {
+		t.Error("a field with no text rows should be outlined")
 	}
 }
 

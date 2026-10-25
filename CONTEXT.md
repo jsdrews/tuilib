@@ -227,7 +227,7 @@ The surface a modal (confirm, alert, the action menu, the help overlay) is drawn
 _Avoid_: modal style, overlay border
 
 **Field form**:
-The surface a single-line component (input, filter, toggle) is drawn in, taking at most one cell of edge per side so it fits a three-row slot. An outlined field unless the surface says otherwise.
+The surface a single-line component (input, filter, toggle) is drawn in, taking at most one row of edge above and below so it fits a three-row slot. Derived from the surface's inner rings — a small card on a filled surface, the bar on Accented, the surface itself when lined — unless the surface sets one. On a margined surface it keeps a margin: a cell on the right, and its bottom text row on the parent.
 _Avoid_: compact surface, input style
 
 **Fallback**:

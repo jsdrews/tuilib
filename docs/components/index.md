@@ -111,7 +111,7 @@ theme builders set it, handing each component the form it needs:
 | Form | Components |
 |---|---|
 | the surface itself | pane, list, menu, table, tree, inspector, textview, logview, eventlog |
-| its **field form** (at most one cell of edge per side, so it fits a three-row slot) | filter, input, toggle |
+| its **field form** (at most one row of edge above and below, so it fits a three-row slot) | filter, input, toggle |
 | its **overlay form** (always filled, so it covers what is under it) | confirm, alert, action menu, help overlay |
 
 You don't set it; the user picks the surface and the shell rebuilds every

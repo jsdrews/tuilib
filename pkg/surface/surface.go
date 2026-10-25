@@ -1,6 +1,8 @@
 package surface
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -50,9 +52,15 @@ type Surface struct {
 	Overlay *Surface
 	// Field is the form this surface takes for single-line components —
 	// input, filter, toggle — which screens place in three-row slots. It
-	// must take at most one cell of edge on each side. Nil derives it: a
-	// lined surface is its own field, and anything else draws an outlined
-	// field, Material's outlined text field.
+	// must take at most one row of edge above and below, and one cell on the
+	// left; the right may take a margin besides. Nil derives it: a lined
+	// surface is its own field, and anything else keeps its inner rings, as
+	// many as fit one cell per side — a card's text rows and focus effects,
+	// without its margins, lips or shadow. A margined surface's field has a
+	// margin of its own: a cell to the right, so it lines up with the cards
+	// around it, and its bottom text row moved onto the parent, so stacked
+	// fields don't run together. A surface whose inner rings carry no text
+	// rows draws an outlined field.
 	Field *Surface
 
 	// Needs is what the terminal must offer to draw this surface, and
@@ -217,7 +225,12 @@ func (s Surface) overlayForm() Surface {
 	return o
 }
 
-// fieldForm is s.Field, or s itself when s is lined, or an outlined field.
+// fieldForm is s.Field, or s itself when s is lined, or s's inner rings: as
+// many as fit one cell per side, counted from the innermost out, so a card
+// keeps its text rows and focus effects and drops the margins, lips and
+// shadow a three-row slot has no room for. A margined surface's field keeps
+// a margin of its own, right and below (fieldMargin). When those rings carry
+// no text rows it is an outlined field.
 func (s Surface) fieldForm() Surface {
 	if s.Field != nil {
 		return *s.Field
@@ -225,9 +238,55 @@ func (s Surface) fieldForm() Surface {
 	if _, lined := s.Lined(); lined {
 		return s
 	}
-	f := OutlinedWith(lipgloss.NormalBorder())
+	f := s
 	f.Name = s.Name + "-field"
+	f.Overlay, f.Field = nil, nil
+	f.Rings = nil
+	for i := len(s.Rings) - 1; i >= 0; i-- {
+		next := Surface{Rings: append([]Ring{s.Rings[i]}, f.Rings...)}
+		if in := next.Insets(); in.Top > 1 || in.Bottom > 1 || in.Left > 1 || in.Right > 1 {
+			break
+		}
+		f.Rings = next.Rings
+	}
+	if !f.hasTextRows() {
+		o := OutlinedWith(lipgloss.NormalBorder())
+		o.Name = s.Name + "-field"
+		return o
+	}
+	if s.Margined() {
+		// The card's bottom text row moves onto the parent and becomes the
+		// field's bottom margin, still carrying the slots: the card is its
+		// title and content rows, so stacked fields keep a row between them.
+		for i := range f.Rings {
+			f.Rings[i].Bottom, f.Rings[i].BottomLeft, f.Rings[i].BottomRight = Side{}, Cell{}, Cell{}
+		}
+		f.Rings = append([]Ring{fieldMargin()}, f.Rings...)
+	}
+	if s.Fallback != nil {
+		fb := s.Fallback.fieldForm()
+		f.Fallback = &fb
+	}
 	return f
+}
+
+// fieldMargin is a field's margin: a cell on the parent to the right, which
+// lines it up with the cards around it, and a text row on the parent below.
+func fieldMargin() Ring {
+	m := margin()
+	m.Bottom.Text = true
+	return m
+}
+
+// hasTextRows reports whether s has a text row on top and bottom, which carry
+// the pane's slots.
+func (s Surface) hasTextRows() bool {
+	var top, bottom bool
+	for _, r := range s.Rings {
+		top = top || (r.Top.Drawn() && r.Top.Text)
+		bottom = bottom || (r.Bottom.Drawn() && r.Bottom.Text)
+	}
+	return top && bottom
 }
 
 // lineRing is a ring of box-drawing lines in Edge, lit in EdgeActive while
@@ -420,8 +479,12 @@ func (s Surface) Lined() (lipgloss.Border, bool) {
 		return lipgloss.Border{}, false
 	}
 	r := s.Rings[0]
-	if !r.Top.Drawn() || !r.Bottom.Drawn() || !r.Left.Drawn() || !r.Right.Drawn() {
-		return lipgloss.Border{}, false
+	// A blank side is padding, not a line: Accented's field form is one ring
+	// on every side, but only its bar is drawn.
+	for _, sd := range []Side{r.Top, r.Bottom, r.Left, r.Right} {
+		if strings.TrimSpace(sd.Glyph) == "" {
+			return lipgloss.Border{}, false
+		}
 	}
 	return lipgloss.Border{
 		Top: r.Top.Glyph, Bottom: r.Bottom.Glyph, Left: r.Left.Glyph, Right: r.Right.Glyph,

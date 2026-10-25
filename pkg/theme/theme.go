@@ -134,8 +134,8 @@ func (t Theme) Resolve(s surface.Surface) surface.Resolved { return t.Surface.Wi
 
 // shapeActive / shapeInactive / shapeOverlay are the line borders components
 // draw with: the surface's own lines when it is lined (Outlined, rounded,
-// thick), and the library defaults when it isn't — a filled surface's field
-// form and the fallback path. Every builder goes through these so there is
+// thick), and the library defaults when it isn't — an outlined field derived
+// for a surface with no text rows to keep, and the fallback path. Every builder goes through these so there is
 // one place that decides the shape.
 func (t Theme) shapeActive() lipgloss.Border {
 	if b, lined := t.Surface.Surface().Lined(); lined {
