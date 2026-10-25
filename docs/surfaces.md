@@ -283,16 +283,31 @@ findings in `research/background-fill-audit.md`)
 - **Each surface carries an overlay form**, `Surface.Overlay`. Unset, it is the
   same shape with its fill role switched from `Card` to `Overlay`. Outlined sets
   Thick lines explicitly, so today's modals are byte-identical. It replaces
-  `Theme.BorderShapeOverlay`. Confirm, alert, the action menu and the help
-  overlay are built with it.
+  `Theme.BorderShapeOverlay`. Confirm, alert, the action menu, the help
+  overlay and a titled form's frame are built with it, as is any later modal:
+  anything drawn over a screen uses the overlay form.
+- **A derived overlay form draws its edge on its own fill.** A modal's parent is
+  whatever it covers, so an edge cell drawn there shows the terminal's own
+  background — a dark rim over the cards. Edge cells (Filled's lips, Accented's
+  title row) move onto the overlay fill. The margin ring stays as the surface
+  draws it: blank margins are transparent under `ZStack`, and Elevated keeps its
+  shadow, whose undrawn half takes the background of what the modal covers
+  (below).
+  `internal/componenttest` asserts it for every modal on every surface: the body
+  is the overlay fill, the edge carries a background of its own, the margin
+  shows the base or the shadow.
 - **`layout.ZStack` composites by painted cells:** a cell that isn't a space, or
   that carries a background, covers the base. On each row it splices from the
   first painted cell to the last. Padding from `Center`/`lipgloss.Place` and
-  margin cells stay transparent.
+  margin cells stay transparent. A block element (`U+2580`–`U+259F`) with no
+  background of its own takes the background of the base cell under it, since
+  the part of the cell it leaves undrawn would otherwise show the terminal's
+  background — which is how a shadow sits on the card beneath a modal.
 - **No scrim:** the base isn't dimmed (out of scope, revisit only if modals don't
   stand out).
 
-([Overlays on filled surfaces](https://github.com/jsdrews/tuilib/issues/121))
+([Overlays on filled surfaces](https://github.com/jsdrews/tuilib/issues/121),
+[modal forms](https://github.com/jsdrews/tuilib/issues/134))
 
 ## Bars
 

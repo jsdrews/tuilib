@@ -158,6 +158,13 @@ func Center(naturalW, naturalH int, child Node) Node {
 // left and right of the modal stay visible. Wide characters and ANSI
 // styles are handled via x/ansi cell-aware cutting.
 //
+// A block element (U+2580–U+259F: half blocks, quadrants, eighths, shades)
+// drawn with no background of its own leaves part of its cell undrawn, and
+// that part shows the base: the cell takes the background of the base cell
+// under it. This is what lets a shadow or a lip drawn on a modal's parent
+// sit on whatever the modal covers, rather than on the terminal's own
+// background.
+//
 // Both layers receive the same rect, so a component in the base still
 // believes it owns cells the overlay covers. Occlusion is the host screen's
 // job: while a modal is up, forward messages to the modal alone (see the
@@ -201,7 +208,7 @@ func (z zstack) Render(r geom.Rect) string {
 		}
 		baseLines[i] = padCells(ansi.Cut(baseLines[i], 0, left), left) +
 			"\x1b[0m" +
-			ansi.Cut(ol, left, right+1) +
+			ansi.Cut(underlay(ol, backgrounds(baseLines[i])), left, right+1) +
 			"\x1b[0m" +
 			ansi.Cut(baseLines[i], right+1, r.W)
 	}
@@ -222,59 +229,106 @@ func padCells(s string, width int) string {
 // base, while the plain padding Center adds around it, and a margin drawn on
 // its parent, stay transparent.
 func paintedBounds(s string) (int, int) {
-	left, right, cell := -1, -1, 0
-	bg := false
+	left, right := -1, -1
+	walkCells(s, nil, func(cell int, r rune, w int, bg string) {
+		if w == 0 || (r == ' ' && bg == "") {
+			return
+		}
+		if left < 0 {
+			left = cell
+		}
+		right = cell + w - 1
+	})
+	return left, right
+}
+
+// backgrounds returns the background SGR parameters in force at each cell
+// of s ("" for none). A wide glyph's trailing cells repeat its background.
+func backgrounds(s string) []string {
+	var out []string
+	walkCells(s, nil, func(_ int, _ rune, w int, bg string) {
+		for range w {
+			out = append(out, bg)
+		}
+	})
+	return out
+}
+
+// underlay gives every block element in s that has no background of its
+// own the background under it, from under (indexed by cell): the part of
+// the cell the glyph leaves undrawn then shows the base, not the terminal.
+func underlay(s string, under []string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	walkCells(s, func(seq string) { b.WriteString(seq) }, func(cell int, r rune, _ int, bg string) {
+		if bg == "" && blockElement(r) && cell < len(under) && under[cell] != "" {
+			b.WriteString("\x1b[" + under[cell] + "m" + string(r) + "\x1b[49m")
+			return
+		}
+		b.WriteRune(r)
+	})
+	return b.String()
+}
+
+// blockElement reports whether r is in the Block Elements range, whose
+// glyphs cover only part of their cell (█ aside, which covers all of it and
+// so looks the same either way).
+func blockElement(r rune) bool { return r >= 0x2580 && r <= 0x259f }
+
+// walkCells walks s, handing each escape sequence to esc (when non-nil) and
+// each rune to cell with the cell index it starts at, its width (0 for a
+// combining mark) and the background SGR parameters in force.
+func walkCells(s string, esc func(seq string), cell func(at int, r rune, w int, bg string)) {
+	at, bg := 0, ""
 	for i := 0; i < len(s); {
 		if s[i] == 0x1b && i+1 < len(s) {
+			j := -1
 			switch s[i+1] {
 			case '[':
-				j := i + 2
+				j = i + 2
 				for j < len(s) && !(s[j] >= '@' && s[j] <= '~') {
 					j++
 				}
 				if j < len(s) && s[j] == 'm' {
 					bg = sgrBackground(bg, s[i+2:j])
 				}
-				i = j + 1
-				continue
+				j = min(j+1, len(s))
 			case ']':
 				if k := strings.Index(s[i:], "\x1b\\"); k >= 0 {
-					i += k + 2
+					j = i + k + 2
 				} else if k := strings.IndexByte(s[i:], 0x07); k >= 0 {
-					i += k + 1
+					j = i + k + 1
 				} else {
-					i = len(s)
+					j = len(s)
 				}
+			}
+			if j >= 0 {
+				if esc != nil {
+					esc(s[i:j])
+				}
+				i = j
 				continue
 			}
 		}
 		r, size := utf8.DecodeRuneInString(s[i:])
 		i += size
 		w := ansi.StringWidth(string(r))
-		if w == 0 {
-			continue
-		}
-		if r != ' ' || bg {
-			if left < 0 {
-				left = cell
-			}
-			right = cell + w - 1
-		}
-		cell += w
+		cell(at, r, w, bg)
+		at += w
 	}
-	return left, right
 }
 
-// sgrBackground reports whether a background is set after the SGR
-// parameters params, given whether one was before. Extended-colour operands
-// are skipped, so the 0 in 38;2;255;0;0 isn't read as a reset.
-func sgrBackground(bg bool, params string) bool {
+// sgrBackground returns the background parameters in force after the SGR
+// parameters params, given those in force before ("" for none). Extended-
+// colour operands are skipped, so the 0 in 38;2;255;0;0 isn't read as a
+// reset.
+func sgrBackground(bg, params string) string {
 	toks := strings.Split(params, ";")
 	for i := 0; i < len(toks); i++ {
 		t, _, sub := strings.Cut(toks[i], ":")
 		switch {
 		case (t == "" || t == "0") && !sub, t == "49":
-			bg = false
+			bg = ""
 		case t == "38" || t == "48" || t == "58":
 			n := 1
 			if !sub && i+1 < len(toks) {
@@ -285,13 +339,14 @@ func sgrBackground(bg bool, params string) bool {
 					n = 5
 				}
 			}
+			n = min(n, len(toks)-i)
 			if t == "48" {
-				bg = true
+				bg = strings.Join(toks[i:i+n], ";")
 			}
-			i += min(n, len(toks)-i) - 1
+			i += n - 1
 		case len(t) == 2 && t[0] == '4' && t[1] <= '7',
 			len(t) == 3 && t[:2] == "10" && t[2] <= '7':
-			bg = true
+			bg = t
 		}
 	}
 	return bg

@@ -1173,8 +1173,9 @@ example in `examples/`.
     set it to the right form: the surface itself for panes, lists, tables
     and the other row components; its **field form** for input, filter and
     toggle, which fits the three-row slots screens give them; its **overlay
-    form** for confirm, alert and the menus, which is always filled so a
-    modal covers what is under it. Don't set `Surface` yourself, except to
+    form** for confirm, alert, the menus and a titled form's frame — anything
+    drawn over a screen — which is always filled so a modal covers what is
+    under it, and draws its edge on that fill, so no dark rim shows around it. Don't set `Surface` yourself, except to
     pin one component to another surface:
 
     ```go

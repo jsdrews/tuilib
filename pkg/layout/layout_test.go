@@ -244,3 +244,20 @@ func TestZStackColourOperandIsNotAReset(t *testing.T) {
 		t.Errorf("row = %q, want the painted spaces after x to cover the base", got[0])
 	}
 }
+
+// A block element with no background takes the base's background under it,
+// so a shadow drawn on a modal's parent sits on what the modal covers. One
+// with a background of its own, and any other glyph, keeps what it has.
+func TestZStackBlockElementTakesTheBaseBackground(t *testing.T) {
+	const under = "\x1b[48;2;9;9;9m"
+	base := RenderFunc(func(geom.Rect) string { return under + "......" + "\x1b[0m" })
+	over := RenderFunc(func(geom.Rect) string { return "▌" + bg + "▌" + "\x1b[0m" + "│" })
+	got := ZStack(base, over).Render(geom.New(0, 0, 6, 1))
+	cells := backgrounds(got)
+	want := []string{"48;2;9;9;9", "48;2;1;2;3", "", "48;2;9;9;9", "48;2;9;9;9", "48;2;9;9;9"}
+	for i, w := range want {
+		if cells[i] != w {
+			t.Errorf("cell %d background = %q, want %q: %q", i, cells[i], w, got)
+		}
+	}
+}

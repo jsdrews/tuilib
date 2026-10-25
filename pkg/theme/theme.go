@@ -670,6 +670,11 @@ func (t Theme) Inspector() inspector.Options {
 // Fields, and any SubmitText on the returned value before passing to form.New
 // (or chain `.With(fields)`). Override individual Styles fields only if you
 // need to deviate from the palette.
+//
+// The frame a Title adds takes the surface's overlay form, like Confirm():
+// a titled form is a modal — an action's inputs, a startup prompt — drawn
+// over a screen. The border shape stays the surface's own, so Outlined is
+// unchanged. A form without a Title has no frame and ignores Surface.
 func (t Theme) Form() form.Options {
 	o := form.Options{
 		ActiveColor:    t.BorderActive,
@@ -693,7 +698,7 @@ func (t Theme) Form() form.Options {
 			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
 		},
 	}
-	o.Surface = t.Surface
+	o.Surface = t.Surface.Overlay()
 	return o
 }
 
