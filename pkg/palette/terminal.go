@@ -52,6 +52,7 @@ func Terminal() Palette {
 		InfoFG:         lipgloss.Color(bg),
 		ErrorBG:        lipgloss.Color("1"), // red
 		ErrorFG:        lipgloss.Color(fg),
+		Warning:        lipgloss.Color("3"), // yellow
 		Accent:         lipgloss.Color("5"), // magenta
 	}
 }

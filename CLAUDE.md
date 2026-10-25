@@ -1235,8 +1235,12 @@ example in `examples/`.
       one group, so the labels still read beside their group.
 
     `HeaderStyle` styles every header. `GroupStyle func(group) lipgloss.Style`
-    styles each by its group (a write group in a warning colour). Rows under
-    a header never take a group style. See `examples/components/menu` and
+    styles each by its group (a write group in `t.Warning`). Rows under
+    a header never take a group style. The shell rebuilds the action menu's
+    options from the theme on every swap and drops a `GroupStyle` passed in
+    `Options.Actions`; set `app.Options.ActionGroupStyle(group, t)` instead,
+    which is called against each new theme. Likewise `app.Options.Glyphs`
+    rides on every theme the shell composes, so its own overlays match. See `examples/components/menu` and
     `docs/components/menu.md`.
 
 ## Anti-patterns

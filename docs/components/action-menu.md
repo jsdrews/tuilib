@@ -87,6 +87,21 @@ lipgloss.Style` styles each one by its group instead, for example a write
 group in a warning colour. Only headers take these styles, not the rows
 under them.
 
+The app shell builds the menu's options from the theme on every palette or
+surface swap, so under the shell set `app.Options.ActionGroupStyle`, which is
+handed the current theme each time, instead of `GroupStyle`:
+
+```go
+ActionGroupStyle: func(group string, t theme.Theme) lipgloss.Style {
+    if group == "write" {
+        return lipgloss.NewStyle().Bold(true).Foreground(t.Warning)
+    }
+    return t.Actions().HeaderStyle
+},
+```
+
+`t.Warning` is the palette's warning colour; the app decides which group gets it.
+
 ## Options
 
 | Field | Type | Default | Meaning |

@@ -26,6 +26,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/config"
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/geom"
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -61,6 +62,13 @@ type Options struct {
 	// PaletteEnvVar and SurfaceEnvVar name environment variables consulted
 	// for the starting palette and surface, before the user's config file.
 	PaletteEnvVar, SurfaceEnvVar string
+
+	// Glyphs are the marks every theme the shell composes carries — row
+	// cursors, scroll thumbs, expand arrows — so the shell's own overlays
+	// (the key overlay, the action menu, the output console) draw the same
+	// ones as the screens, which receive them in SetTheme. Empty fields fall
+	// back to glyph.Default.
+	Glyphs glyph.Set
 
 	// Capabilities pins what the terminal is assumed to offer — colour
 	// profile and block glyphs — instead of detecting it. For tests and
@@ -135,8 +143,24 @@ type Options struct {
 
 	// Actions configures the menu. Leave zero for theme.Actions() against
 	// the current theme; colors come back from the theme on every swap, as
-	// everywhere else in the library.
+	// everywhere else in the library. Its styles, GroupStyle among them, are
+	// therefore ignored — use ActionGroupStyle for per-group headers.
 	Actions action.Options
+
+	// ActionGroupStyle styles the action menu's group headers by group, in
+	// place of the theme's HeaderStyle. It is handed the current theme and
+	// called again on every palette or surface swap, so a header drawn in
+	// t.Warning follows the palette:
+	//
+	//	ActionGroupStyle: func(group string, t theme.Theme) lipgloss.Style {
+	//		if group == "write" {
+	//			return lipgloss.NewStyle().Bold(true).Foreground(t.Warning)
+	//		}
+	//		return t.Actions().HeaderStyle
+	//	},
+	//
+	// The app decides what each group means; the shell gives none a meaning.
+	ActionGroupStyle func(group string, t theme.Theme) lipgloss.Style
 
 	// Output configures the console. Leave zero for output.OptionsFrom
 	// against the initial theme. Non-visual fields (MaxRecords, ExportDir,
@@ -389,6 +413,7 @@ type Model struct {
 	// placeChrome for the same problem in the chrome).
 	actionsKey  key.Binding
 	actOpts     action.Options
+	actGroups   func(group string, t theme.Theme) lipgloss.Style
 	menu        *action.Menu
 	menuUp      bool
 	conf        *confirm.Model
@@ -516,7 +541,8 @@ func New(opts Options) Model {
 	}
 	if opts.ActionsKey.Keys() != nil {
 		m.actionsKey = opts.ActionsKey
-		m.actOpts = mergeActionOptions(opts.Actions, t)
+		m.actGroups = opts.ActionGroupStyle
+		m.actOpts = mergeActionOptions(opts.Actions, m.actGroups, t)
 		menu := action.New(m.actOpts)
 		m.menu = &menu
 		m.running = map[string]actionRun{}
@@ -555,9 +581,14 @@ func mergeOutputOptions(prev output.Options, t theme.Theme) output.Options {
 // mergeActionOptions rebuilds the menu's themed options, carrying the
 // caller's non-visual knobs across. Same shape as mergeOutputOptions, and for
 // the same reason: colors belong to the theme (rule 4), everything else to the
-// app author.
-func mergeActionOptions(prev action.Options, t theme.Theme) action.Options {
+// app author. The per-group header style is the one visual the author owns,
+// so it is rebuilt here against t rather than carried, which would leave it
+// closed over the previous palette.
+func mergeActionOptions(prev action.Options, groups func(string, theme.Theme) lipgloss.Style, t theme.Theme) action.Options {
 	next := t.Actions()
+	if groups != nil {
+		next.GroupStyle = func(g string) lipgloss.Style { return groups(g, t) }
+	}
 	if prev.Title != "" {
 		next.Title = prev.Title
 	}
@@ -601,7 +632,7 @@ func (m *Model) retheme() {
 		// Rebuild over the same state (rule 4): the cursor survives, and so
 		// does whatever the menu was opened against.
 		cursor, set := m.menu.Cursor(), m.menu.Set()
-		m.actOpts = mergeActionOptions(m.actOpts, t)
+		m.actOpts = mergeActionOptions(m.actOpts, m.actGroups, t)
 		menu := action.New(m.actOpts)
 		m.menu = &menu
 		m.menu.SetActions(set)

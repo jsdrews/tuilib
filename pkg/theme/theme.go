@@ -82,6 +82,9 @@ func New(p palette.Palette) Theme {
 // either axis.
 func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
 	t := Theme{Palette: p}
+	if t.Warning == nil {
+		t.Warning = t.ErrorBG
+	}
 	t.Surface = surface.Resolve(s, p.Colours(caps.Profile), caps)
 	// Faint chrome — separators, rules, placeholders — is drawn on cards on a
 	// filled surface, so it takes the surface's Divider tone, which is kept

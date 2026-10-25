@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
+	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/list"
 	"github.com/jsdrews/tuilib/pkg/palette"
@@ -237,5 +238,61 @@ func TestSetSurfaceSwitchesByName(t *testing.T) {
 	m = send(t, m, SetSurfaceMsg{Name: "nope"})
 	if got := m.theme().Surface.Name(); got != "banded" {
 		t.Errorf("an unknown name changed the surface to %q", got)
+	}
+}
+
+// The app's glyphs ride on every theme the shell composes, so the menus it
+// draws itself use them too — and still do after a palette swap.
+func TestGlyphsReachTheShellsOwnMenus(t *testing.T) {
+	s := &actScreen{}
+	m := New(Options{
+		Root:       s,
+		Palettes:   []palette.Palette{palette.Nord(), palette.Dracula()},
+		SkipConfig: true,
+		ThemeKey:   key.NewBinding(key.WithKeys("t")),
+		ActionsKey: key.NewBinding(key.WithKeys("a")),
+		Glyphs:     glyph.Set{Cursor: "»"},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	s.set = oneAction(s)
+
+	m = actKey(m, "t")
+	if got := m.theme().Glyphs.Cursor; got != "»" {
+		t.Fatalf("composed theme's cursor = %q, want »", got)
+	}
+	m = actKey(m, "a")
+	if !strings.Contains(m.View(), "» Restart") {
+		t.Errorf("action menu should draw the app's cursor:\n%s", m.View())
+	}
+}
+
+// ActionGroupStyle is rebuilt against each theme, so a header drawn in the
+// palette's Warning follows the palette rather than keeping the first one's.
+func TestActionGroupStyleFollowsThePalette(t *testing.T) {
+	m := surfaceApp(t, Options{
+		Palettes:   []palette.Palette{palette.Nord(), palette.Dracula()},
+		ThemeKey:   key.NewBinding(key.WithKeys("t")),
+		ActionsKey: key.NewBinding(key.WithKeys("a")),
+		ActionGroupStyle: func(group string, t theme.Theme) lipgloss.Style {
+			return lipgloss.NewStyle().Foreground(t.Warning)
+		},
+	})
+	if got := m.actOpts.GroupStyle("write").GetForeground(); got != palette.Nord().Warning {
+		t.Fatalf("header colour = %v, want nord's Warning %v", got, palette.Nord().Warning)
+	}
+	m = send(t, m, typeKey("t"))
+	if got := m.actOpts.GroupStyle("write").GetForeground(); got != palette.Dracula().Warning {
+		t.Errorf("after the swap header colour = %v, want dracula's Warning %v", got, palette.Dracula().Warning)
+	}
+}
+
+func TestNoActionGroupStyleLeavesTheThemesHeader(t *testing.T) {
+	m := surfaceApp(t, Options{
+		Palettes:   []palette.Palette{palette.Nord()},
+		ActionsKey: key.NewBinding(key.WithKeys("a")),
+	})
+	if m.actOpts.GroupStyle != nil {
+		t.Error("GroupStyle should stay nil so HeaderStyle draws every header")
 	}
 }

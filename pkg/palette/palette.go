@@ -48,6 +48,11 @@ type Palette struct {
 	InfoBG, InfoFG   lipgloss.TerminalColor
 	ErrorBG, ErrorFG lipgloss.TerminalColor
 
+	// Warning is a foreground for emphasis short of an error — a write or
+	// destructive group's header in the action menu, say — so it needn't
+	// borrow the error band. Unset, theme.Compose uses ErrorBG.
+	Warning lipgloss.TerminalColor
+
 	// Accent is a bold highlight for body content (not used by chrome).
 	Accent lipgloss.TerminalColor
 
