@@ -26,6 +26,7 @@ func CatppuccinMocha() Palette {
 		InfoFG:         lipgloss.Color("#1e1e2e"), // base
 		ErrorBG:        lipgloss.Color("#f38ba8"), // red
 		ErrorFG:        lipgloss.Color("#1e1e2e"),
+		Success:        lipgloss.Color("#a6e3a1"), // green
 		Warning:        lipgloss.Color("#fab387"), // peach
 		Accent:         lipgloss.Color("#f5c2e7"), // pink
 	}
@@ -49,6 +50,7 @@ func CatppuccinLatte() Palette {
 		InfoFG:         lipgloss.Color("#eff1f5"), // base
 		ErrorBG:        lipgloss.Color("#d20f39"), // red
 		ErrorFG:        lipgloss.Color("#eff1f5"),
+		Success:        lipgloss.Color("#40a02b"), // green
 		Warning:        lipgloss.Color("#fe640b"), // peach
 		Accent:         lipgloss.Color("#ea76cb"), // pink
 	}
@@ -72,6 +74,7 @@ func TokyoNight() Palette {
 		InfoFG:         lipgloss.Color("#1a1b26"), // bg
 		ErrorBG:        lipgloss.Color("#f7768e"), // red
 		ErrorFG:        lipgloss.Color("#1a1b26"),
+		Success:        lipgloss.Color("#9ece6a"), // green
 		Warning:        lipgloss.Color("#ff9e64"), // orange
 		Accent:         lipgloss.Color("#bb9af7"), // magenta
 	}
@@ -96,6 +99,7 @@ func RosePine() Palette {
 		InfoFG:         lipgloss.Color("#e0def4"),
 		ErrorBG:        lipgloss.Color("#eb6f92"), // love
 		ErrorFG:        lipgloss.Color("#191724"), // base
+		Success:        lipgloss.Color("#9ccfd8"), // foam — rosé pine has no green; foam is its "added"
 		Warning:        lipgloss.Color("#f6c177"), // gold
 		Accent:         lipgloss.Color("#ebbcba"), // rose
 	}
@@ -119,6 +123,7 @@ func RosePineDawn() Palette {
 		InfoFG:         lipgloss.Color("#faf4ed"), // base
 		ErrorBG:        lipgloss.Color("#b4637a"), // love
 		ErrorFG:        lipgloss.Color("#faf4ed"),
+		Success:        lipgloss.Color("#56949f"), // foam — rosé pine has no green; foam is its "added"
 		Warning:        lipgloss.Color("#ea9d34"), // gold
 		Accent:         lipgloss.Color("#d7827e"), // rose
 	}
@@ -142,6 +147,7 @@ func OneDark() Palette {
 		InfoFG:         lipgloss.Color("#282c34"), // bg
 		ErrorBG:        lipgloss.Color("#e06c75"), // red
 		ErrorFG:        lipgloss.Color("#282c34"),
+		Success:        lipgloss.Color("#98c379"), // green
 		Warning:        lipgloss.Color("#d19a66"), // orange
 		Accent:         lipgloss.Color("#c678dd"), // purple
 	}
@@ -165,6 +171,7 @@ func Monokai() Palette {
 		InfoFG:         lipgloss.Color("#272822"),
 		ErrorBG:        lipgloss.Color("#f92672"), // pink/red
 		ErrorFG:        lipgloss.Color("#272822"),
+		Success:        lipgloss.Color("#a6e22e"), // green
 		Warning:        lipgloss.Color("#e6db74"), // yellow — orange is the accent
 		Accent:         lipgloss.Color("#fd971f"), // orange
 	}
@@ -188,6 +195,7 @@ func EverforestDark() Palette {
 		InfoFG:         lipgloss.Color("#2d353b"), // bg0
 		ErrorBG:        lipgloss.Color("#e67e80"), // red
 		ErrorFG:        lipgloss.Color("#2d353b"),
+		Success:        lipgloss.Color("#a7c080"), // green
 		Warning:        lipgloss.Color("#e69875"), // orange
 		Accent:         lipgloss.Color("#d699b6"), // purple
 	}

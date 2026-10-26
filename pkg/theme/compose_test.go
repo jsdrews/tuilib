@@ -53,3 +53,20 @@ func TestComposeDerivesAnUnsetWarningFromErrorBG(t *testing.T) {
 		t.Errorf("Warning = %v, want ErrorBG %v", th.Warning, p.ErrorBG)
 	}
 }
+
+func TestComposeKeepsAPalettesSuccess(t *testing.T) {
+	p := palette.Nord()
+	if th := Compose(p, surface.Outlined, caps); th.Success != p.Success {
+		t.Errorf("Success = %v, want the palette's own %v", th.Success, p.Success)
+	}
+}
+
+// A palette written before Success existed still gets one: its info colour,
+// the band a successful operation is reported in.
+func TestComposeDerivesAnUnsetSuccessFromInfoBG(t *testing.T) {
+	p := palette.Nord()
+	p.Success = nil
+	if th := Compose(p, surface.Outlined, caps); th.Success != p.InfoBG {
+		t.Errorf("Success = %v, want InfoBG %v", th.Success, p.InfoBG)
+	}
+}

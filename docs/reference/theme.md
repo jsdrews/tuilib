@@ -16,6 +16,7 @@ the `Glyphs` and the resolved `Surface`.
 | `BorderActive`, `BorderInactive` | color | Pane borders, focused and not. |
 | `InfoBG`, `InfoFG` | color | Info messages on the statusbar. |
 | `ErrorBG`, `ErrorFG` | color | Error messages; also the conventional override for an error-tinted alert. |
+| `Success` | color | A foreground for a good outcome — Running, Ready, Succeeded, Healthy — so status values follow the palette instead of a literal green. Unset, `theme.Compose` uses `InfoBG`. |
 | `Warning` | color | A foreground for emphasis short of an error, such as a write group's header in the action menu. Unset, `theme.Compose` uses `ErrorBG`. |
 | `Accent` | color | Bold highlight for body content: cursors, matches, spinners, the selected button. |
 | `Background`, `Foreground` | color | The palette's canonical pair: the screen, and text on a filled surface. Every surface tone is derived from them; unset, `BarBG` and `BarFG` stand in. |
@@ -62,6 +63,7 @@ Colors are `lipgloss.TerminalColor` (e.g. `lipgloss.Color("62")` or
 | `KeyFG` | base0D |
 | `InfoFG` on `InfoBG` | base0B on base00 |
 | `ErrorFG` on `ErrorBG` | base08 on base07 |
+| `Success` | base0B |
 | `Warning` | base09 |
 | `Accent` | base0E |
 

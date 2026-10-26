@@ -20,6 +20,7 @@ func Dark() Palette {
 		InfoFG:         lipgloss.Color("0"),
 		ErrorBG:        lipgloss.Color("160"),
 		ErrorFG:        lipgloss.Color("15"),
+		Success:        lipgloss.Color("42"),  // green
 		Warning:        lipgloss.Color("208"), // orange
 		Accent:         lipgloss.Color("214"), // warm gold — pops against charcoal + cyan keys
 	}
@@ -59,6 +60,7 @@ func Light() Palette {
 		InfoFG:         lipgloss.Color("255"),
 		ErrorBG:        lipgloss.Color("124"),
 		ErrorFG:        lipgloss.Color("255"),
+		Success:        lipgloss.Color("28"),  // green
 		Warning:        lipgloss.Color("130"), // dark orange
 		Accent:         lipgloss.Color("161"),
 	}
@@ -83,6 +85,7 @@ func Solarized() Palette {
 		InfoFG:         lipgloss.Color("234"),
 		ErrorBG:        lipgloss.Color("160"), // red
 		ErrorFG:        lipgloss.Color("255"),
+		Success:        lipgloss.Color("64"),  // green
 		Warning:        lipgloss.Color("136"), // yellow — orange is the accent
 		Accent:         lipgloss.Color("166"), // orange
 	}
@@ -107,6 +110,7 @@ func Nord() Palette {
 		InfoFG:         lipgloss.Color("236"),
 		ErrorBG:        lipgloss.Color("131"), // nord11 aurora red
 		ErrorFG:        lipgloss.Color("255"),
+		Success:        lipgloss.Color("150"), // nord14 aurora green
 		Warning:        lipgloss.Color("173"), // nord12 aurora orange
 		Accent:         lipgloss.Color("139"), // nord15 purple
 	}
@@ -131,6 +135,7 @@ func Dracula() Palette {
 		InfoFG:         lipgloss.Color("235"),
 		ErrorBG:        lipgloss.Color("203"), // red
 		ErrorFG:        lipgloss.Color("255"),
+		Success:        lipgloss.Color("84"),  // green
 		Warning:        lipgloss.Color("215"), // orange
 		Accent:         lipgloss.Color("117"), // cyan — on-brand against pink/purple chrome
 	}
@@ -154,6 +159,7 @@ func Gruvbox() Palette {
 		InfoFG:         lipgloss.Color("235"),
 		ErrorBG:        lipgloss.Color("124"), // red
 		ErrorFG:        lipgloss.Color("223"),
+		Success:        lipgloss.Color("142"), // green
 		Warning:        lipgloss.Color("208"), // orange
 		Accent:         lipgloss.Color("175"), // purple
 	}

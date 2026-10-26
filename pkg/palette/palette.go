@@ -48,6 +48,11 @@ type Palette struct {
 	InfoBG, InfoFG   lipgloss.TerminalColor
 	ErrorBG, ErrorFG lipgloss.TerminalColor
 
+	// Success is a foreground for a good outcome — Running, Ready, Succeeded,
+	// Healthy — so a status value needn't reach for a literal green that
+	// stays put when the palette changes. Unset, theme.Compose uses InfoBG.
+	Success lipgloss.TerminalColor
+
 	// Warning is a foreground for emphasis short of an error — a write or
 	// destructive group's header in the action menu, say — so it needn't
 	// borrow the error band. Unset, theme.Compose uses ErrorBG.

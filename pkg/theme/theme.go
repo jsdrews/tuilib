@@ -82,6 +82,9 @@ func New(p palette.Palette) Theme {
 // either axis.
 func Compose(p palette.Palette, s surface.Surface, caps surface.Caps) Theme {
 	t := Theme{Palette: p}
+	if t.Success == nil {
+		t.Success = t.InfoBG
+	}
 	if t.Warning == nil {
 		t.Warning = t.ErrorBG
 	}

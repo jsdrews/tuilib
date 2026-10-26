@@ -31,6 +31,14 @@ func TestBuiltinsSetBothSeeds(t *testing.T) {
 	}
 }
 
+func TestBuiltinsSetSuccess(t *testing.T) {
+	for _, p := range append(All(), Terminal()) {
+		if p.Success == nil {
+			t.Errorf("%s: no Success", p.Name)
+		}
+	}
+}
+
 func TestBuiltinsSetWarning(t *testing.T) {
 	for _, p := range append(All(), Terminal()) {
 		if p.Warning == nil {

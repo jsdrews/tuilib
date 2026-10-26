@@ -43,6 +43,7 @@ type Base16 struct {
 //	KeyFG   base0D   blue (functions/links/URLs — reads as "interactive")
 //	Info    base0B (green) on base00
 //	Error   base08 (red)   on base07
+//	Success base0B   green
 //	Warning base09   orange
 //	Accent  base0E   keyword color — body-content highlight
 //
@@ -67,6 +68,7 @@ func FromBase16(name string, p Base16) Palette {
 		InfoFG:         hex(p.Base00),
 		ErrorBG:        hex(p.Base08),
 		ErrorFG:        hex(p.Base07),
+		Success:        hex(p.Base0B),
 		Warning:        hex(p.Base09),
 		Accent:         hex(p.Base0E),
 	}
