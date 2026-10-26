@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jsdrews/tuilib/examples/patterns/eventlog"
+	"github.com/jsdrews/tuilib/examples/remotedata/events"
 )
 
 // The eventlog example against demoapi's AWX-shaped endpoints, over HTTP:
@@ -16,7 +16,7 @@ import (
 // checked through the app shell.
 
 func TestAWXEventsFinishedSearchAndFilter(t *testing.T) {
-	h := bApp(t, eventlog.NewFinished)
+	h := bApp(t, events.NewFinished)
 	h.pumpFor(1500 * time.Millisecond)
 	_, cur, out := bRows(h)
 	if cur != 1 {
@@ -58,7 +58,7 @@ func TestAWXEventsFinishedSearchAndFilter(t *testing.T) {
 }
 
 func TestAWXEventsLiveHolesFill(t *testing.T) {
-	h := bApp(t, eventlog.New)
+	h := bApp(t, events.New)
 	h.pumpFor(1500 * time.Millisecond)
 	_, _, out := bRows(h)
 	if !strings.Contains(out, "FOLLOWING") {

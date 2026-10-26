@@ -143,6 +143,6 @@ Loading shows only before the first answer, and a failure reads `✗ failed`.
 `State()` / `Restore(st)` carry items, query, failure, cursor, scroll, follow,
 growth, filter and search. With `pkg/remote`, use `Restyle`.
 
-See `examples/patterns/eventlog` (seekable, growing),
-`examples/patterns/anchored` (anchored) and the
+See `examples/remotedata/events` (seekable, growing),
+`examples/remotedata/anchored` (anchored) and the
 [remote data design note](../remote-data.md).

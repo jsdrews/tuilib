@@ -24,7 +24,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
 
-// sourceScreen is examples/patterns/remote with one thing added: the test
+// sourceScreen is examples/remotedata/records with one thing added: the test
 // decides how slow each query is. The example uses a fixed latency, which is
 // right for a demo and cannot produce the asymmetry these tests need.
 type sourceScreen struct {

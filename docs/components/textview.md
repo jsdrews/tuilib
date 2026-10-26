@@ -76,4 +76,4 @@ s.doc.SetContent(out)
 `State()` / `Restore(st)` carry content, wrap, search and current match,
 loading and scroll.
 
-See `examples/components/textview`.
+See `examples/appearance/textview`.

@@ -104,6 +104,10 @@ type ViewportChangedMsg struct {
 	// ToOlder and ToNewer count resident items between the viewport and
 	// each edge of what is held.
 	ToOlder, ToNewer int
+	// Token names the view that sent it, so a screen holding two remote
+	// views — or two tab bodies each holding one — routes each message to
+	// its own source. pkg/remote checks it.
+	Token focus.Token
 }
 
 // QueryChangedMsg reports a committed filter: enter, esc or blur, never per
@@ -111,6 +115,10 @@ type ViewportChangedMsg struct {
 type QueryChangedMsg struct {
 	Raw   string
 	Terms []query.Term
+	// Token names the view that sent it, so a screen holding two remote
+	// views — or two tab bodies each holding one — routes each message to
+	// its own source. pkg/remote checks it.
+	Token focus.Token
 }
 
 // FindMsg asks for the next match beyond what is held — n or N ran out of
@@ -745,7 +753,7 @@ func (m *Model) SetTerm(s string) {
 // Query returns the committed filter as a QueryChangedMsg, for the first
 // fetch.
 func (m Model) Query() QueryChangedMsg {
-	msg := QueryChangedMsg{Raw: m.qRaw}
+	msg := QueryChangedMsg{Raw: m.qRaw, Token: m.token}
 	if m.qRaw != "" {
 		msg.Terms = query.Parse(m.qRaw, nil)
 	}
@@ -1281,6 +1289,7 @@ func (m *Model) noteViewport(first, last int) {
 		FirstVisible: first, LastVisible: last,
 		HeldStart: start, HeldCount: n,
 		ToOlder: max(0, first-start), ToNewer: max(0, start+n-1-last),
+		Token: m.token,
 	}
 	if vp != m.vp {
 		m.vp, m.vpPending = vp, true

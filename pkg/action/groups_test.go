@@ -30,7 +30,7 @@ func innerRows(m Menu) []string {
 		}
 		ln = strings.Trim(ln, "│ █░")
 		ln = strings.TrimSpace(strings.TrimPrefix(ln, "▸"))
-		out = append(out, ln)
+		out = append(out, strings.Trim(ln, "─ "))
 	}
 	return out
 }
@@ -88,6 +88,30 @@ func TestTabJumpsBetweenGroups(t *testing.T) {
 	m, _ = send(m, keyMsg("shift+tab"))
 	if a, _ := m.Selected(); a.Label != "Delete" {
 		t.Errorf("shift+tab landed on %q, want Delete", a.Label)
+	}
+}
+
+func TestGroupJumpsWrapPastEitherEnd(t *testing.T) {
+	m := testMenu(t, groupedActions())
+	m, _ = send(m, keyMsg("shift+tab"))
+	if a, _ := m.Selected(); a.Label != "Shell" {
+		t.Errorf("shift+tab from the first group landed on %q, want Shell (other, the last)", a.Label)
+	}
+	m, _ = send(m, keyMsg("]"))
+	if a, _ := m.Selected(); a.Label != "Describe" {
+		t.Errorf("] from the last group landed on %q, want Describe", a.Label)
+	}
+}
+
+func TestBracketsJumpBetweenGroupsLikeTab(t *testing.T) {
+	m := testMenu(t, groupedActions())
+	m, _ = send(m, keyMsg("]"))
+	if a, _ := m.Selected(); a.Label != "Delete" {
+		t.Errorf("] landed on %q, want Delete", a.Label)
+	}
+	m, _ = send(m, keyMsg("["))
+	if a, _ := m.Selected(); a.Label != "Describe" {
+		t.Errorf("[ landed on %q, want Describe", a.Label)
 	}
 }
 

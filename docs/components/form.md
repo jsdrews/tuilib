@@ -93,7 +93,7 @@ compare values in the screen on `SubmittedMsg`.
 | `ActiveColor`, `InactiveColor`, `ActiveBorder`, `InactiveBorder`, `Glyphs`, `SlotBrackets`, `Surface` | | theme | The frame's chrome, used only with `Title`. |
 | `SubmitText` | `string` | `"Submit"` | Submit button label. |
 | `FieldSpacing` | `*int` | 0 | Blank lines between fields. |
-| `Styles` | `form.Styles` | theme | Input, placeholder, cursor, selected, pane colors and border shapes, error color and text, submit button styles. |
+| `Styles` | `form.Styles` | theme | Input, placeholder, cursor, selected, pane colors and border shapes, error color and text, submit button styles, and the fields' surfaces: `FieldSurface` in a bare form, `FramedFieldSurface` in a titled one. On a filled surface each field is then a card a step lighter than what it sits on — the screen, or the frame. |
 | `Width`, `Height` | `int` | | Set by the layout engine. |
 
 `opts.With(fields)` returns a copy with `Fields` replaced, for chaining from
@@ -130,4 +130,4 @@ Mouse: clicking a field moves focus to it; clicking submit submits.
 | `form.InvalidMsg{Keys}` | submit refused; `Keys` names the invalid fields |
 | `form.CancelledMsg{}` | `esc` |
 
-See `examples/components/form`.
+See `examples/appearance/form`.

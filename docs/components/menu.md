@@ -7,13 +7,13 @@ an app, the screens a home page leads to. Use it where tabs run out of room.
 ┌ Sections ─────────────────────────────────────────┐
 │/ filter by label or group…                        │
 │────────────────────────────────────────────────── │
-│database                                           │
+│── database ────────────────────────────────────── │
 │▸ postgres › instance  GET /v1/db/postgres/instance│
 │  mysql › instance     GET /v1/db/mysql/instance   │
-│network                                            │
+│── network ─────────────────────────────────────── │
 │  vpc                  GET /v1/net/vpc             │
 │  firewall rules       GET /v1/net/firewall        │
-│other                                              │
+│── other ───────────────────────────────────────── │
 │  about                what this demo shows        │
 └ 6 / 6 ────────────────────────────────────────────┘
 ```
@@ -71,8 +71,16 @@ menus on one screen never claim each other's picks.
   group. Header text is the group name as written.
 - Items without a group go last, under `other`, merged with any group named
   `other`.
-- The cursor, clicks, the wheel and the half-page keys skip headers. `[` and
-  `]` jump to the first item of the previous or next group.
+- The cursor, clicks, the wheel and the half-page keys skip headers. `tab` /
+  `shift+tab` and `]` / `[` jump to the first item of the next or previous
+  group, wrapping past either end.
+- A header is a thin divider across the menu with the group's name set into
+  it, the way a pane sets its title into its border: `── network ──────`. The
+  rule is the surface's divider glyph in `RuleStyle`, the name in
+  `HeaderStyle`, so the headers stay quieter than the items under them. On a
+  card (any surface without a line border) there is no edge for the rule to
+  meet, so the name sits in the label column and the rule trails after it:
+  `  network ──────`.
 
 ## Filter
 
@@ -92,8 +100,9 @@ mean little without the group above them.
 | `Filterable` | `bool` | `false` | Adds the `/` filter row. |
 | `LabelStyle` | `lipgloss.Style` | plain | Labels. |
 | `DescStyle` | `lipgloss.Style` | muted | Descriptions. |
-| `HeaderStyle` | `lipgloss.Style` | bold, `Current` | Group headers. |
-| `GroupStyle` | `func(group string) lipgloss.Style` | nil | Per-group header style; replaces `HeaderStyle` when set. |
+| `HeaderStyle` | `lipgloss.Style` | `Muted` | The name in each group header. |
+| `GroupStyle` | `func(group string) lipgloss.Style` | nil | Per-group name style; replaces `HeaderStyle` when set. |
+| `RuleStyle` | `lipgloss.Style` | `Subtle` | The divider either side of the name. |
 | `SelectedStyle`, `SelectedBlurredStyle` | `lipgloss.Style` | theme | The cursor row, focused and not. |
 | `Filter` | `filter.Options` | `t.Filter()` | The embedded filter. |
 | `Keys` | `menu.Keys` | `DefaultKeys()` | Key bindings. |
@@ -110,11 +119,13 @@ cursor on the same item across `SetItems`.
 | `↑`/`k`, `↓`/`j` | `Up`, `Down` | move |
 | `g`, `G` | `Top`, `Bottom` | first / last |
 | `ctrl+u`, `ctrl+d` | `HalfUp`, `HalfDown` | half page |
-| `[`, `]` | `PrevGroup`, `NextGroup` | previous / next group |
+| `shift+tab`/`[`, `tab`/`]` | `PrevGroup`, `NextGroup` | previous / next group |
 | `/` | `Filter` | filter |
 | `enter` | `Choose` | open |
 
-`tab` is left alone: it moves focus between components. Mouse: click focuses
+In a `focus.Group`, `tab` and `shift+tab` move focus between components, so
+the menu gives them up and jumps on `[` / `]` alone; `focus.NewGroup` tells it
+which keys cycle (`focus.Member`). Mouse: click focuses
 and moves the cursor (a click on a header only focuses), double-click opens,
 and the wheel moves the cursor in whichever menu is under the pointer.
 
@@ -130,4 +141,4 @@ and the wheel moves the cursor in whichever menu is under the pointer.
 | `State()`, `Restore(st)` | Carry items, filter, cursor and scroll across a rebuild. |
 | `SetTitle(s)`, `Title()`, `Rect()` | Chrome and placement. |
 
-See `examples/components/menu`.
+See `examples/navigation`.

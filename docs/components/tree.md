@@ -112,7 +112,7 @@ that node alone. `Marks()` returns paths in document order, including marks
 inside collapsed branches; prefix-test them to get a subtree. `A` marks only
 visible rows (expanded and surviving the filter). `Selection()` and
 `SelectionLabel()` work as on [List](list.md#multi-select). See
-`examples/patterns/treeactions`.
+`examples/workbench`.
 
 ### Row activity
 
@@ -131,4 +131,4 @@ through `ApplyRead(rd, root, err)`; keys are paths. See
 `State()` / `Restore(st)` carry the root, which branches are open, cursor,
 search and filter mode, marks, activity, loading and scroll.
 
-See `examples/components/tree`.
+See `examples/workbench`.

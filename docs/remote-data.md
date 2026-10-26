@@ -8,9 +8,9 @@ and the build is specified in #81.
 > **Status.** Everything here exists: `pkg/eventlog`, `source.Anchored`,
 > `source.Model`'s `MaxHeld` / `Follow` / `Find`, `pkg/table`'s span mode
 > (`Options.Anchored`), `pkg/resume`, and `logview.Prepend` /
-> `AppendMarker`. Each shape has an example: `examples/patterns/eventlog`
-> (Seekable — an AWX client, against demoapi's AWX-shaped endpoints over HTTP), `examples/patterns/anchored` (Anchored — a
-> `search_after` client against demoapi's Elasticsearch-shaped `_search`) and `examples/patterns/podlogs` (Streamed, pod logs).
+> `AppendMarker`. Each shape has an example: `examples/remotedata/events`
+> (Seekable — an AWX client, against demoapi's AWX-shaped endpoints over HTTP), `examples/remotedata/anchored` (Anchored — a
+> `search_after` client against demoapi's Elasticsearch-shaped `_search`) and `examples/remotedata/podlogs` (Streamed, pod logs).
 
 ## Classify the data first
 

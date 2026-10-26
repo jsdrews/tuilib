@@ -122,7 +122,7 @@ The group:
     routing bug.
 
 On a theme swap, rebuild the group over the same field addresses and restore
-the index with `SetIndex`. See `examples/patterns/focus`.
+the index with `SetIndex`. See `examples/workbench`.
 
 ### Filterable components have two regions
 
@@ -137,7 +137,7 @@ focusable regions behind one `Focusable`: the filter row and the body.
   the body. A click on the scrollbar is the exception and leaves a half-typed
   query alone.
 
-`examples/patterns/filters` is a screen with two filterable panes.
+`examples/workbench` is a screen with two filterable panes.
 
 ## Mouse
 
@@ -208,4 +208,4 @@ case mouse.Msg:
     }
 ```
 
-See `examples/patterns/mouse`.
+See `examples/workbench`.

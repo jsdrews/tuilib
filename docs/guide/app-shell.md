@@ -114,7 +114,7 @@ See [Feedback and the console](feedback.md).
 `app.SetPalette(name)` returns a command that switches to the named palette (if
 it's in `Palettes`) and rebroadcasts the theme across the stack. A picker can
 call it as its cursor moves. `app.SetSurface(name)` does the same for a surface
-in `Surfaces`; `examples/shell/themes` and `examples/shell/surfaces` are the two
+in `Surfaces`; `examples/appearance/look` is the
 pickers.
 
 ## Subprocesses and suspend

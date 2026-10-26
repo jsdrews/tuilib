@@ -100,7 +100,7 @@ s.list.SetLoading(false)
 ```
 
 Remote-bound tables and eventlogs manage this themselves; don't call it there.
-See `examples/patterns/loading`.
+See `examples/liveops`.
 
 ## Surfaces
 

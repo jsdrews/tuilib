@@ -46,7 +46,8 @@ layout.ZStack(base, layout.Sized(&s.alert))
 ```
 
 The theme's alert chrome is deliberately neutral; set `ActiveColor` (and the
-`OKStyle` foreground) to `t.ErrorBG` for an error look.
+`OKStyle` foreground) to `t.ErrorBG` for an error look. When `Chips` is set
+(a filled surface), tint the chip's background instead, with `t.ErrorFG` text.
 
 ## Options
 
@@ -57,6 +58,7 @@ The theme's alert chrome is deliberately neutral; set `ActiveColor` (and the
 | `Message` | `string` | `""` | Body text. Not wrapped unless `Autosize`. |
 | `OK` | `string` | `"OK"` | Button label. |
 | `OKStyle` | `lipgloss.Style` | bold accent | Button style. |
+| `Chips` | `bool` | theme: on for filled surfaces | Draws the button as a filled chip, `  OK  `, in place of `[ OK ]`; the same width. `OKStyle` then carries the background. |
 | `MessageStyle` | `lipgloss.Style` | theme | Body text. |
 | `Autosize` | `bool` | `false` | Size to the message and center within the rect (see above). |
 | `ActiveColor`, `InactiveColor`, `ActiveBorder`, `InactiveBorder`, `Glyphs`, `SlotBrackets` | | theme (thick border) | Pane chrome. |
@@ -80,4 +82,4 @@ Mouse: clicking OK dismisses.
 
 `alert.DismissedMsg{}`.
 
-See `examples/patterns/modals`.
+See `examples/workbench`.

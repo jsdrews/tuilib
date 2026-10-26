@@ -81,6 +81,10 @@ type Options struct {
 	SelectedStyle lipgloss.Style
 	// UnselectedStyle styles the inactive button.
 	UnselectedStyle lipgloss.Style
+	// Chips draws each button as a filled chip, "  label  ", in place of
+	// "[ label ]": the same width, so nothing moves. The styles then carry a
+	// background. theme sets it on a filled surface.
+	Chips bool
 
 	// MessageStyle styles the body text. Defaults to no styling.
 	MessageStyle lipgloss.Style
@@ -110,6 +114,7 @@ type Model struct {
 	message         string
 	selectedStyle   lipgloss.Style
 	unselectedStyle lipgloss.Style
+	chips           bool
 	messageStyle    lipgloss.Style
 
 	pane pane.Pane
@@ -150,6 +155,7 @@ func New(opts Options) Model {
 		message:         opts.Message,
 		selectedStyle:   opts.SelectedStyle,
 		unselectedStyle: opts.UnselectedStyle,
+		chips:           opts.Chips,
 		messageStyle:    opts.MessageStyle,
 		pane:            p,
 	}
@@ -269,11 +275,19 @@ func (m Model) HelpSections() []help.Section {
 	))
 }
 
+// button is a label as drawn, and what hit-testing measures.
+func (m Model) button(label string) string {
+	if m.chips {
+		return "  " + label + "  "
+	}
+	return "[ " + label + " ]"
+}
+
 // renderInner produces the content rendered inside the pane: message body
 // on top, an empty line, then the two buttons centered on the last row.
 func (m Model) renderInner() string {
-	yes := "[ " + m.confirmLabel + " ]"
-	no := "[ " + m.cancelLabel + " ]"
+	yes := m.button(m.confirmLabel)
+	no := m.button(m.cancelLabel)
 	if m.value {
 		yes = m.selectedStyle.Render(yes)
 		no = m.unselectedStyle.Render(no)
@@ -341,8 +355,8 @@ func (m Model) buttonAt(x, y int) (confirm bool, ok bool) {
 	c := m.pane.ContentRect()
 	pos := (x - c.X) + m.pane.XOffset()
 
-	cancelW := ansi.StringWidth("[ " + m.cancelLabel + " ]")
-	confirmW := ansi.StringWidth("[ " + m.confirmLabel + " ]")
+	cancelW := ansi.StringWidth(m.button(m.cancelLabel))
+	confirmW := ansi.StringWidth(m.button(m.confirmLabel))
 	confirmStart := cancelW + buttonGap
 
 	switch {

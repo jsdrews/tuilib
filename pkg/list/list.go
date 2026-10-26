@@ -418,6 +418,13 @@ func (m Model) halfPage() int {
 	return 1
 }
 
+// SetSurface changes how the list's edge and body are drawn. pkg/form uses it
+// to put a Select field on the theme's field surface.
+func (m *Model) SetSurface(r surface.Resolved) {
+	m.body.SetSurface(r)
+	m.refresh()
+}
+
 func (m *Model) refresh() {
 	var b strings.Builder
 	for i, it := range m.visible {

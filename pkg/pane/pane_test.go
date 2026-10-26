@@ -73,8 +73,8 @@ func TestEdgeJumpClampsWhenContentFits(t *testing.T) {
 // delivered to that screen and dropped. SetLoading only arms a tick when the
 // state changes, so on return the state has not changed and nothing restarts
 // it — the spinner sits frozen over content that is still loading. Same defect
-// pkg/activity had, reachable here from examples/patterns/loading plus the
-// output console.
+// pkg/activity had, reachable here from examples/liveops plus the output
+// console.
 func TestLoadingSpinnerRevivesAfterBeingStarved(t *testing.T) {
 	fast := spinner.Spinner{Frames: []string{"1", "2"}, FPS: time.Millisecond}
 	p := New(Options{Width: 20, Height: 6, Spinner: &fast})

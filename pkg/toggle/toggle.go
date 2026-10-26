@@ -49,6 +49,10 @@ type Options struct {
 	SelectedStyle lipgloss.Style
 	// UnselectedStyle styles the inactive side.
 	UnselectedStyle lipgloss.Style
+	// Chips draws each button as a filled chip, "  label  ", in place of
+	// "[ label ]": the same width, so nothing moves. The styles then carry a
+	// background. theme sets it on a filled surface.
+	Chips bool
 
 	// Pane pass-throughs. Unset fields fall back to NormalBorder both states
 	// and SlotBracketsNone.
@@ -79,6 +83,7 @@ type Model struct {
 	noLabel         string
 	selectedStyle   lipgloss.Style
 	unselectedStyle lipgloss.Style
+	chips           bool
 
 	pane pane.Pane
 }
@@ -115,6 +120,7 @@ func New(opts Options) Model {
 		noLabel:         opts.NoLabel,
 		selectedStyle:   opts.SelectedStyle,
 		unselectedStyle: opts.UnselectedStyle,
+		chips:           opts.Chips,
 		pane:            p,
 	}
 	m.pane.SetContent(m.renderInner())
@@ -159,6 +165,13 @@ func (m *Model) SetRect(r geom.Rect) {
 	m.pane.SetContent(m.renderInner())
 }
 
+// SetSurface changes how the toggle's edge and body are drawn. pkg/form uses
+// it to put its fields on the theme's field surface.
+func (m *Model) SetSurface(r surface.Resolved) {
+	m.pane.SetSurface(r)
+	m.SetRect(m.pane.Rect())
+}
+
 // Rect returns the rect the toggle was last placed at.
 func (m Model) Rect() geom.Rect { return m.pane.Rect() }
 
@@ -188,8 +201,8 @@ func (m Model) buttonAt(x, y int) (yes bool, ok bool) {
 		return false, false
 	}
 	pos := (x - c.X) + m.pane.XOffset()
-	yesW := ansi.StringWidth("[ " + m.yesLabel + " ]")
-	noW := ansi.StringWidth("[ " + m.noLabel + " ]")
+	yesW := ansi.StringWidth(m.button(m.yesLabel))
+	noW := ansi.StringWidth(m.button(m.noLabel))
 	const gap = 2
 	switch {
 	case pos >= 0 && pos < yesW:
@@ -249,6 +262,20 @@ func (m *Model) SetUnselectedStyle(s lipgloss.Style) {
 	m.pane.SetContent(m.renderInner())
 }
 
+// SetChips switches between chip buttons and bracketed ones (Options.Chips).
+func (m *Model) SetChips(on bool) {
+	m.chips = on
+	m.pane.SetContent(m.renderInner())
+}
+
+// button is a side's label as drawn, and what hit-testing measures.
+func (m Model) button(label string) string {
+	if m.chips {
+		return "  " + label + "  "
+	}
+	return "[ " + label + " ]"
+}
+
 // Help returns the keys this toggle responds to. Compose into a screen's
 // Help() to drive a per-component help line.
 func (m Model) Help() []key.Binding { return help.Flatten(m.HelpSections()) }
@@ -278,8 +305,8 @@ func (m *Model) SetInactiveBorder(b lipgloss.Border) { m.pane.SetInactiveBorder(
 
 // renderInner produces the content rendered inside the pane.
 func (m Model) renderInner() string {
-	yes := "[ " + m.yesLabel + " ]"
-	no := "[ " + m.noLabel + " ]"
+	yes := m.button(m.yesLabel)
+	no := m.button(m.noLabel)
 	if m.value {
 		yes = m.selectedStyle.Render(yes)
 		no = m.unselectedStyle.Render(no)

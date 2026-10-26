@@ -127,4 +127,4 @@ func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 An action declared with `Confirm: "Delete cache-redis?"` gets this modal from
 the action menu without any of the above. See [Verbs](actions.md).
 
-`examples/patterns/modals` shows all three weights on one screen.
+The operations menu in `examples/workbench` shows all three weights on one screen.

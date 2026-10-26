@@ -270,6 +270,25 @@ func (s Surface) fieldForm() Surface {
 	return f
 }
 
+// overlayFieldForm is the field form for a field drawn on s's overlay form —
+// a field in a modal form. A filled field is a card a step lighter than the
+// overlay beneath it, as a card is a step lighter than the screen; the field
+// form's own Card tones would sink it into the sheet instead. A lined or
+// unfilled field keeps its form: the overlay shows through it.
+func (s Surface) overlayFieldForm() Surface {
+	f := s.fieldForm()
+	for p := &f; p != nil; p = p.Fallback {
+		if p.Filled() {
+			p.Fill, p.FillFocused = OverlayCard, OverlayCardRaised
+		}
+		if p.Fallback != nil {
+			fb := *p.Fallback
+			p.Fallback = &fb
+		}
+	}
+	return f
+}
+
 // fieldMargin is a field's margin: a cell on the parent to the right, which
 // lines it up with the cards around it, and a text row on the parent below.
 func fieldMargin() Ring {

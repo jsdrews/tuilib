@@ -12,10 +12,10 @@
 //   - headers only once the items name two or more groups;
 //   - groups in the order first seen, header text as written;
 //   - items without a group last, under "other";
-//   - [ and ] jump to the previous and next group.
+//   - tab / shift+tab and ] / [ jump to the next and previous group.
 //
-// tab is deliberately left alone, because on a screen with more than one
-// component it moves focus between them.
+// In a focus.Group, tab and shift+tab move focus between components instead,
+// and the menu jumps on [ and ] alone (see JoinGroup).
 //
 // A menu is not pkg/action's Menu. That one is a modal over a screen's verbs;
 // this one is a screen's content.
@@ -23,6 +23,7 @@ package menu
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -77,7 +78,9 @@ type Keys struct {
 	Top, Bottom      key.Binding
 	HalfUp, HalfDown key.Binding
 	// PrevGroup and NextGroup jump to the first item of the previous or next
-	// group. They do nothing when the menu has no headers.
+	// group. They do nothing when the menu has no headers. In a focus.Group
+	// the menu leaves the Group's cycling keys (tab, shift+tab) to it and
+	// jumps on the rest.
 	PrevGroup, NextGroup key.Binding
 	Filter               key.Binding
 	Choose               key.Binding
@@ -92,8 +95,8 @@ func DefaultKeys() Keys {
 		Bottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
 		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
-		PrevGroup: key.NewBinding(key.WithKeys("["), key.WithHelp("[", "prev group")),
-		NextGroup: key.NewBinding(key.WithKeys("]"), key.WithHelp("]", "next group")),
+		PrevGroup: key.NewBinding(key.WithKeys("shift+tab", "["), key.WithHelp("⇧tab/[", "prev group")),
+		NextGroup: key.NewBinding(key.WithKeys("tab", "]"), key.WithHelp("tab/]", "next group")),
 		Filter:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 		Choose:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "open")),
 	}
@@ -133,10 +136,13 @@ type Options struct {
 	LabelStyle lipgloss.Style
 	// DescStyle styles the description; theme.Menu() dims it.
 	DescStyle lipgloss.Style
-	// HeaderStyle styles the group headers. GroupStyle, when set, styles each
-	// header by its group instead.
+	// A group header is a thin divider with the group's name set into it.
+	// HeaderStyle styles the name; GroupStyle, when set, styles it by its
+	// group instead. RuleStyle colours the divider, drawn in the surface's
+	// divider glyph.
 	HeaderStyle lipgloss.Style
 	GroupStyle  func(group string) lipgloss.Style
+	RuleStyle   lipgloss.Style
 	// SelectedStyle is applied to the whole cursor row.
 	SelectedStyle lipgloss.Style
 	// SelectedBlurredStyle replaces SelectedStyle while the menu doesn't
@@ -181,6 +187,8 @@ type Model struct {
 	selectedStyle, selBlurred lipgloss.Style
 	headers                   grouping.Styles
 	keys                      Keys
+	// cycle is the focus.Group's cycling keys once the menu has joined one.
+	cycle []key.Binding
 
 	// token is the menu's identity in focus requests and ChosenMsg. Update
 	// takes a value receiver, so the model cannot name its own address.
@@ -196,14 +204,20 @@ func New(opts Options) Model {
 	}
 	opts.Keys.fillDefaults()
 	m := Model{
-		glyphs:             opts.Glyphs.Resolve(),
-		items:              append([]Item(nil), opts.Items...),
-		filterable:         opts.Filterable,
-		labelStyle:         opts.LabelStyle,
-		descStyle:          opts.DescStyle,
-		selectedStyle:      opts.SelectedStyle,
-		selBlurred:         opts.SelectedBlurredStyle,
-		headers:            grouping.Styles{Header: opts.HeaderStyle, Group: opts.GroupStyle},
+		glyphs:        opts.Glyphs.Resolve(),
+		items:         append([]Item(nil), opts.Items...),
+		filterable:    opts.Filterable,
+		labelStyle:    opts.LabelStyle,
+		descStyle:     opts.DescStyle,
+		selectedStyle: opts.SelectedStyle,
+		selBlurred:    opts.SelectedBlurredStyle,
+		headers: grouping.Styles{
+			Header: opts.HeaderStyle,
+			Group:  opts.GroupStyle,
+			Rule:   opts.RuleStyle,
+			Glyph:  opts.Surface.Surface().Divider.Glyph,
+			Inset:  !grouping.Joins(opts.Surface.Surface()),
+		},
 		keys:               opts.Keys,
 		token:              focus.NewToken(),
 		filterRuleActive:   lipgloss.NewStyle().Foreground(opts.ActiveColor),
@@ -290,7 +304,7 @@ func (m *Model) refresh() {
 	rows := make([]string, 0, m.layout.Len())
 	for _, r := range m.layout.Rows() {
 		if r.Header {
-			rows = append(rows, m.renderHeader(r.Group, w))
+			rows = append(rows, m.headers.Render(r.Group, w))
 			continue
 		}
 		rows = append(rows, m.renderItem(r.Item, w, labelW))
@@ -313,12 +327,6 @@ func (m Model) labelWidth(w int) int {
 		lw = max(lw, xansi.StringWidth(it.Label))
 	}
 	return max(0, min(lw, w-cursorW))
-}
-
-func (m Model) renderHeader(group string, w int) string {
-	text := fit(group, w)
-	name := strings.TrimRight(text, " ")
-	return m.headers.For(group).Render(name) + text[len(name):]
 }
 
 func (m Model) renderItem(i, w, labelW int) string {
@@ -413,12 +421,41 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.moveTo(m.layout.Step(m.cursor, -m.halfPage(), nil))
 	case key.Matches(km, m.keys.HalfDown):
 		m.moveTo(m.layout.Step(m.cursor, m.halfPage(), nil))
-	case key.Matches(km, m.keys.PrevGroup):
+	case key.Matches(km, m.prevGroup()):
 		m.moveTo(m.layout.JumpGroup(m.cursor, -1, nil))
-	case key.Matches(km, m.keys.NextGroup):
+	case key.Matches(km, m.nextGroup()):
 		m.moveTo(m.layout.JumpGroup(m.cursor, 1, nil))
 	}
 	return m, nil
+}
+
+// JoinGroup satisfies focus.Member: inside a focus.Group, the Group's cycling
+// keys move focus, so the group jumps give them up.
+func (m *Model) JoinGroup(cycle focus.Keys) { m.cycle = []key.Binding{cycle.Next, cycle.Prev} }
+
+func (m Model) prevGroup() key.Binding { return without(m.keys.PrevGroup, m.cycle) }
+func (m Model) nextGroup() key.Binding { return without(m.keys.NextGroup, m.cycle) }
+
+// without is b less any key one of taken claims, relabelled with what is
+// left. b comes back untouched when nothing was taken.
+func without(b key.Binding, taken []key.Binding) key.Binding {
+	var keep []string
+	for _, k := range b.Keys() {
+		claimed := false
+		for _, t := range taken {
+			claimed = claimed || slices.Contains(t.Keys(), k)
+		}
+		if !claimed {
+			keep = append(keep, k)
+		}
+	}
+	if len(keep) == len(b.Keys()) {
+		return b
+	}
+	if len(keep) == 0 {
+		return key.NewBinding()
+	}
+	return key.NewBinding(key.WithKeys(keep...), key.WithHelp(strings.Join(keep, "/"), b.Help().Desc))
 }
 
 // handleMouse follows rule 28: a click focuses and moves the cursor, a double
@@ -665,7 +702,11 @@ func (m Model) HelpSections() []help.Section {
 	}
 	nav := []key.Binding{m.keys.Up, m.keys.Down, m.keys.HalfUp, m.keys.HalfDown, m.keys.Top, m.keys.Bottom}
 	if m.layout.Grouped() {
-		nav = append(nav, m.keys.PrevGroup, m.keys.NextGroup)
+		for _, b := range []key.Binding{m.prevGroup(), m.nextGroup()} {
+			if len(b.Keys()) > 0 {
+				nav = append(nav, b)
+			}
+		}
 	}
 	var filt []key.Binding
 	if m.filterable {
@@ -691,6 +732,9 @@ type State struct {
 	value  string
 	cursor int
 	yoff   int
+	// cycle is the focus.Group's keys, so a menu rebuilt without its Group
+	// being rebuilt still leaves them to it.
+	cycle []key.Binding
 }
 
 // State captures the menu's state.
@@ -701,6 +745,7 @@ func (m Model) State() State {
 		value:  m.Value(),
 		cursor: m.cursor,
 		yoff:   m.body.YOffset(),
+		cycle:  m.cycle,
 	}
 }
 
@@ -711,6 +756,7 @@ func (m *Model) Restore(s State) {
 		return
 	}
 	m.items = append([]Item(nil), s.items...)
+	m.cycle = s.cycle
 	if m.filterable {
 		m.filter.SetValue(s.value)
 	}

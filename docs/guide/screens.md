@@ -114,7 +114,7 @@ the parent, which may start a fetch the user never asked for.
 
 A root screen can push a child from its own `OnEnter` (for a login form, say),
 take the result when it pops, and push it again later on logout. The child
-never lives permanently on the stack. See `examples/shell/prescreen`.
+never lives permanently on the stack. See `examples/navigation/prescreen`.
 
 ## Messages reach covered screens
 

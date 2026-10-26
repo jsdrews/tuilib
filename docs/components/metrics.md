@@ -49,4 +49,4 @@ rows = append(rows, table.KeyedRow{Key: name, Cells: []string{
 `Badge` has a variable width; give its column a fixed `Width` if you need
 alignment.
 
-See `examples/components/metrics`, a live deployments table polling every 2s.
+See the workloads pane in `examples/liveops`, polled every 2s.

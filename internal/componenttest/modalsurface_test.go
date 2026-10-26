@@ -44,6 +44,13 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 		// rect the modal landed in.
 		draw func(th theme.Theme) (string, geom.Rect)
 	}
+	// cursorFirst names the modals whose first body row is their cursor, which
+	// a filled surface paints in its selection band rather than the fill.
+	cursorFirst := map[string]bool{"action menu": true}
+	// cards names the modals whose body holds cards of its own: a titled
+	// form's fields, a step lighter than its frame (held by
+	// TestFormFieldsAreCardsOnWhatTheySitOn).
+	cards := map[string]bool{"titled form": true}
 	centered := func(mw, mh int, c layout.Sizer) (string, geom.Rect) {
 		frame := layout.ZStack(
 			layout.RenderFunc(func(geom.Rect) string { return base }),
@@ -118,6 +125,19 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 			}
 		}
 		in := os.Insets()
+		cardBG := map[string]bool{}
+		// A button drawn as a chip, idle or chosen, in any modal.
+		chipBG := map[string]bool{}
+		if c := th.Surface.Colours().Of(surface.Button); c != nil {
+			chipBG[backgrounds(lipgloss.NewStyle().Background(c).Render("x"))[0]] = true
+		}
+		chipBG[backgrounds(lipgloss.NewStyle().Background(th.Accent).Render("x"))[0]] = true
+		// A field card's body, and Banded's header band across its top.
+		for _, r := range []surface.Role{surface.OverlayCard, surface.OverlayCardRaised, surface.Band, surface.EdgeActive} {
+			if c := th.Surface.Colours().Of(r); c != nil {
+				cardBG[backgrounds(lipgloss.NewStyle().Background(c).Render("x"))[0]] = true
+			}
+		}
 
 		for _, md := range modals {
 			t.Run(s.Name+"/"+md.name, func(t *testing.T) {
@@ -144,6 +164,12 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 							if shadow && right && []rune(ansi.Strip(lines[y]))[x] == ' ' {
 								t.Fatalf("shadow cell (%d,%d) is blank:\n%s", x, y, show())
 							}
+						case body && cursorFirst[md.name] && y == r.Y+in.Top:
+							if bg != overlayBG && (bg == baseBG || bg == "") {
+								t.Fatalf("cursor cell (%d,%d) is %q, want the modal's own background:\n%s", x, y, bg, show())
+							}
+						case body && chipBG[bg]:
+						case body && cards[md.name] && cardBG[bg]:
 						case body:
 							if bg != overlayBG {
 								t.Fatalf("body cell (%d,%d) is %q, want the overlay fill %q:\n%s", x, y, bg, overlayBG, show())
@@ -155,6 +181,58 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 						}
 					}
 				}
+			})
+		}
+	}
+}
+
+// A form's fields are cards a step lighter than what they sit on: the frame's
+// overlay tone in a titled form, the screen in a bare one. Drawn in the
+// field form's own Card tone inside a titled form's frame they would sink
+// below it instead, and a focused field would vanish into it.
+func TestFormFieldsAreCardsOnWhatTheySitOn(t *testing.T) {
+	caps := surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true}
+	bgOf := func(c lipgloss.TerminalColor) string {
+		return backgrounds(lipgloss.NewStyle().Background(c).Render("x"))[0]
+	}
+	for _, s := range surface.Builtins() {
+		th := theme.Compose(palette.Nord(), s, caps)
+		if !th.Surface.Field().Surface().Filled() {
+			continue // a lined or bare field lets what is under it show through
+		}
+		for _, c := range []struct {
+			name  string
+			title string
+			want  surface.Role
+		}{
+			{"titled", "New user", surface.OverlayCard},
+			{"bare", "", surface.Card},
+		} {
+			t.Run(s.Name+"/"+c.name, func(t *testing.T) {
+				o := th.Form()
+				o.Title = c.title
+				// The first field takes focus; the second is the blurred card.
+				o.Fields = []form.Field{
+					form.Text(form.TextOptions{Key: "a", Label: "A"}),
+					form.Text(form.TextOptions{Key: "b", Label: "B", Placeholder: "zqx"}),
+				}
+				m := form.New(o)
+				geom.NextGen()
+				m.SetRect(geom.New(0, 0, 40, 16))
+				for _, line := range strings.Split(m.View(), "\n") {
+					plain := []rune(ansi.Strip(line))
+					col := strings.Index(string(plain), "zqx")
+					if col < 0 {
+						continue
+					}
+					col = len([]rune(string(plain)[:col]))
+					want := bgOf(th.Surface.Colours().Of(c.want))
+					if got := backgrounds(line)[col]; got != want {
+						t.Errorf("blurred field body is %q, want the %s tone %q", got, c.want, want)
+					}
+					return
+				}
+				t.Fatal("the blurred field's placeholder was not drawn")
 			})
 		}
 	}

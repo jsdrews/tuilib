@@ -12,7 +12,15 @@
 // so each menu keeps its own item type and its cursor stays an item index.
 package grouping
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/jsdrews/tuilib/pkg/surface"
+)
 
 // Other is the header over items that name no group.
 const Other = "other"
@@ -207,8 +215,10 @@ func (l Layout) Step(item, delta int, ok func(int) bool) int {
 }
 
 // JumpGroup moves to the first accepted item of the next group (dir > 0) or
-// the previous one (dir < 0), skipping groups with nothing accepted. Returns
-// item when there is no such group, or when the layout has no headers.
+// the previous one (dir < 0), skipping groups with nothing accepted and
+// wrapping past either end, so the jumps cycle the way tab cycles panes.
+// Returns item when no other group has anything accepted, or when the layout
+// has no headers.
 func (l Layout) JumpGroup(item, dir int, ok func(int) bool) int {
 	if !l.grouped || dir == 0 {
 		return item
@@ -219,38 +229,138 @@ func (l Layout) JumpGroup(item, dir int, ok func(int) bool) int {
 		}
 		return l.Last(ok)
 	}
+	// spans are the groups in display order, each a run of positions in order.
+	type span struct{ from, to int }
+	var spans []span
+	here := 0
+	for p := range l.order {
+		if p == 0 || l.groupAt(p) != l.groupAt(p-1) {
+			spans = append(spans, span{p, p})
+		}
+		spans[len(spans)-1].to = p + 1
+		if p == l.pos[item] {
+			here = len(spans) - 1
+		}
+	}
 	step := 1
 	if dir < 0 {
 		step = -1
 	}
-	here := l.rows[l.rowOf[item]].Group
-	for r := l.rowOf[item] + step; r >= 0 && r < len(l.rows); r += step {
-		h := l.rows[r]
-		if !h.Header || h.Group == here {
-			continue
-		}
-		for j := r + 1; j < len(l.rows) && !l.rows[j].Header; j++ {
-			if it := l.rows[j].Item; ok == nil || ok(it) {
-				return it
+	n := len(spans)
+	for k := 1; k < n; k++ {
+		sp := spans[((here+k*step)%n+n)%n]
+		for p := sp.from; p < sp.to; p++ {
+			if ok == nil || ok(l.order[p]) {
+				return l.order[p]
 			}
 		}
 	}
 	return item
 }
 
-// Styles is how a menu draws its headers.
+// groupAt is the group of the item at position p in display order.
+func (l Layout) groupAt(p int) string { return l.rows[l.rowOf[l.order[p]]].Group }
+
+// Styles is how a menu draws its headers: as a thin section divider with the
+// group's name set into it, the way a pane sets its title into its border.
+//
+//	── read ──────────────
+//
+// On a card there is no border for the rule to meet, and a rule stopping at
+// the fill reads as a stray line rather than a title set into an edge, so an
+// Inset header puts the name in the label column and trails the rule after it:
+//
+//	  read ────────────
+//	▸ refresh
 type Styles struct {
-	// Header styles every header.
+	// Header styles every header's name.
 	Header lipgloss.Style
-	// Group, when set, styles each header by its group — a write group in a
-	// warning colour, say — in place of Header.
+	// Group, when set, styles each header's name by its group — a write group
+	// in a warning colour, say — in place of Header.
 	Group func(group string) lipgloss.Style
+	// Rule styles the divider either side of the name.
+	Rule lipgloss.Style
+	// Glyph is the divider's glyph, one cell wide. Empty draws "─".
+	Glyph string
+	// Inset draws the card form. Set it from Joins.
+	Inset bool
 }
 
-// For is the style of group's header.
+// Joins reports whether a divider drawn edge to edge would meet a line at
+// each end: the content's nearest edge draws box-drawing lines on both sides,
+// as a line border does. A card's edge is fill, a bar or a shadow.
+func Joins(s surface.Surface) bool {
+	for i := len(s.Rings) - 1; i >= 0; i-- {
+		r := s.Rings[i]
+		if r.Left.Drawn() || r.Right.Drawn() {
+			return boxLine(r.Left.Glyph) && boxLine(r.Right.Glyph)
+		}
+	}
+	return false
+}
+
+func boxLine(g string) bool {
+	r, _ := utf8.DecodeRuneInString(g)
+	return r >= 0x2500 && r <= 0x257f
+}
+
+// For is the style of group's header name.
 func (s Styles) For(group string) lipgloss.Style {
 	if s.Group != nil {
 		return s.Group(group)
 	}
 	return s.Header
+}
+
+// lead is how many glyphs come before the name, which lines the name up just
+// past the rows' cursor column.
+const lead = 2
+
+// Width is the narrowest a header for group draws in full: the name with a
+// space and a lead's worth of rule on each side.
+func Width(group string) int { return ansi.StringWidth(group) + 2*(lead+1) }
+
+// Render draws group's header w cells wide: the rule, the name, and the rule
+// again to the edge. A name with no room is truncated before the rule is.
+func (s Styles) Render(group string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if s.Inset {
+		return s.inset(group, w)
+	}
+	room := w - lead - 2
+	if room <= 0 {
+		return s.rule(w)
+	}
+	name := group
+	if ansi.StringWidth(name) > room {
+		name = ansi.Truncate(name, room, "…")
+	}
+	return s.rule(lead) + " " + s.For(group).Render(name) + " " + s.rule(room-ansi.StringWidth(name))
+}
+
+// inset is the card form: the name where the rows' labels start, then the
+// rule to the edge.
+func (s Styles) inset(group string, w int) string {
+	room := w - lead - 1
+	if room <= 0 {
+		return strings.Repeat(" ", w)
+	}
+	name := group
+	if ansi.StringWidth(name) > room {
+		name = ansi.Truncate(name, room, "…")
+	}
+	return strings.Repeat(" ", lead) + s.For(group).Render(name) + " " + s.rule(room-ansi.StringWidth(name))
+}
+
+func (s Styles) rule(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	g := s.Glyph
+	if g == "" {
+		g = "─"
+	}
+	return s.Rule.Render(strings.Repeat(g, n))
 }

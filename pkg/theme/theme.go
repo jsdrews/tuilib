@@ -189,6 +189,35 @@ func (t Theme) selection(legacy lipgloss.Style) (focused, blurred lipgloss.Style
 // as empty strings.
 func (t Theme) glyphs() glyph.Set { return t.Glyphs.Resolve() }
 
+// buttons is how toggles, modals and a form's submit draw their buttons. On
+// a filled surface they are chips — the Button tone, and Accent for the
+// chosen one — so a button reads as a thing to press on a card rather than
+// as bracketed text. Under a line border they stay bracketed text, as they
+// always were.
+func (t Theme) buttons() (chips bool, idle, chosen lipgloss.Style) {
+	chosen = lipgloss.NewStyle().Bold(true).Foreground(t.Accent)
+	idle = lipgloss.NewStyle().Foreground(t.Muted)
+	if !t.Surface.Surface().Filled() {
+		return false, idle, chosen
+	}
+	idle = lipgloss.NewStyle().Foreground(t.BarFG)
+	if c := t.Surface.Colour(surface.Button, false); c != nil {
+		idle = idle.Background(c)
+	}
+	return true, idle, lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent)
+}
+
+// placeholder is the hint in an empty text field. On a filled surface it
+// sits on a field card, so it takes Muted, which is held to a contrast floor
+// against those cards; Subtle is chrome, kept clear of the cards but not
+// meant to be read on them.
+func (t Theme) placeholder() lipgloss.Style {
+	if t.Surface.Surface().Filled() {
+		return lipgloss.NewStyle().Foreground(t.Muted)
+	}
+	return lipgloss.NewStyle().Foreground(t.Subtle)
+}
+
 // cellColor renders text in c with a foreground-only escape, so a table's
 // selected-row background passes through it unbroken (rule 19).
 //
@@ -330,7 +359,7 @@ func (t Theme) Filter() filter.Options {
 	o := filter.Options{
 		PromptStyle:      lipgloss.NewStyle().Bold(true).Foreground(t.KeyFG),
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
-		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
+		PlaceholderStyle: t.placeholder(),
 		CursorColor:      t.Accent,
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
@@ -376,7 +405,7 @@ func (t Theme) List() list.Options {
 func (t Theme) Input() input.Options {
 	o := input.Options{
 		TextStyle:        lipgloss.NewStyle().Foreground(t.BarFG),
-		PlaceholderStyle: lipgloss.NewStyle().Foreground(t.Subtle),
+		PlaceholderStyle: t.placeholder(),
 		CursorColor:      t.Accent,
 		ActiveColor:      t.BorderActive,
 		InactiveColor:    t.BorderInactive,
@@ -393,9 +422,11 @@ func (t Theme) Input() input.Options {
 // Accent (bold), unselected in Muted, border colors matching pane. Set
 // Width, Title (the field's question), and Initial as needed.
 func (t Theme) Toggle() toggle.Options {
+	chips, idle, chosen := t.buttons()
 	o := toggle.Options{
-		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
+		SelectedStyle:   chosen,
+		UnselectedStyle: idle,
+		Chips:           chips,
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
 		ActiveBorder:    t.shapeActive(),
@@ -412,9 +443,11 @@ func (t Theme) Toggle() toggle.Options {
 // border colors matching pane. Set Width, Height, Title, Message,
 // Confirm/Cancel labels, and Initial as needed.
 func (t Theme) Confirm() confirm.Options {
+	chips, idle, chosen := t.buttons()
 	o := confirm.Options{
-		SelectedStyle:   lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-		UnselectedStyle: lipgloss.NewStyle().Foreground(t.Muted),
+		SelectedStyle:   chosen,
+		UnselectedStyle: idle,
+		Chips:           chips,
 		MessageStyle:    lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:     t.BorderActive,
 		InactiveColor:   t.BorderInactive,
@@ -434,8 +467,10 @@ func (t Theme) Confirm() confirm.Options {
 // t.ErrorBG) after this builder. Set Width, Height, Title, Message, and
 // OK label as needed before passing to alert.New.
 func (t Theme) Alert() alert.Options {
+	chips, _, chosen := t.buttons()
 	o := alert.Options{
-		OKStyle:        lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
+		OKStyle:        chosen,
+		Chips:          chips,
 		MessageStyle:   lipgloss.NewStyle().Foreground(t.BarFG),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
@@ -449,14 +484,15 @@ func (t Theme) Alert() alert.Options {
 }
 
 // Menu returns menu.Options pre-filled from the theme — labels in the body's
-// own colour, descriptions dimmed in Muted, group headers bold in Current (as
-// the action menu draws them), the cursor row bold in Accent, border colours
+// own colour, descriptions dimmed in Muted, group headers as dividers (as the
+// action menu draws them), the cursor row bold in Accent, border colours
 // matching pane, and the embedded filter using theme.Filter(). Set Title,
 // Items and Filterable before passing to menu.New.
 func (t Theme) Menu() menu.Options {
 	o := menu.Options{
 		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
-		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
+		HeaderStyle:    lipgloss.NewStyle().Foreground(t.Muted),
+		RuleStyle:      lipgloss.NewStyle().Foreground(t.Subtle),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
@@ -472,23 +508,26 @@ func (t Theme) Menu() menu.Options {
 	return o
 }
 
-// Actions returns action.Options pre-filled from the theme — the label in
-// BarFG, the gloss and the key column in Muted, the cursor row bold in Accent,
-// and disabled rows in Subtle so an unavailable verb reads as present but out
-// of reach rather than as ordinary text. Group headers are bold in Current,
-// the table header's colour. Set Title and Set before passing to action.New.
+// Actions returns action.Options pre-filled from the theme with the palette
+// roles theme.Menu() uses — the label in the surface's own text colour, the
+// gloss in Muted, the key column in KeyFG, the cursor row bold in Accent (or
+// the surface's selection band on a filled surface), and disabled rows in
+// Subtle so an unavailable verb reads as present but out
+// of reach rather than as ordinary text. Group headers are thin dividers in
+// Subtle with the name set into them in Muted, quieter than the verbs under
+// them. Set Title and Set before passing to action.New.
 //
 // Unlike pkg/output, this follows rule 3's th.Component() convention: a Menu
 // is a plain component rather than a screen.Screen, so pkg/action never
 // imports pkg/screen and there is no import cycle to invert.
 func (t Theme) Actions() action.Options {
 	o := action.Options{
-		LabelStyle:     lipgloss.NewStyle().Foreground(t.BarFG),
 		DescStyle:      lipgloss.NewStyle().Foreground(t.Muted),
 		KeyStyle:       lipgloss.NewStyle().Foreground(t.KeyFG),
 		SelectedStyle:  lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 		DisabledStyle:  lipgloss.NewStyle().Foreground(t.Subtle),
-		HeaderStyle:    lipgloss.NewStyle().Bold(true).Foreground(t.Current),
+		HeaderStyle:    lipgloss.NewStyle().Foreground(t.Muted),
+		RuleStyle:      lipgloss.NewStyle().Foreground(t.Subtle),
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
 		ActiveBorder:   t.shapeOverlay(),
@@ -498,6 +537,7 @@ func (t Theme) Actions() action.Options {
 		Keys:           action.DefaultKeys(),
 	}
 	o.Surface = t.Surface.Overlay()
+	o.SelectedStyle, _ = t.selection(o.SelectedStyle)
 	return o
 }
 
@@ -676,6 +716,11 @@ func (t Theme) Inspector() inspector.Options {
 // over a screen. The border shape stays the surface's own, so Outlined is
 // unchanged. A form without a Title has no frame and ignores Surface.
 func (t Theme) Form() form.Options {
+	chips, idle, _ := t.buttons()
+	submit := lipgloss.NewStyle().Foreground(t.BarFG)
+	if chips {
+		submit = idle
+	}
 	o := form.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
@@ -685,7 +730,7 @@ func (t Theme) Form() form.Options {
 		SlotBrackets:   t.Surface.Surface().Brackets,
 		Styles: form.Styles{
 			Input:               lipgloss.NewStyle().Foreground(t.BarFG),
-			Placeholder:         lipgloss.NewStyle().Foreground(t.Subtle),
+			Placeholder:         t.placeholder(),
 			CursorColor:         t.Accent,
 			Selected:            lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
 			PaneActiveColor:     t.BorderActive,
@@ -694,8 +739,11 @@ func (t Theme) Form() form.Options {
 			FieldBorderInactive: t.shapeInactive(),
 			ErrorColor:          t.ErrorBG,
 			ErrorText:           lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
-			Submit:              lipgloss.NewStyle().Foreground(t.BarFG),
+			Submit:              submit,
 			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
+			Chips:               chips,
+			FieldSurface:        t.Surface.Field(),
+			FramedFieldSurface:  t.Surface.OverlayField(),
 		},
 	}
 	o.Surface = t.Surface.Overlay()

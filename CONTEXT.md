@@ -243,5 +243,5 @@ How the selected row looks while its pane doesn't have focus: `SelectionDim` on 
 _Avoid_: inactive selection, dim row
 
 **Custom surface**:
-A surface an app defines itself, as a struct literal, offered beside the built-ins and drawn by the same code. `examples/shell/surfaces` defines Ruled and Lipped this way.
+A surface an app defines itself, as a struct literal, offered beside the built-ins and drawn by the same code. `examples/appearance/look` defines Ruled and Lipped this way.
 _Avoid_: user surface, theme override

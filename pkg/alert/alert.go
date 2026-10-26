@@ -109,6 +109,10 @@ type Options struct {
 
 	// OKStyle styles the dismissal button. Brackets are part of the render.
 	OKStyle lipgloss.Style
+	// Chips draws each button as a filled chip, "  label  ", in place of
+	// "[ label ]": the same width, so nothing moves. The styles then carry a
+	// background. theme sets it on a filled surface.
+	Chips bool
 
 	// MessageStyle styles the body text. Defaults to no styling.
 	MessageStyle lipgloss.Style
@@ -148,6 +152,7 @@ type Model struct {
 	okLabel      string
 	message      string
 	okStyle      lipgloss.Style
+	chips        bool
 	messageStyle lipgloss.Style
 
 	pane pane.Pane
@@ -192,6 +197,7 @@ func New(opts Options) Model {
 		okLabel:      opts.OK,
 		message:      opts.Message,
 		okStyle:      opts.OKStyle,
+		chips:        opts.Chips,
 		messageStyle: opts.MessageStyle,
 		pane:         p,
 		autosize:     opts.Autosize,
@@ -414,11 +420,19 @@ func (m Model) onOK(x, y int) bool {
 	}
 	c := m.pane.ContentRect()
 	pos := (x - c.X) + m.pane.XOffset()
-	return pos >= 0 && pos < ansi.StringWidth("[ "+m.okLabel+" ]")
+	return pos >= 0 && pos < ansi.StringWidth(m.button())
+}
+
+// button is the OK label as drawn, and what hit-testing measures.
+func (m Model) button() string {
+	if m.chips {
+		return "  " + m.okLabel + "  "
+	}
+	return "[ " + m.okLabel + " ]"
 }
 
 func (m Model) renderInner() string {
-	ok := m.okStyle.Render("[ " + m.okLabel + " ]")
+	ok := m.okStyle.Render(m.button())
 
 	if !m.autosize {
 		body := m.messageStyle.Render(m.message)
@@ -484,7 +498,7 @@ func (m *Model) recomputeAutosize() {
 	}
 	m.wrapped = wrapLines(m.message, innerW)
 
-	btnW := ansi.StringWidth("[ " + m.okLabel + " ]")
+	btnW := ansi.StringWidth(m.button())
 	longest := btnW
 	for _, ln := range m.wrapped {
 		if w := ansi.StringWidth(ln); w > longest {

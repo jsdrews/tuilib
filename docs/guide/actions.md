@@ -151,4 +151,4 @@ Marks survive filtering: a user can mark a row, filter it out of view, and
 still act on it. That's why the menu puts the target ("3 items") on its own
 border. Marks come back across `SetTheme` with the rest of `State()`.
 
-See `examples/patterns/multiselect` and `examples/patterns/treeactions`.
+See `examples/workbench`.

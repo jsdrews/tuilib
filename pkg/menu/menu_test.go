@@ -11,6 +11,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 )
@@ -64,6 +65,8 @@ func keyMsg(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "tab":
 		return tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyMsg{Type: tea.KeyShiftTab}
 	}
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
@@ -92,7 +95,7 @@ func rows(m Model) []string {
 		ln = strings.TrimRight(strings.TrimSuffix(strings.TrimRight(ln, " "), "│"), " █░")
 		ln = strings.TrimPrefix(ln, "│")
 		// Blank rows below the items, and the filter row and its rule.
-		if strings.TrimSpace(ln) == "" || strings.HasPrefix(ln, "/") || strings.HasPrefix(ln, "─") {
+		if strings.Trim(ln, "─ ") == "" || strings.HasPrefix(ln, "/") {
 			continue
 		}
 		out = append(out, ln)
@@ -103,7 +106,7 @@ func rows(m Model) []string {
 func labels(m Model) []string {
 	var out []string
 	for _, r := range rows(m) {
-		l := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r), "▸"))
+		l := strings.TrimSpace(strings.TrimPrefix(strings.Trim(r, "─ "), "▸"))
 		out = append(out, strings.Split(l, "  ")[0]) // drop the description column
 	}
 	return out
@@ -126,10 +129,13 @@ func TestGroupsDrawHeadersWithOtherLast(t *testing.T) {
 	}
 }
 
-func TestHeadersOutdentFromItems(t *testing.T) {
+func TestHeadersAreDividersAcrossTheWidth(t *testing.T) {
 	rs := rows(testMenu(t, sections(), false))
-	if !strings.HasPrefix(rs[0], "database") {
-		t.Errorf("header %q is not flush left", rs[0])
+	if !strings.HasPrefix(rs[0], "── database ─") || !strings.HasSuffix(rs[0], "─") {
+		t.Errorf("header %q is not a divider with the name set into it", rs[0])
+	}
+	if ansi.StringWidth(rs[0]) <= ansi.StringWidth(rs[1]) {
+		t.Errorf("header %q stops short of the rows' width", rs[0])
 	}
 	if !strings.HasPrefix(rs[1], "▸ postgres") || !strings.HasPrefix(rs[2], "  mysql") {
 		t.Errorf("items not in the cursor column: %q / %q", rs[1], rs[2])
@@ -168,20 +174,35 @@ func TestCursorSkipsHeaders(t *testing.T) {
 	}
 }
 
-func TestBracketsJumpGroupsAndTabDoesNot(t *testing.T) {
+func TestTabAndBracketsJumpGroups(t *testing.T) {
 	m := testMenu(t, sections(), false)
+	for _, step := range []struct{ key, want string }{
+		{"]", "vpc"}, {"tab", "about"}, {"shift+tab", "vpc"}, {"[", "pg"},
+		// Past either end the jumps wrap, the way tab cycles panes.
+		{"[", "about"}, {"tab", "pg"}, {"shift+tab", "about"}, {"]", "pg"},
+	} {
+		m, _ = m.Update(keyMsg(step.key))
+		if id := selectedID(m); id != step.want {
+			t.Errorf("%s landed on %s, want %s", step.key, id, step.want)
+		}
+	}
+}
+
+func TestInAFocusGroupTabCyclesAndBracketsJump(t *testing.T) {
+	m := testMenu(t, sections(), false)
+	focus.NewGroup(&m)
+	m, _ = m.Update(keyMsg("tab"))
+	if id := selectedID(m); id != "pg" {
+		t.Errorf("tab moved the cursor to %s; in a focus.Group it cycles focus", id)
+	}
 	m, _ = m.Update(keyMsg("]"))
 	if id := selectedID(m); id != "vpc" {
 		t.Errorf("] landed on %s, want vpc", id)
 	}
-	m, _ = m.Update(keyMsg("tab"))
-	if id := selectedID(m); id != "vpc" {
-		t.Errorf("tab moved the cursor to %s; tab belongs to focus cycling", id)
-	}
-	m, _ = m.Update(keyMsg("]"))
-	m, _ = m.Update(keyMsg("["))
-	if id := selectedID(m); id != "vpc" {
-		t.Errorf("] then [ landed on %s, want vpc", id)
+	for _, b := range m.Help() {
+		if h := b.Help().Key; strings.Contains(h, "tab") {
+			t.Errorf("help advertises %q, which the focus.Group owns", h)
+		}
 	}
 }
 

@@ -88,11 +88,11 @@ and `filter` when those are active.
 | `SetLoading(b) tea.Cmd` | Loading spinner. |
 
 Pair with [`pkg/resume`](../reference/packages.md#resume) for pod-log
-reconnects at one-second resolution. See `examples/patterns/podlogs`.
+reconnects at one-second resolution. See `examples/remotedata/podlogs`.
 
 ## State
 
 `State()` / `Restore(st)` carry the lines and which are markers, follow,
 search, filter mode, current match, loading and scroll.
 
-See `examples/components/logview`.
+See the output pane in `examples/processes`.

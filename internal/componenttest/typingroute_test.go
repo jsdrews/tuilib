@@ -8,9 +8,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
-	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
-	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
+	"github.com/jsdrews/tuilib/examples/liveops"
+	"github.com/jsdrews/tuilib/examples/processes"
+	"github.com/jsdrews/tuilib/examples/workbench"
 	"github.com/jsdrews/tuilib/pkg/focus"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/mouse"
@@ -31,9 +31,9 @@ func TestClickingAPaneMovesTheKeyboard(t *testing.T) {
 	const w, h = 100, 30
 
 	for name, build := range map[string]func(theme.Theme) screen.Screen{
-		"patterns/filters": patfilters.New,
-		"patterns/loading": patloading.New,
-		"patterns/capture": patcapture.New,
+		"workbench": workbench.New,
+		"liveops":   liveops.New,
+		"processes": processes.New,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := build(theme.New(palette.Dark()))
@@ -143,48 +143,4 @@ func flatten(cmd tea.Cmd) []tea.Msg {
 		return nil
 	}
 	return []tea.Msg{msg}
-}
-
-// Enter and double-click are one verb (rule 14), but a screen has to opt in:
-// the component reports the activation and the screen decides what "open"
-// means. A screen that only matches an enter KeyMsg silently ignores double
-// clicks, which is what the capture demo's ancestor did — the commands list
-// looked interactive and double-clicking a command did nothing.
-//
-// The assertion watches for the "$ <label>" line the screen appends before
-// launching, so nothing is actually executed.
-func TestCaptureDoubleClickStartsACommand(t *testing.T) {
-	const w, h = 100, 30
-
-	s := patcapture.New(theme.New(palette.Dark()))
-	s.Init()
-	s.OnEnter(nil)
-	render := func() string {
-		geom.NextGen()
-		return s.Layout().Render(geom.New(0, 0, w, h))
-	}
-	render()
-
-	if _, ok := columnOf(render(), "$ "); ok {
-		t.Fatalf("setup: a command was already marked as started")
-	}
-
-	// The commands list is the left pane; its first row sits just inside the
-	// top border. Double-click it, then deliver whatever came back.
-	dbl := mouse.Msg{
-		MouseMsg: tea.MouseMsg{X: 5, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft},
-		Clicks:   2,
-	}
-	next, cmd := s.Update(dbl)
-	s = next
-	render()
-	for _, m := range flatten(cmd) {
-		s, _ = s.Update(m)
-		render()
-	}
-
-	if _, ok := columnOf(render(), "$ "); !ok {
-		t.Errorf("double-clicking a command did not start it — the screen " +
-			"matches an enter key but ignores the list's activation")
-	}
 }

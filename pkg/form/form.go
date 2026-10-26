@@ -90,6 +90,15 @@ type Styles struct {
 	FieldBorderActive   lipgloss.Border
 	FieldBorderInactive lipgloss.Border
 
+	// FieldSurface is the surface each field is drawn on in a bare form;
+	// FramedFieldSurface replaces it in a titled one, whose fields sit on the
+	// frame rather than the screen. theme.Form() sets them to the surface's
+	// field form and its field form on an overlay, so on a filled surface each
+	// field is a card a step lighter than what it sits on. Zero values leave
+	// each field's line border in place.
+	FieldSurface       surface.Resolved
+	FramedFieldSurface surface.Resolved
+
 	// ErrorColor tints a field's border while it is showing a validation
 	// error, regardless of focus — an invalid field is invalid whether or
 	// not you are standing on it.
@@ -100,6 +109,11 @@ type Styles struct {
 	// Submit and SubmitActive style the submit button (unfocused / focused).
 	Submit       lipgloss.Style
 	SubmitActive lipgloss.Style
+	// Chips draws the submit button and a Confirm field's sides as filled
+	// chips, "  label  ", in place of "[ label ]", the sides styled as the
+	// submit button. theme.Form() sets it on a filled surface, where the
+	// button styles carry a background.
+	Chips bool
 }
 
 // Options configures a new Form. All fields are optional except Fields.
@@ -181,6 +195,9 @@ func New(opts Options) Model {
 		spacing:    spacing,
 		styles:     opts.Styles,
 		framed:     opts.Title != "",
+	}
+	if m.framed && !m.styles.FramedFieldSurface.IsZero() {
+		m.styles.FieldSurface = m.styles.FramedFieldSurface
 	}
 	if m.framed {
 		m.frame = pane.New(pane.Options{
@@ -315,6 +332,9 @@ func (m Model) stack() string {
 	b.WriteString(sep)
 	y += m.spacing
 	label := "[ " + m.submitText + " ]"
+	if m.styles.Chips {
+		label = "  " + m.submitText + "  "
+	}
 	// The submit button is a focus stop like any field, so it needs a rect
 	// to be clickable. It isn't a Field — nothing else would record one.
 	*m.submitRect = geom.Rect{
@@ -622,11 +642,12 @@ func applyFieldError(p errorPresenter, st *Styles, err error) {
 }
 
 // borderPresenter is what a field's component must offer for the form to
-// shape its border. Kept separate from errorPresenter: shape is a standing
+// shape its edge. Kept separate from errorPresenter: shape is a standing
 // property of the theme, while the error colors are a transient complaint.
 type borderPresenter interface {
 	SetActiveBorder(lipgloss.Border)
 	SetInactiveBorder(lipgloss.Border)
+	SetSurface(surface.Resolved)
 }
 
 // applyFieldBorder pushes the theme's field shape onto one field's component.
@@ -641,6 +662,9 @@ func applyFieldBorder(p borderPresenter, st *Styles) {
 	}
 	if (st.FieldBorderInactive != lipgloss.Border{}) {
 		p.SetInactiveBorder(st.FieldBorderInactive)
+	}
+	if !st.FieldSurface.IsZero() {
+		p.SetSurface(st.FieldSurface)
 	}
 }
 
@@ -935,8 +959,15 @@ func (f *confirmField) SetStyles(s *Styles) {
 	if s == nil {
 		return
 	}
-	f.toggle.SetSelectedStyle(s.Selected)
-	f.toggle.SetUnselectedStyle(lipgloss.NewStyle())
+	// As chips the sides are buttons, styled as the submit button is.
+	f.toggle.SetChips(s.Chips)
+	if s.Chips {
+		f.toggle.SetSelectedStyle(s.SubmitActive)
+		f.toggle.SetUnselectedStyle(s.Submit)
+	} else {
+		f.toggle.SetSelectedStyle(s.Selected)
+		f.toggle.SetUnselectedStyle(lipgloss.NewStyle())
+	}
 	if s.PaneActiveColor != nil {
 		f.toggle.SetActiveColor(s.PaneActiveColor)
 	}

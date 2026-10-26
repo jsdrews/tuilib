@@ -79,6 +79,7 @@ and the shell does all of this.
 | `Confirm`, `Cancel` | `string` | `"Yes"`, `"No"` | Button labels. |
 | `Initial` | `bool` | `false` | `true` starts on the confirm button. |
 | `SelectedStyle`, `UnselectedStyle` | `lipgloss.Style` | theme | Buttons. |
+| `Chips` | `bool` | theme: on for filled surfaces | Draws the buttons as filled chips, `  Yes  `, in place of `[ Yes ]`; the same width, so hit-testing and layout don't change. On a filled surface the theme gives the idle chip the `Button` tone and the chosen one `Accent`. |
 | `MessageStyle` | `lipgloss.Style` | theme | Body text. |
 | `ActiveColor`, `InactiveColor`, `ActiveBorder`, `InactiveBorder`, `Glyphs`, `SlotBrackets` | | theme (thick border) | Pane chrome. |
 | `Width`, `Height` | `int` | | Outer size; `layout.Center` usually sets it. |
@@ -104,4 +105,4 @@ Mouse: clicking a button commits it.
 
 `confirm.ConfirmedMsg{}` and `confirm.CancelledMsg{}`.
 
-See `examples/patterns/modals`.
+See `examples/workbench`.

@@ -64,12 +64,18 @@ func (t *Table) Update(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	switch m := msg.(type) {
 	case table.ViewportChangedMsg:
+		if m.Token != t.FocusToken() {
+			break
+		}
 		if t.d.seek != nil {
 			cmds = append(cmds, t.d.seek.Viewport(m.FirstVisible, m.LastVisible))
 		} else {
 			cmds = append(cmds, t.d.anch.Viewport(m.FirstVisible, m.TotalRows-1-m.LastVisible))
 		}
 	case table.QueryChangedMsg:
+		if m.Token != t.FocusToken() {
+			break
+		}
 		cmds = append(cmds, t.d.setQuery(Filter{Raw: m.Raw, Terms: m.Terms, Sort: m.Sort, Desc: m.Desc}))
 	case source.RequestMsg:
 		if m.Source == t.d.id() {

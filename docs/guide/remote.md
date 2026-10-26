@@ -110,9 +110,9 @@ Shared tuning fields on both shapes: `Name` (labels the query history),
 context). `Seekable` also has `Prefetch` (extra pages beyond the screen);
 `Anchored` has `Anchor` (where the view starts, default newest).
 
-Worked examples: `examples/patterns/remote` (a seekable table),
-`examples/patterns/eventlog` (a seekable, growing eventlog over an AWX-shaped
-API), `examples/patterns/anchored` (an Elasticsearch-shaped anchored
+Worked examples: `examples/remotedata/records` (a seekable table),
+`examples/remotedata/events` (a seekable, growing eventlog over an AWX-shaped
+API), `examples/remotedata/anchored` (an Elasticsearch-shaped anchored
 eventlog).
 
 ## What the library does for a slow source

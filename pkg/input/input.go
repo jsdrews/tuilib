@@ -231,8 +231,18 @@ func (m Model) View() string { return m.pane.View() }
 // rect offers, since the pane is border + one content row + border.
 func (m *Model) SetRect(r geom.Rect) {
 	m.pane.SetRect(geom.Rect{X: r.X, Y: r.Y, W: r.W, H: 3, Gen: r.Gen})
-	m.input.Width = max(0, r.W-4)
+	// The edge's width depends on the surface, so measure what is inside it;
+	// textinput draws its cursor one cell past Width.
+	m.input.Width = max(0, m.pane.ContentRect().W-1)
 	m.pane.SetContent(m.input.View())
+}
+
+// SetSurface changes how the field's edge and body are drawn. pkg/form uses
+// it to put its fields on the theme's field surface, which a field built
+// without a theme has no other way to learn.
+func (m *Model) SetSurface(r surface.Resolved) {
+	m.pane.SetSurface(r)
+	m.SetRect(m.pane.Rect())
 }
 
 // Rect returns the rect the input was last placed at.

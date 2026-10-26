@@ -225,6 +225,10 @@ type ViewportChangedMsg struct {
 	// TotalRows is len(visible) at the time of emission — the size of the
 	// filtered/sorted set, not the raw row count.
 	TotalRows int
+	// Token names the view that sent it, so a screen holding two remote
+	// views — or two tab bodies each holding one — routes each message to
+	// its own source. pkg/remote checks it.
+	Token focus.Token
 }
 
 // FilterMode selects who applies the filter the user types.
@@ -278,6 +282,11 @@ type QueryChangedMsg struct {
 	// Raw is the committed filter text exactly as typed. Empty when the
 	// filter is empty or FilterMode is FilterLocal.
 	Raw string
+	// Token names the view that sent it, so a screen holding two remote
+	// views — or two tab bodies each holding one — routes each message to
+	// its own source. pkg/remote checks it.
+	Token focus.Token
+
 	// Terms is Raw parsed against the column titles. Scoped terms carry
 	// the resolved Title, so building "?region=europe" needs no lookup.
 	// Nil when Raw is empty.
@@ -1885,6 +1894,7 @@ func (m *Model) flushViewport() tea.Cmd {
 		FirstVisible: m.vpFirst,
 		LastVisible:  m.vpLast,
 		TotalRows:    m.vpTotal,
+		Token:        m.token,
 	}
 	return func() tea.Msg { return msg }
 }
@@ -2002,7 +2012,7 @@ func (m *Model) flushQuery() tea.Cmd {
 // QueryChangedMsg that follows.
 func (m Model) Query() QueryChangedMsg {
 	raw, sortCol, sortDesc := m.currentQuery()
-	out := QueryChangedMsg{Raw: raw, SortColumn: -1}
+	out := QueryChangedMsg{Raw: raw, SortColumn: -1, Token: m.token}
 	if raw != "" {
 		out.Terms = query.Parse(raw, m.columnTitles())
 	}

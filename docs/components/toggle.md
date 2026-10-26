@@ -30,6 +30,7 @@ send := s.notify.Value()
 | `Initial` | `bool` | `false` | Starting value. |
 | `YesLabel`, `NoLabel` | `string` | `"yes"`, `"no"` | Button labels. |
 | `SelectedStyle`, `UnselectedStyle` | `lipgloss.Style` | theme | The chosen and unchosen sides. |
+| `Chips` | `bool` | theme: on for filled surfaces | Draws the sides as filled chips (`  yes  `) in place of `[ yes ]`; the same width. `SetChips` switches it in place. |
 | `ActiveColor`, `InactiveColor`, `ActiveBorder`, `InactiveBorder`, `Glyphs`, `SlotBrackets` | | theme | Pane chrome. |
 | `Width` | `int` | | Set by the layout engine. Height is always 3. |
 

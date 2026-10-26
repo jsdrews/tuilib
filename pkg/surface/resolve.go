@@ -117,6 +117,12 @@ func (r Resolved) Field() Resolved {
 	return Resolve(r.Surface().fieldForm(), r.c, r.caps)
 }
 
+// OverlayField is the drawn surface's field form on its overlay form — the
+// fields of a modal form — resolved against the same colours and capabilities.
+func (r Resolved) OverlayField() Resolved {
+	return Resolve(r.Surface().overlayFieldForm(), r.c, r.caps)
+}
+
 // With resolves s against the same colours and capabilities as r — how a
 // screen pins one component to a different surface from the app's.
 func (r Resolved) With(s Surface) Resolved { return Resolve(s, r.c, r.caps) }

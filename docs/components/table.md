@@ -237,5 +237,5 @@ Same surface as [List](list.md#multi-select): `Selection()`,
 cursor, scroll, filter, sort (committed and staged), marks, activity, the
 answered query, failure, completion values and loading.
 
-See `examples/components/table`, `examples/patterns/remote`,
-`examples/patterns/multiselect` and `examples/components/metrics`.
+See `examples/workbench`, `examples/remotedata/records` and
+`examples/liveops`.

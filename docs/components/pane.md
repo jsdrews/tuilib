@@ -115,5 +115,5 @@ bottom-right slot shows the scroll percentage unless something overrides it.
 
 - Don't pre-wrap content to avoid terminal wrap glitches. The pane truncates
   to its width and offers horizontal scroll. Wrap only genuine prose.
-- See `examples/components/pane` for border styles, title positions and slot
+- See `examples/appearance/pane` for border styles, title positions and slot
   brackets side by side.

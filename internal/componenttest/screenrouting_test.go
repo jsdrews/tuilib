@@ -5,11 +5,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
-	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
-	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
-	patmouse "github.com/jsdrews/tuilib/examples/patterns/mouse"
-	shelloutput "github.com/jsdrews/tuilib/examples/shell/output"
+	"github.com/jsdrews/tuilib/examples/liveops"
+	"github.com/jsdrews/tuilib/examples/processes"
+	"github.com/jsdrews/tuilib/examples/workbench"
 	"github.com/jsdrews/tuilib/pkg/geom"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -33,11 +31,9 @@ func TestScreensFanMouseOutToEveryComponent(t *testing.T) {
 	)
 
 	screens := map[string]func(theme.Theme) screen.Screen{
-		"patterns/mouse":   patmouse.New,
-		"patterns/filters": patfilters.New,
-		"patterns/loading": patloading.New,
-		"patterns/capture": patcapture.New,
-		"shell/output":     shelloutput.New,
+		"workbench": workbench.New,
+		"liveops":   liveops.New,
+		"processes": processes.New,
 	}
 
 	for name, build := range screens {
@@ -81,13 +77,9 @@ func TestClickOnUnfocusedPaneIsDelivered(t *testing.T) {
 	const w, h = 100, 30
 
 	for name, build := range map[string]func(theme.Theme) screen.Screen{
-		"patterns/filters": patfilters.New,
-		"patterns/loading": patloading.New,
-		"patterns/capture": patcapture.New,
-		// app/output is deliberately absent: its right-hand side is a
-		// read-only pane.Pane, so there is no second focusable component
-		// for a click to be misrouted away from. It is covered by the
-		// fan-out test above, which is the general assertion.
+		"workbench": workbench.New,
+		"liveops":   liveops.New,
+		"processes": processes.New,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := build(theme.New(palette.Dark()))

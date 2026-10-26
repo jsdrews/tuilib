@@ -71,4 +71,4 @@ Mouse: a click focuses the field.
 | `IsCapturingKeys()` | True while focused. |
 | `State()`, `Restore(st)` | Carry the text across a rebuild. |
 
-See `examples/patterns/focus`.
+See `examples/appearance/form`.

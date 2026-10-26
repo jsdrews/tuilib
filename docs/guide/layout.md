@@ -96,4 +96,4 @@ out := root.Render(geom.New(0, 0, termW, termH))
 A nested root (as `pkg/tab` does for its active body) must not call
 `NextGen`; it renders inside the frame it was given.
 
-See `examples/shell/layouts` for every primitive on its own sub-screen.
+See `examples/appearance/layouts` for every primitive on its own sub-screen.

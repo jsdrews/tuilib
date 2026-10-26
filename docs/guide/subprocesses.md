@@ -106,5 +106,5 @@ directly. Cap the buffer: `logview` defaults to 10,000 lines.
 `DisableSuspend`). It's suppressed while a screen is capturing keys, and
 ignored on Windows.
 
-See `examples/patterns/runner`, `examples/patterns/capture` and
-`examples/shell/output`.
+See `examples/processes`, which runs all three: a capture, a terminal handoff,
+and the console.

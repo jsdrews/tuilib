@@ -47,10 +47,8 @@ type Keys struct {
 	// PrevGroup and NextGroup jump to the first enabled action of the
 	// previous or next group. They do nothing in a menu without headers.
 	//
-	// tab is free here, where it is reserved for focus cycling everywhere
-	// else: the menu is modal, so there are no panes behind it to cycle
-	// while it is up. pkg/menu, which draws the same groups beside other
-	// components, uses [ and ] instead.
+	// tab is free here: the menu is modal, so there are no panes behind it to
+	// cycle while it is up. [ and ] do the same, as they do in pkg/menu.
 	PrevGroup, NextGroup key.Binding
 	Choose               key.Binding
 	Cancel               key.Binding
@@ -65,8 +63,8 @@ func DefaultKeys() Keys {
 		Bottom:    key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 		HalfUp:    key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("^u", "½ up")),
 		HalfDown:  key.NewBinding(key.WithKeys("ctrl+d"), key.WithHelp("^d", "½ down")),
-		PrevGroup: key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("⇧tab", "prev group")),
-		NextGroup: key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next group")),
+		PrevGroup: key.NewBinding(key.WithKeys("shift+tab", "["), key.WithHelp("⇧tab/[", "prev group")),
+		NextGroup: key.NewBinding(key.WithKeys("tab", "]"), key.WithHelp("tab/]", "next group")),
 		Choose:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("⏎", "run")),
 		Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 	}
@@ -109,12 +107,15 @@ type Options struct {
 	SelectedStyle lipgloss.Style
 	DisabledStyle lipgloss.Style
 
-	// HeaderStyle styles the group headers, drawn once the Set's actions name
-	// two or more groups (Action.Group). GroupStyle, when set, styles each
-	// header by its group instead — a write group in a warning colour, say.
-	// Only headers are styled this way; the rows under them are not.
+	// Group headers are drawn once the Set's actions name two or more groups
+	// (Action.Group), each a thin divider with the group's name set into it.
+	// HeaderStyle styles the name; GroupStyle, when set, styles it by its
+	// group instead — a write group in a warning colour, say. Only headers
+	// are styled this way; the rows under them are not. RuleStyle colours
+	// the divider, drawn in the surface's divider glyph.
 	HeaderStyle lipgloss.Style
 	GroupStyle  func(group string) lipgloss.Style
+	RuleStyle   lipgloss.Style
 
 	ActiveColor    lipgloss.TerminalColor
 	InactiveColor  lipgloss.TerminalColor
@@ -218,7 +219,13 @@ func New(opts Options) Menu {
 		keyStyle:      opts.KeyStyle,
 		selectedStyle: opts.SelectedStyle,
 		disabledStyle: opts.DisabledStyle,
-		headers:       grouping.Styles{Header: opts.HeaderStyle, Group: opts.GroupStyle},
+		headers: grouping.Styles{
+			Header: opts.HeaderStyle,
+			Group:  opts.GroupStyle,
+			Rule:   opts.RuleStyle,
+			Glyph:  opts.Surface.Surface().Divider.Glyph,
+			Inset:  !grouping.Joins(opts.Surface.Surface()),
+		},
 	}
 	m.layout = layoutOf(m.set)
 	m.pane.SetTitle(m.paneTitle())
@@ -354,7 +361,7 @@ func (m *Menu) measure() {
 	m.labelW, m.descW, m.keyW, m.headerW = 0, 0, 0, 0
 	for _, r := range m.layout.Rows() {
 		if r.Header {
-			m.headerW = max(m.headerW, ansi.StringWidth(r.Group))
+			m.headerW = max(m.headerW, grouping.Width(r.Group))
 		}
 	}
 	for i := range m.set.Actions {
@@ -528,20 +535,12 @@ func (m Menu) renderRows() string {
 	rows := make([]string, 0, m.layout.Len())
 	for _, r := range m.layout.Rows() {
 		if r.Header {
-			rows = append(rows, m.renderHeader(r.Group, innerW))
+			rows = append(rows, m.headers.Render(r.Group, innerW))
 			continue
 		}
 		rows = append(rows, m.renderRow(r.Item, innerW))
 	}
 	return strings.Join(rows, "\n")
-}
-
-// renderHeader draws a group's name flush left, outdented from the rows'
-// cursor column so it reads as a heading rather than one more verb.
-func (m Menu) renderHeader(group string, innerW int) string {
-	text := fit(group, innerW)
-	name := strings.TrimRight(text, " ")
-	return m.headers.For(group).Render(name) + text[len(name):]
 }
 
 // seg is one styled run of a row. Rows are assembled as segments so the

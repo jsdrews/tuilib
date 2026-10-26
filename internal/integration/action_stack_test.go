@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 
 	"github.com/jsdrews/tuilib/demoapi"
-	exactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
+	"github.com/jsdrews/tuilib/examples/liveops"
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/glyph"
 	"github.com/jsdrews/tuilib/pkg/palette"
@@ -30,8 +30,9 @@ import (
 // verb was about saying so throughout.
 //
 // This is the test that answers "can we exercise actions and activity status
-// against demoapi", and the reason it uses examples/patterns/activity rather
-// than a purpose-built screen is that the example is the thing people copy.
+// against demoapi", and the reason it uses examples/liveops rather than a
+// purpose-built screen is that the example is the thing people copy. Its
+// applications pane opens focused, so the keys below reach it.
 
 // busyLabel is what a working row says. It is the server's vocabulary — Argo's
 // operationState.phase — and the example's sync verbs claim with the same
@@ -55,7 +56,7 @@ func newActionApp(t *testing.T) (*harness, *httptest.Server) {
 	t.Setenv(demoapi.EnvBase, srv.URL)
 
 	m := app.New(app.Options{
-		Root:       exactivity.New(theme.New(palette.Dark())),
+		Root:       liveops.New(theme.New(palette.Dark())),
 		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Mouse:      app.MouseClick,
@@ -319,7 +320,7 @@ func TestOneRunSpinsEveryMarkedRow(t *testing.T) {
 	h.key("x")
 	h.key("j")
 	h.key("x")
-	if got := strings.Count(h.render(), glyph.Default().Mark); got < 2 {
+	if got := markedApps(h.render()); got < 2 {
 		t.Fatalf("marked %d rows, want 2:\n%s", got, h.render())
 	}
 
@@ -337,6 +338,24 @@ func TestOneRunSpinsEveryMarkedRow(t *testing.T) {
 	}) {
 		t.Errorf("the rows never settled:\n%s", h.render())
 	}
+}
+
+// markedApps counts application rows drawn with a mark. The workloads pane's
+// pod badges use the same glyph, on the same lines, so a mark counts only when
+// it sits left of an application's sync status.
+func markedApps(view string) int {
+	n := 0
+	for _, line := range strings.Split(view, "\n") {
+		mark := strings.Index(line, glyph.Default().Mark)
+		at := strings.Index(line, demoapi.SyncSynced)
+		if i := strings.Index(line, demoapi.SyncOutOfSync); i >= 0 && (at < 0 || i < at) {
+			at = i
+		}
+		if mark >= 0 && at > mark {
+			n++
+		}
+	}
+	return n
 }
 
 // countIndicators counts rows currently showing an activity label.

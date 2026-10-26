@@ -147,8 +147,8 @@ type Options struct {
 	// therefore ignored — use ActionGroupStyle for per-group headers.
 	Actions action.Options
 
-	// ActionGroupStyle styles the action menu's group headers by group, in
-	// place of the theme's HeaderStyle. It is handed the current theme and
+	// ActionGroupStyle styles the name in each of the action menu's group
+	// header dividers by group, in place of the theme's HeaderStyle. It is handed the current theme and
 	// called again on every palette or surface swap, so a header drawn in
 	// t.Warning follows the palette:
 	//

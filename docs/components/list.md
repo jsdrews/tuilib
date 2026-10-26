@@ -142,4 +142,4 @@ See [two regions](../guide/input.md#filterable-components-have-two-regions).
 `State()` / `Restore(st)` carry items (keyed or not), cursor, filter, marks,
 activity, loading and scroll across a rebuild.
 
-See `examples/components/list` and `examples/shell/stack`.
+See `examples/workbench` and `examples/navigation/stack`.

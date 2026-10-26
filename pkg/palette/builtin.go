@@ -160,7 +160,7 @@ func Gruvbox() Palette {
 }
 
 // All returns every built-in palette, in display order. Handy for pickers
-// and examples/shell/themes.
+// and examples/appearance/look.
 func All() []Palette {
 	return []Palette{
 		// core (this file)

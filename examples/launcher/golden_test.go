@@ -13,7 +13,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/jsdrews/tuilib/internal/cmdtest"
 	"github.com/jsdrews/tuilib/pkg/app"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
 )
@@ -51,16 +53,17 @@ func TestOutlinedFramesAreByteIdentical(t *testing.T) {
 // over the screen by layout.ZStack, so these frames are what hold Outlined
 // modals byte-identical when compositing changes.
 func TestOutlinedOverlayFramesAreByteIdentical(t *testing.T) {
-	down, enter := tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyEnter}
+	back, enter := tea.KeyMsg{Type: tea.KeyShiftTab}, tea.KeyMsg{Type: tea.KeyEnter}
 	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 	for _, sc := range []struct {
 		name, dir string
 		keys      []tea.KeyMsg
 	}{
-		{"help", "components/list", []tea.KeyMsg{runes("?")}},
-		{"actions", "patterns/actions", []tea.KeyMsg{runes("a")}},
-		{"alert", "patterns/modals", []tea.KeyMsg{down, down, enter}},
-		{"confirm", "patterns/modals", []tea.KeyMsg{down, down, down, down, enter}},
+		{"help", "workbench", []tea.KeyMsg{runes("?")}},
+		{"actions", "workbench", []tea.KeyMsg{runes("a")}},
+		// shift+tab wraps focus to the operations menu.
+		{"alert", "workbench", []tea.KeyMsg{back, runes("G"), enter}},
+		{"confirm", "workbench", []tea.KeyMsg{back, runes("]"), enter}},
 	} {
 		t.Run(sc.name, func(t *testing.T) {
 			e, ok := entryIn(sc.dir)
@@ -68,6 +71,30 @@ func TestOutlinedOverlayFramesAreByteIdentical(t *testing.T) {
 				t.Fatalf("no launcher entry in %s", sc.dir)
 			}
 			compareGolden(t, filepath.Join("testdata", "outlined", "overlay_"+sc.name+".golden"), outlinedFrame(e, sc.keys...))
+		})
+	}
+}
+
+// TestOutlinedTabFramesAreByteIdentical holds each tab of a tabbed showcase
+// to its first frame, as every entry's first frame is held above.
+func TestOutlinedTabFramesAreByteIdentical(t *testing.T) {
+	runes := func(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
+	for _, sc := range []struct{ name, dir, key string }{
+		{"events", "remotedata", "2"},
+		{"finished", "remotedata", "3"},
+		{"anchored", "remotedata", "4"},
+		{"podlogs", "remotedata", "5"},
+		{"form", "appearance", "2"},
+		{"text", "appearance", "3"},
+		{"panes", "appearance", "4"},
+		{"layouts", "appearance", "5"},
+	} {
+		t.Run(sc.dir+"/"+sc.name, func(t *testing.T) {
+			e, ok := entryIn(sc.dir)
+			if !ok {
+				t.Fatalf("no launcher entry in %s", sc.dir)
+			}
+			compareGolden(t, filepath.Join("testdata", "outlined", sc.dir+"_"+sc.name+".golden"), outlinedFrame(e, runes(sc.key)))
 		})
 	}
 }
@@ -117,7 +144,16 @@ func outlinedFrame(e entry, keys ...tea.KeyMsg) string {
 	m.Init()
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
 	for _, k := range keys {
-		next, _ = next.Update(k)
+		var cmd tea.Cmd
+		next, cmd = next.Update(k)
+		// A menu reports a choice by command. Deliver that and nothing else:
+		// the rest are timers, subprocesses and fetches whose timing would
+		// make the frame nondeterministic.
+		for _, msg := range cmdtest.Run(cmd) {
+			if _, chosen := msg.(menu.ChosenMsg); chosen {
+				next, _ = next.Update(msg)
+			}
+		}
 	}
 	return next.View()
 }

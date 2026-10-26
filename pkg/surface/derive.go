@@ -51,21 +51,25 @@ func (c Colours) Profile() termenv.Profile { return c.profile }
 
 // Derivation constants. They are starting points to tune by eye, not spec.
 const (
-	liftCard         = 0.035
-	liftCardRaised   = 0.065
-	liftBand         = 0.10
-	liftOverlay      = 0.17
-	liftSelectionDim = 0.12
-	minSpan          = 0.55 // the least background-to-text lightness span lifts are measured on
-	liftSelectionAlt = 0.25 // Selection, when EdgeActive has no RGB
-	mixSelection     = 0.45 // light palettes: a pale tint of the accent
-	mixSelectionDark = 0.22 // dark palettes: a state layer, not a block
-	lightCard        = 0.70
-	lightCardRaised  = 0.90
-	darkenBandLight  = 0.06
-	lightScreenDrop  = 0.05 // how far a light palette's screen sits below its background
-	shadowDark       = 0.60
-	shadowLight      = 0.22
+	liftCard          = 0.035
+	liftCardRaised    = 0.065
+	liftBand          = 0.10
+	liftOverlay       = 0.17
+	liftOverlayCard   = 0.23
+	liftOverlayRaise  = 0.28
+	liftButton        = 0.38
+	liftSelectionDim  = 0.12
+	minSpan           = 0.55 // the least background-to-text lightness span lifts are measured on
+	liftSelectionAlt  = 0.25 // Selection, when EdgeActive has no RGB
+	mixSelection      = 0.45 // light palettes: a pale tint of the accent
+	mixSelectionDark  = 0.22 // dark palettes: a state layer, not a block
+	lightCard         = 0.70
+	lightCardRaised   = 0.90
+	darkenBandLight   = 0.06
+	darkenButtonLight = 0.10
+	lightScreenDrop   = 0.05 // how far a light palette's screen sits below its background
+	shadowDark        = 0.60
+	shadowLight       = 0.22
 
 	// floorL is the least OKLab lightness distance a derived tone keeps from
 	// the role beneath it.
@@ -197,6 +201,7 @@ func Legible(fg, bg lipgloss.TerminalColor) bool {
 type floorPair struct {
 	derived, base Role
 	darkFloor     float64
+
 	// elevation marks a tone that sits above its base on a dark palette —
 	// a card above the screen, a focused card above a card. The floor only
 	// ever pushes it up: pushed back down, a focused card can land on the
@@ -214,6 +219,9 @@ var floorPairs = []floorPair{
 	{derived: Band, base: Card, elevation: true},
 	{derived: Selection, base: Card},
 	{derived: Overlay, base: CardRaised, darkFloor: 0.05, elevation: true},
+	{derived: OverlayCard, base: Overlay, elevation: true},
+	{derived: OverlayCardRaised, base: OverlayCard, elevation: true},
+	{derived: Button, base: OverlayCardRaised, elevation: true},
 }
 
 // floor is the distance p keeps on a palette that is dark or not.
@@ -353,6 +361,9 @@ func deriveTones(bg, fg colorful.Color, edgeActive lipgloss.TerminalColor) map[R
 		t[CardRaised] = up(liftCardRaised)
 		t[Band] = up(liftBand)
 		t[Overlay] = up(liftOverlay)
+		t[OverlayCard] = up(liftOverlayCard)
+		t[OverlayCardRaised] = up(liftOverlayRaise)
+		t[Button] = up(liftButton)
 		t[Shadow] = mix(bg, black, shadowDark)
 	} else {
 		// The screen sits a step below the palette's background, in its hue,
@@ -364,6 +375,12 @@ func deriveTones(bg, fg colorful.Color, edgeActive lipgloss.TerminalColor) map[R
 		t[CardRaised] = mix(bg, white, lightCardRaised)
 		t[Band] = mix(t[Card], black, darkenBandLight)
 		t[Overlay] = white
+		// Nothing is lighter than a white overlay, so a card on it steps back
+		// to the card tones instead: a field set into the sheet. A button
+		// cannot rise either: it is a grey chip.
+		t[OverlayCard] = t[Card]
+		t[OverlayCardRaised] = t[CardRaised]
+		t[Button] = mix(t[Card], black, darkenButtonLight)
 		t[Shadow] = mix(t[Screen], black, shadowLight)
 	}
 	if ea, ok := rgbOf(edgeActive); ok {

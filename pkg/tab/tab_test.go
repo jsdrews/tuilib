@@ -189,20 +189,24 @@ func TestIsCapturingKeysFollowsActiveBody(t *testing.T) {
 	}
 }
 
-func TestSwitchKeysSuppressedWhileCapturing(t *testing.T) {
+// A body capturing keys — a focused text field — takes digits, so the number
+// keys reach it rather than switching. shift+←/→ still switch: a field has no
+// use for them, and a tab whose field takes focus on arrival (a form) could
+// otherwise never be left by keyboard.
+func TestCapturingBodyTakesDigitsButShiftArrowsStillSwitch(t *testing.T) {
 	th := theme.New(palette.Dark())
 	a := &countingBody{label: "A", capturing: true}
 	b := &countingBody{label: "B"}
 	m := New(Options{Theme: th, Tabs: []Tab{{Label: "A", Body: a}, {Label: "B", Body: b}}})
 	m.SetRect(geom.Rect{W: 30, H: 6})
 
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
-	if m.ActiveTab() != 0 {
-		t.Errorf("shift+right while capturing should not switch: active = %d", m.ActiveTab())
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if m.ActiveTab() != 0 || a.keyCount != 1 {
+		t.Errorf("'2' while capturing: active %d, body keys %d; want 0 and the digit delivered", m.ActiveTab(), a.keyCount)
 	}
-	// It should have been forwarded to the active body instead.
-	if a.keyCount != 1 {
-		t.Errorf("capturing body should have received the shift+right: keyCount = %d", a.keyCount)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyShiftRight})
+	if m.ActiveTab() != 1 {
+		t.Errorf("shift+right while capturing should switch: active = %d", m.ActiveTab())
 	}
 }
 

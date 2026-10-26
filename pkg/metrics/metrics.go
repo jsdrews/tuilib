@@ -25,7 +25,7 @@ import (
 )
 
 // Severity palette — ANSI 256-color indices. These match the convention
-// used elsewhere in the library (see examples/patterns/poll).
+// used elsewhere in the library (see examples/liveops).
 const (
 	colorRed    = 1
 	colorGreen  = 2

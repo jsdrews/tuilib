@@ -49,7 +49,7 @@ Each step ships on its own and leaves the library working.
    surface's role, fallback logging, config keys.
 7. **Migration** of the library's examples and the six downstream modules,
    with a "Migrating to surfaces" section in this doc's successor guide.
-8. **The surface demo**: `examples/shell/surfaces` (was `shell/chrome`), a
+8. **The surface demo**: `examples/appearance/look` (was `shell/chrome`), a
    live surface picker that defines two custom surfaces, Ruled and Lipped,
    as struct literals offered beside the built-ins.
 
@@ -114,6 +114,13 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
   A surface whose inner rings carry no text rows draws an outlined field. A
   surface that falls back draws its fallback's field form. Theme builders
   hand `Input()`, `Filter()` and `Toggle()` this form.
+  A field drawn on an overlay — a titled form's fields, which sit on its
+  frame — takes `Resolved.OverlayField()`: the field form filled with
+  `OverlayCard` / `OverlayCardRaised`, so each field is a card a step lighter
+  than the overlay, as a card is a step lighter than the screen. In the field
+  form's own `Card` tones it would sink below the frame, and a focused field
+  would vanish into it. A lined or unfilled field keeps its form.
+  `theme.Form()` hands a bare form the field form and a titled one this.
 - **Needs and fallback:** minimum colour depth, whether it uses block glyphs, and
   the `Fallback` surface (see [Degraded terminals](#degraded-terminals)).
 
@@ -168,6 +175,8 @@ different hue. On light palettes, cards lift toward white.
 | `CardRaised` | focused fill | lift 6.5% | toward white 90% |
 | `Band` | Banded's header, Filled's divider step | lift 10% | darken `Card` 6% |
 | `Overlay` | overlay-form fill | lift 17% | white |
+| `OverlayCard` / `OverlayCardRaised` | a field on an overlay, blurred / focused | lift 23% / 28% | `Card` / `CardRaised` — nothing is lighter than a white overlay, so a field steps back into the sheet |
+| `Button` | a button drawn as a chip: a toggle's side, a modal's choice, a form's submit (the chosen one takes `Accent`) | lift 38% | darken `Card` 10% — a grey chip |
 | `Shadow` | Elevated's shadow | darken `Screen` 60% | darken `Screen` 22% |
 | `Selection` | focused selected row | `Card` mixed 22% toward `EdgeActive` | 45% |
 | `SelectionDim` | blurred selected row | lift `Card` 12% | same |
@@ -182,7 +191,8 @@ The percentages are starting points to tune, not spec.
   it is pushed further: `Card` on `Screen`, `CardRaised` on `Card`, `Band` on
   `Card`, `Selection` on `Card`, and `Overlay` on `CardRaised` — wider, 0.05,
   on a dark palette, since a modal opens over a focused card and one tone step
-  above it reads as the same surface.
+  above it reads as the same surface. `OverlayCard` is kept clear of
+  `Overlay`, and `OverlayCardRaised` of `OverlayCard`.
 - **Elevation only rises.** On a dark palette a card, a focused card, a band
   and a modal are each pushed *up* from what they sit on when they fall
   inside the floor, never back down — at truecolor and after rounding to

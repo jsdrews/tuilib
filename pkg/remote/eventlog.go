@@ -58,6 +58,9 @@ func (e *Eventlog) Update(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	switch m := msg.(type) {
 	case eventlog.ViewportChangedMsg:
+		if m.Token != e.FocusToken() {
+			break
+		}
 		if e.d.seek != nil {
 			e.d.seek.SetHeld(m.HeldStart, m.HeldCount)
 			cmds = append(cmds, e.d.seek.Viewport(m.FirstVisible, m.LastVisible))
@@ -65,6 +68,9 @@ func (e *Eventlog) Update(msg tea.Msg) tea.Cmd {
 			cmds = append(cmds, e.d.anch.Viewport(m.ToOlder, m.ToNewer))
 		}
 	case eventlog.QueryChangedMsg:
+		if m.Token != e.FocusToken() {
+			break
+		}
 		cmds = append(cmds, e.d.setQuery(Filter{Raw: m.Raw, Terms: m.Terms}))
 	case eventlog.FindMsg:
 		if m.Token == e.FocusToken() {

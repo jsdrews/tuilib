@@ -21,7 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/demoapi"
-	demoactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
+	"github.com/jsdrews/tuilib/examples/liveops"
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/palette"
 	"github.com/jsdrews/tuilib/pkg/theme"
@@ -30,7 +30,7 @@ import (
 // Press the verb and the row says so, without waiting for a poll to agree.
 func TestTheExampleClaimsTheRowOnDispatch(t *testing.T) {
 	m := app.New(app.Options{
-		Root:       demoactivity.New(theme.New(palette.Dark())),
+		Root:       liveops.New(theme.New(palette.Dark())),
 		Palettes:   []palette.Palette{palette.Dark()},
 		SkipConfig: true,
 		Mouse:      app.MouseClick,

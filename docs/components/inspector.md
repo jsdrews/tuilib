@@ -103,4 +103,4 @@ fields.
 `State()` / `Restore(st)` carry fields, open objects, cursor, search, filter
 mode, loading and scroll.
 
-See `examples/components/inspector`.
+See `examples/workbench`.

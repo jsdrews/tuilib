@@ -219,8 +219,9 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// Update handles tab-switch keys (prev/next/numbers, gated by
-// IsCapturingKeys on the active body) and forwards messages to the bodies.
+// Update handles tab-switch keys — prev/next always, the number keys only
+// while the active body is not capturing — and forwards messages to the
+// bodies.
 //
 // Routing differs by message kind:
 //
@@ -253,13 +254,17 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 	if k, ok := msg.(tea.KeyMsg); ok {
+		// Prev and next switch even while the body is capturing: a text
+		// field has no use for shift+←/→, and without them a tab whose
+		// field takes focus on arrival could never be left by keyboard.
+		// The number keys wait, since a field has to be able to take digits.
+		switch {
+		case key.Matches(k, m.prevKey):
+			return m.switchTo(m.active - 1)
+		case key.Matches(k, m.nextKey):
+			return m.switchTo(m.active + 1)
+		}
 		if !m.tabs[m.active].Body.IsCapturingKeys() {
-			switch {
-			case key.Matches(k, m.prevKey):
-				return m.switchTo(m.active - 1)
-			case key.Matches(k, m.nextKey):
-				return m.switchTo(m.active + 1)
-			}
 			if m.numberKeys {
 				s := k.String()
 				if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {

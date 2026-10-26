@@ -512,7 +512,7 @@ it that matters in practice, and what is left is weak enough to stay dropped.
 
 Status: **implemented.** Decisions 13-17 extend the feature above and are in
 `pkg/activity`, forwarded through the three components, demonstrated in
-`examples/patterns/activity`, and asserted in
+`examples/liveops`, and asserted in
 `internal/componenttest/{expect,setbusy}_test.go` and
 `internal/integration/activity_claim_test.go`.
 

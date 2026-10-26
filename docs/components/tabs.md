@@ -79,8 +79,10 @@ child pops with a value, the host's `OnEnter` forwards it with
 | `shift+←` / `shift+→` | previous / next tab |
 | `1`–`9` | jump to a tab (with at least 2 tabs) |
 
-Tab keys are ignored while the active body is capturing keys. Mouse: click a
-label to switch.
+While the active body is capturing keys (a focused text field), the number
+keys reach the body, since a field has to take digits; `shift+←/→` still
+switch, since no field uses them, so a tab whose field takes focus on arrival
+can always be left. Mouse: click a label to switch.
 
 ## Methods
 
@@ -89,5 +91,5 @@ body's `OnEnter`), `OnEnterActive(result)`, `SetTheme(t)` (fans out to every
 body), `IsCapturingKeys()`, `Help()`, `HelpSections()` (the strip's keys plus
 the active body's groups), `Rect()`.
 
-See `examples/shell/tabs`, where the Logs tab keeps streaming while you're on
+See `examples/navigation/tabs`, where the Logs tab keeps streaming while you're on
 another tab.

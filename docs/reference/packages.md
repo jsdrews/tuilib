@@ -260,4 +260,4 @@ Exact resume for a stream whose "since" parameter is coarser than its lines
 | `Reconnected()` | How long the stream was down, to mark with `logview.AppendMarker`. |
 | `OlderCut(stamps)`, `ObserveOlder(stamps)` | "Load older" from a longer tail, merged with `logview.Prepend`. |
 
-See `examples/patterns/podlogs`.
+See `examples/remotedata/podlogs`.

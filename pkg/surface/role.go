@@ -31,6 +31,13 @@ const (
 	Band
 	// Overlay is the body of a surface's overlay form — modals.
 	Overlay
+	// OverlayCard is a card drawn on an overlay: a field in a modal form.
+	OverlayCard
+	// OverlayCardRaised is an OverlayCard while it has focus.
+	OverlayCardRaised
+	// Button is a button drawn as a chip on a filled surface: a toggle's
+	// side, a modal's choice, a form's submit. The chosen one takes Accent.
+	Button
 	// Shadow is Elevated's drop shadow.
 	Shadow
 	// Selection is a focused pane's selected row.
@@ -66,7 +73,9 @@ const (
 
 var roleNames = [...]string{
 	None: "none", Screen: "screen", Card: "card", CardRaised: "card-raised",
-	Band: "band", Overlay: "overlay", Shadow: "shadow", Selection: "selection",
+	Band: "band", Overlay: "overlay", OverlayCard: "overlay-card",
+	OverlayCardRaised: "overlay-card-raised", Button: "button", Shadow: "shadow",
+	Selection:    "selection",
 	SelectionDim: "selection-dim", Bar: "bar", Text: "text",
 	TextMuted: "text-muted", Edge: "edge", EdgeActive: "edge-active",
 	Divider: "divider", Accent: "accent", Fill: "fill", Parent: "parent",

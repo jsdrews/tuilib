@@ -389,3 +389,24 @@ func TestSeekablePrefetchReachesTheSource(t *testing.T) {
 		t.Errorf("Prefetch 2 fetched through row %d, without it %d — want two more pages", with, without)
 	}
 }
+
+// Two bound views share a screen's message stream — a tab host fans every
+// non-key message out to every body — so each must act only on its own
+// view's viewport and filter. Before the messages carried a token, scrolling
+// or filtering one view made the other fetch the same range and query.
+func TestTwoBoundViewsKeepToTheirOwnMessages(t *testing.T) {
+	jobA, jobB := &fakeJob{n: 1000}, &fakeJob{n: 1000}
+	a, b := newSeekLog(t, jobA), newSeekLog(t, jobB)
+	pump(t, tea.Batch(a.Init(), b.Init()), a, b)
+
+	before := len(jobB.windows)
+	for _, k := range []string{"g", "f", "f", "a", "t", "a", "l", "enter"} {
+		pump(t, a.Update(key(k)), a, b)
+	}
+	if got := jobA.windows[len(jobA.windows)-1].Raw; got != "fatal" {
+		t.Fatalf("view A's own filter never reached its fetch: %q", got)
+	}
+	for _, w := range jobB.windows[before:] {
+		t.Errorf("view B fetched %+v on view A's scroll or filter", w)
+	}
+}

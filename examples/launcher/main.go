@@ -1,16 +1,10 @@
-// Launcher: the single entry point for tuilib examples. Shows a menu of
-// available demos; enter pushes the selected one onto the app stack, esc
-// pops back.
+// Launcher: the single entry point for tuilib's examples. It lists the
+// showcases — screens that each put many features together, so a change that
+// breaks an older feature shows up where you can see it — and enter pushes the
+// one highlighted onto the app stack; esc pops back.
 //
-// Entries are grouped the way the directories are, and for the same reason —
-// so the name tells you what kind of thing you are about to open:
-//
-//	Components  one per UI component, in isolation.
-//	Shell       what pkg/app owns: navigation, chrome, statusbar, console.
-//	Patterns    composition idioms — focus, mouse, polling, paging, verbs.
-//
-// Filtering searches the group as well as the name, so "/patterns" narrows
-// to one section.
+// The list is a pkg/menu (rule 36): a set of places to go. Its items name no
+// groups, so it draws flat.
 package main
 
 import (
@@ -24,61 +18,25 @@ import (
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/help"
 	"github.com/jsdrews/tuilib/pkg/layout"
-	"github.com/jsdrews/tuilib/pkg/list"
+	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/mouse"
 	"github.com/jsdrews/tuilib/pkg/screen"
 	"github.com/jsdrews/tuilib/pkg/textview"
 	"github.com/jsdrews/tuilib/pkg/theme"
 
-	compform "github.com/jsdrews/tuilib/examples/components/form"
-	compinspector "github.com/jsdrews/tuilib/examples/components/inspector"
-	complist "github.com/jsdrews/tuilib/examples/components/list"
-	complogview "github.com/jsdrews/tuilib/examples/components/logview"
-	compmenu "github.com/jsdrews/tuilib/examples/components/menu"
-	compmetrics "github.com/jsdrews/tuilib/examples/components/metrics"
-	comppane "github.com/jsdrews/tuilib/examples/components/pane"
-	comptable "github.com/jsdrews/tuilib/examples/components/table"
-	comptextview "github.com/jsdrews/tuilib/examples/components/textview"
-	comptree "github.com/jsdrews/tuilib/examples/components/tree"
-	patactions "github.com/jsdrews/tuilib/examples/patterns/actions"
-	patactivity "github.com/jsdrews/tuilib/examples/patterns/activity"
-	patactivityrecipes "github.com/jsdrews/tuilib/examples/patterns/activityrecipes"
-	patanchored "github.com/jsdrews/tuilib/examples/patterns/anchored"
-	patcapture "github.com/jsdrews/tuilib/examples/patterns/capture"
-	patdrilldown "github.com/jsdrews/tuilib/examples/patterns/drilldown"
-	pateventlog "github.com/jsdrews/tuilib/examples/patterns/eventlog"
-	patfilters "github.com/jsdrews/tuilib/examples/patterns/filters"
-	patfocus "github.com/jsdrews/tuilib/examples/patterns/focus"
-	patloading "github.com/jsdrews/tuilib/examples/patterns/loading"
-	patmodals "github.com/jsdrews/tuilib/examples/patterns/modals"
-	patmouse "github.com/jsdrews/tuilib/examples/patterns/mouse"
-	patmultiselect "github.com/jsdrews/tuilib/examples/patterns/multiselect"
-	patpodlogs "github.com/jsdrews/tuilib/examples/patterns/podlogs"
-	patpoll "github.com/jsdrews/tuilib/examples/patterns/poll"
-	patremote "github.com/jsdrews/tuilib/examples/patterns/remote"
-	patrunner "github.com/jsdrews/tuilib/examples/patterns/runner"
-	pattreeactions "github.com/jsdrews/tuilib/examples/patterns/treeactions"
-	shelllayouts "github.com/jsdrews/tuilib/examples/shell/layouts"
-	shelloutput "github.com/jsdrews/tuilib/examples/shell/output"
-	shellprescreen "github.com/jsdrews/tuilib/examples/shell/prescreen"
-	shellstack "github.com/jsdrews/tuilib/examples/shell/stack"
-	shellstatus "github.com/jsdrews/tuilib/examples/shell/status"
-	shellsurfaces "github.com/jsdrews/tuilib/examples/shell/surfaces"
-	shelltabs "github.com/jsdrews/tuilib/examples/shell/tabs"
-	shellthemes "github.com/jsdrews/tuilib/examples/shell/themes"
-)
-
-// Group names. Kept as constants because the menu label, the filter text and
-// the column padding all derive from them.
-const (
-	groupComponents = "Components"
-	groupShell      = "Shell"
-	groupPatterns   = "Patterns"
+	"github.com/jsdrews/tuilib/examples/appearance"
+	"github.com/jsdrews/tuilib/examples/liveops"
+	"github.com/jsdrews/tuilib/examples/navigation"
+	"github.com/jsdrews/tuilib/examples/processes"
+	"github.com/jsdrews/tuilib/examples/remotedata"
+	"github.com/jsdrews/tuilib/examples/workbench"
 )
 
 type entry struct {
-	group string
-	name  string
+	name string
+	// tagline is the menu's description column: what the showcase is about,
+	// in a few words.
+	tagline string
 	// dir is the package directory under examples/, shown in the about pane
 	// so the answer to "where is this code" is on screen rather than guessed
 	// from the name.
@@ -88,127 +46,29 @@ type entry struct {
 }
 
 var entries = []entry{
-	// ---- Components: one per component, in isolation --------------------
-	{groupComponents, "Pane", "components/pane",
-		"Four panes demonstrating border styles, title positions, and slot-bracket variants. Every interactive component owns one of these internally, which is why none of them need a wrapper.",
-		comppane.New},
-	{groupComponents, "List", "components/list",
-		"A filterable list.Model with 372 numbered rows, so the scrollbar thumb is small and worth dragging. Every row shows its ordinal, so after a drag or a track click you can read whether the jump landed where the thumb said. Wheel scrolls whether or not the pane has focus; double-click opens a row.",
-		complist.New},
-	{groupComponents, "Menu", "components/menu",
-		"A grouped, filterable menu.Model as the home screen of an app with many sections. Groups are headers the cursor skips; the two items with no group land last under \"other\". [ and ] jump between groups — tab is left for focus cycling. / filters on the label and the group (try network or instance), and a group with nothing left hides its header. Enter or double-click emits ChosenMsg and the screen pushes the section.",
-		compmenu.New},
-	{groupComponents, "Table", "components/table",
-		"table.Model with sticky header and three column sizing modes side-by-side (City uses Flex:1 + MaxWidth:28 to absorb leftover space up to a cap — resize the terminal to watch it stretch then stop; Region/Population fixed; Status uses Width:0 for content-auto). [/] steps the sort column and s toggles direction (Population sorts numerically via a custom Less that parses \"8.3M\"). The Status column uses ansi.CellColor so the selected-row background passes through colored cells; the Wiki column wraps each URL in ansi.Hyperlink, so shift-click launches the full link even when the column truncates it.",
-		comptable.New},
-	{groupComponents, "Tree", "components/tree",
-		"A synthetic project tree with cursor, expand/collapse (space), search (/), and filter mode (\\) that hides non-matching subtrees while keeping ancestors. Arrows and hjkl stay on scroll, library-wide. Leaves carry colored status icons so the row highlight survives ANSI segments.",
-		comptree.New},
-	{groupComponents, "Inspector", "components/inspector",
-		"A two-column label/value viewer for a synthetic k8s-pod payload, fed through inspector.FromAny so the example shows the typical json.Unmarshal → FromMap path. Sibling labels auto-align per group, ▸/▾ expand nested objects and arrays, / searches labels and values, \\ hides non-matching subtrees.",
-		compinspector.New},
-	{groupComponents, "TextView", "components/textview",
-		"Two documents (README + git diff) that cycle via d. /-search with n/N to step matches, w to toggle wrap, g/G and ctrl+u/d to scroll. No follow, no MaxLines, no filter mode — the read-static-text counterpart to logview.",
-		comptextview.New},
-	{groupComponents, "LogView", "components/logview",
-		"A synthetic log stream with /-search, n/N to jump matches, g/G top/bottom, and pause/follow. The streaming counterpart to textview, with a MaxLines cap so an open-ended producer can't grow memory without limit.",
-		complogview.New},
-	{groupComponents, "Form", "components/form",
-		"A form.Model with Text, Select, and Confirm fields; each field is its own bordered component and validation lives in the form rather than the screen. Submit replaces the form with a result pane.",
-		compform.New},
-	{groupComponents, "Metrics", "components/metrics",
-		"pkg/metrics inline primitives composed into a live deployments table: Ratio for replica counts (\"6/6\" green, \"3/4\" yellow), Badge for pod-state breakdown (\"6✓ 1⚠ 2✗\"), Bar+percent for CPU, Spark for CPU history. Everything renders as a table cell — the point is that the primitives drop into existing components with no new screens and no new layout. Polls every 2s with a keyed cursor; p pauses, r refreshes, +/- adjust cadence.",
-		compmetrics.New},
-
-	// ---- Shell: what pkg/app owns ---------------------------------------
-	{groupShell, "Layouts", "shell/layouts",
-		"One sub-screen per layout primitive: HStack+Fixed/Flex, nested stacks, ZStack modal, and more. The answer to every \"how do I leave room for a bar\" question that would otherwise be written as m.h - 2.",
-		shelllayouts.New},
-	{groupShell, "Stack", "shell/stack",
-		"Navigation and the three directions data moves: parent→child through the constructor, child→parent through Pop(result) landing in OnEnter, and self→self through Replace. r on either screen swaps it for a fresh instance — the filter and the visit counter reset, depth stays put, and the screen underneath is never reactivated. The city detail's visit counter is there to make that last part visible.",
-		shellstack.New},
-	{groupShell, "Tabs", "shell/tabs",
-		"Cities (filterable list) + Logs (streaming logview) + Counter behind one strip, switched via shift+left/right, 1/2/3, or a click on a label. tab/shift+tab is left alone for inner focus cycling. Each body keeps its own state, and the logs keep streaming while you are on another tab — keys go to the active body, everything else fans out to all of them.",
-		shelltabs.New},
-	{groupShell, "Status", "shell/status",
-		"Pick an action; the screen returns app.Info / app.Error / app.ClearStatus and the shell paints the statusbar's center slot. Auto-clears on the next keypress, which is why anything worth reading twice belongs in the console instead.",
-		shellstatus.New},
-	{groupShell, "Output", "shell/output",
-		"The app-wide console. Actions that emit app.Info / app.ErrorDetail / app.ErrorOf, plus runner.Capture streaming a live subprocess. The statusbar shows a sliver and wipes it on the next keypress; o opens the console where all of it is still there, with c to clear, x to kill a running capture, and w to export. Note the OnEnter guard on app.OutputClosed — closing the console must not look like a fresh activation.",
-		shelloutput.New},
-	{groupShell, "Themes", "shell/themes",
-		"Live palette picker: moving the cursor re-skins the whole app, and enter shows a theme's field palette. Also the package every other example's theme list comes from.",
-		shellthemes.New},
-	{groupShell, "Surfaces", "shell/surfaces",
-		"Live surface picker: moving the cursor redraws the whole app as a line border, a filled card, a header band, a drop shadow or an accent bar — the same thing T cycles. The list gets the surface, the input and toggle its field form, the modal its overlay form, and one pane pins itself to Outlined. Ruled and Lipped are custom surfaces defined in the example, offered beside the built-ins. Pick a glyph set too; the cursor, marks and scrollbars follow.",
-		shellsurfaces.New},
-	{groupShell, "Prescreen", "shell/prescreen",
-		"The \"log in before you can use this\" shape: a root screen pushes a child from OnEnter, receives its result on Pop, and can re-push it later (L logs out) — all without the child living permanently on the stack. The login form is set dressing; the flow is the point. Every field is clickable.",
-		shellprescreen.New},
-
-	// ---- Patterns: composition idioms -----------------------------------
-	{groupPatterns, "Focus", "patterns/focus",
-		"A screen with input + list + toggle behind one focus.Group: tab cycles, only the focused component takes keys, and a clicked component gets focus because the Group sees the request it sends. Esc leaves the input — without it the field captures every key and tab can never cycle off it.",
-		patfocus.New},
-	{groupPatterns, "Filters", "patterns/filters",
-		"A list and a table, each with its own filter, on one screen. Exercises the focus states a single filterable pane can't reach: exactly one region highlighted at a time, clicking a body taking input back from its filter, switching panes clearing the filter you left, and tab completing a key:value term instead of cycling panes.",
-		patfilters.New},
-	{groupPatterns, "Mouse", "patterns/mouse",
-		"Three panes wired for mouse: click to focus, click a row to select, double-click to open, click a table header to sort or a tree ▸ to expand, wheel over any pane whether or not it has focus, drag a scrollbar. Every rect comes from pkg/layout — nothing is injected into the rendered string. Requires app.Options.Mouse, which the launcher sets for the whole suite.",
-		patmouse.New},
-	{groupPatterns, "Loading", "patterns/loading",
-		"List, logview, and tree all start in SetLoading(true); staggered tea.Tick delays simulate fetches that resolve at different times. Tab cycles focus so / and h/l only affect one pane. Press r to refetch and watch the spinner replace the previous result rather than overlay it.",
-		patloading.New},
-	{groupPatterns, "Drilldown", "patterns/drilldown",
-		"Master-detail with async fetches at every level. Cities list loads on Init; enter on either pane \"opens the focused selection\" — left-enter loads the detail (reqID tags drop stale results, so hammering enter never races) and shifts focus right, right-enter pushes a child screen describing the attribute. Esc on the child pops back with parent state intact.",
-		patdrilldown.New},
-	{groupPatterns, "Poll", "patterns/poll",
-		"pkg/poll drives a 2s tick that mutates a synthetic job list (statuses flip, new jobs appear, finished ones drop, ordering changes); SetKeyedItems keeps the cursor pinned to the same job ID across every refresh. p pauses, r refreshes now, +/- adjust cadence, and the title shows \"refreshed Xs ago\".",
-		patpoll.New},
-	{groupPatterns, "Remote", "patterns/remote",
-		"The whole windowed-source loop: pkg/source coordinating a pkg/table in FilterRemote/SortRemote over demoapi — a real http.Handler behind a real client, 5,000 applications, one 100-row page at a time, 250ms of latency. Scroll faster than it answers and you see the \"·\" placeholders for rows it hasn't received; the cursor stays put and the data arrives under it. / filters at the source (enter commits — one request, not one per keystroke) and a scoped term leaves as ?region=eu-west, since Term.Title is already the resolved column. [/]/s sorts there too, r refetches, e makes the next fetch return a 503 so you can watch the error path. Completion candidates come from the facets endpoint, because one page can't know every region.",
-		patremote.New},
-	{groupPatterns, "Eventlog", "patterns/eventlog",
-		"pkg/eventlog bound with pkg/remote to demoapi's AWX-shaped job-events endpoints, over HTTP: a running job (4242) emitting events, some saved late — the holes (·) fill in on a later poll. The view follows the newest event; scroll up and it stops, counting what arrived since, and G returns. f filters on the server (failed, changed, host:web-1, task:deploy, or text), / searches: n/N jump among loaded events, then ask AWX for the next match past them. Enter opens an event's fields. L cycles latency.",
-		pateventlog.New},
-	{groupPatterns, "Eventlog (finished job)", "patterns/eventlog",
-		"The same over a finished AWX job (4187), 8,000 events — the troubleshooting case. Nothing grows or polls; it opens at the first event. / then n/N find matches across the whole job (try fatal or timeout), asking AWX for the next one past what is loaded and landing with its context. f narrows on the server (failed, host:web-1). Enter opens an event's fields.",
-		pateventlog.NewFinished},
-	{groupPatterns, "Anchored", "patterns/anchored",
-		"pkg/eventlog bound with pkg/remote to demoapi's Elasticsearch-shaped POST /logs-app/_search, over HTTP: 20,000 log documents and more arriving, paged with search_after — no offsets, no total. It opens at the newest and follows; scroll toward either edge and the span grows there (⠙ loading older…), trimmed past 5,000. Tailing rewinds a few seconds so documents ingested late are not lost. f filters (level:error, service:orders, text); / then n/N jump among loaded documents, and past them the search finds the next hit and re-anchors around it. Enter opens a document. L cycles latency.",
-		patanchored.New},
-	{groupPatterns, "Pod logs", "patterns/podlogs",
-		"Streamed data: a fake pod log read the way the Kubernetes API allows — a tail, then follow, no pagination — in a pkg/logview with pkg/resume. Four lines a second against a since that is truncated to the second, so reconnects would repeat lines; the tracker drops exactly those. The connection drops every 20s and each reconnect is marked (rotation loss can't be detected, so the marker says so). The container restarts every 100s: a marker, then the new run; P opens the previous run on its own. O loads older lines by asking for a longer tail until the start of what the kubelet retained.",
-		patpodlogs.New},
-	{groupPatterns, "Actions", "patterns/actions",
-		"The verb menu. Press a or right-click a row to open action.Menu: it sizes itself to its widest row and anchors where you asked. This screen is single-target on purpose — Multi-select is the one that marks rows. Start a Restart and reopen the menu to see the Exclusive gate. Single click commits, click-away dismisses, Delete confirms first.",
-		patactions.New},
-	{groupPatterns, "Activity", "patterns/activity",
-		"Per-row in-flight state against an Argo-shaped demoapi over HTTP. Rows spin when the server's operation phase says Running — scheduled syncs fire with nobody pressing anything, and BusyWhen reads the phase from each row's Data, not the Sync column. Press a for one verb per API shape: Sync (a POST that answers at once; the phase says when it ends), Refresh (a GET that blocks until reconciled and shows nothing on the app, so only the request knows), Sync and follow (a job handle streamed to the end), Quick sync (finishes between polls, so the statusbar says so rather than the row looking ignored), and Fail a sync. Mark rows with x and one verb drives them all.",
-		patactivity.New},
-	{groupPatterns, "Activity recipes", "patterns/activityrecipes",
-		"The row-activity API one shape per tab, each small enough to copy. Observe: BusyWhen + BeginRead/ApplyRead, and nothing else. Sync: Dispatch(activity.Observed) and Done, plus UnobservedMsg for a sync nobody saw. Refresh: a blocking GET, Dispatch(activity.Held). Job handle: a 202 with a job id polled to the end — also Held — including one the server accepted and dropped. Press a on any row.",
-		patactivityrecipes.New},
-	{groupPatterns, "Multi-select", "patterns/multiselect",
-		"table.Model with Options.Markable: x marks the cursor row, X (or shift+click) extends the selection between the anchor and the cursor in either direction, A marks everything the filter shows, D drops the selection, and clicking the ✓ gutter toggles without opening the row. Marks are held by Key (SetKeyedRows), so they survive filtering — mark a row, filter it away, and the count on the border does not move — and survive a theme swap via SetMarks. Press a or right-click for the menu: it is titled with what it will act on (\"3 items\"), and Describe, which did not declare Multi, dims itself with a reason as soon as a second row is marked.",
-		patmultiselect.New},
-	{groupPatterns, "Tree actions", "patterns/treeactions",
-		"pkg/tree marking + pkg/action on a cluster-shaped hierarchy. x marks a node at any depth, X a range, A everything visible, D drops. Marking a branch marks that branch alone — the screen resolves it to the pods a verb should touch with a prefix test on the path, which is why Restart cascades into a marked namespace and Describe does not. Marks survive collapsing, so the menu title counts what it will actually touch (\"Restart 9 pods\") even when some are folded out of sight. Delete is guarded to staging.",
-		pattreeactions.New},
-	{groupPatterns, "Modals", "patterns/modals",
-		"The three weights of feedback on one list of operations: app.Info for a success (passive, wiped by the next keypress), pkg/confirm for a destructive op (a gate, with the cancel side starting highlighted), and pkg/alert for a failure the user has to acknowledge. \"Force push main\" goes through both modals in sequence. Note the two hosting shapes — the confirm modal is fixed-size inside layout.Center, while the autosizing alert centers itself and needs no wrapper.",
-		patmodals.New},
-	{groupPatterns, "Runner", "patterns/runner",
-		"Handing the terminal to an interactive subprocess: pick a command, the TUI suspends, and it resumes when the command exits. $EDITOR, less, man, htop — anything that wants a real TTY. The last entry uses RunWithNotice to print \"connecting…\" during the handoff. The counterpart to Capture, which never gives the terminal away.",
-		patrunner.New},
-	{groupPatterns, "Capture", "patterns/capture",
-		"Streaming a subprocess into an on-screen logview with runner.Capture, while the TUI stays live. The shell chains the reads and forwards every message, so the screen just matches CaptureStarted / CapturedLine / Captured — no io.Pipe, no goroutine, no scanner. x kills the run, and o shows the same stream in the app-wide console with its exit status.",
-		patcapture.New},
+	{"Workbench", "row components", "workbench",
+		"Every row component on one screen over one cluster: a filterable, sortable, markable table of deployments; a searchable, markable tree of namespaces, workloads and pods; the table's pods in a markable list; a filterable inspector following whichever of those last had focus; and a grouped operations menu. tab cycles the five panes and a click focuses one. Enter on a deployment moves to its pods, enter on a pod to the detail. x / X / A / D mark, and a or right-click opens verbs for the focused pane's selection — Describe dims on a second mark, Delete confirms, a marked tree branch cascades to its pods. The operations menu runs statusbar notices, the confirm modal and the alert modal. Swap the theme or surface with anything marked, filtered or open, and it all comes back.",
+		workbench.New},
+	{"Live ops", "live data", "liveops",
+		"Everything that changes while you watch, on one screen. Applications come from demoapi over HTTP, shaped like Argo CD: rows spin because the server says so (it schedules syncs of its own), and a or right-click offers one verb per operation shape — Sync (the phase says when it ends), Refresh (a blocking GET only the request can end), Sync and follow (a streamed job), Quick sync (over between polls, so it is reported), Fail a sync, and Sync (dropped), a job accepted and never run. Mark rows with x and one verb drives them all. Beside it, workloads draw pkg/metrics' Ratio, Badge, Bar and Spark, and below, events logs what each poll changed. One poll drives all three panes; its verbs (pause, refresh now, faster, slower, reload) are on the workloads and events panes, and every pane shows its spinner until its first data lands.",
+		liveops.New},
+	{"Remote data", "paged and streamed", "remotedata",
+		"Data too large for one request, one tab per shape, each read from demoapi over HTTP the way the real API is read. Records: a table over a paged API, where scrolling is the pagination — filter it (region:eu-west), sort it, and watch windows arrive under you. Events: an AWX job's events still arriving, followed until you scroll away, with an inspector one enter away. Finished job: the same once it has ended. Anchored: an Elasticsearch-style index read with search_after, no offsets and no total; a search past what is loaded re-anchors on the hit. Pod logs: a Kubernetes pod's log, a tail then a follow, with reconnects kept exact. shift+←/→ or 1–5 switch tabs, and a tab you are not looking at keeps following its stream.",
+		remotedata.New},
+	{"Processes", "commands, console", "processes",
+		"Running commands, three ways, from one grouped menu. capture streams a command into the output pane with runner.Capture while the TUI stays live — scroll, search, tab away — and the same stream feeds the console (o) with its exit status; Kill is on the action menu (a) while one runs. The synthetic tail follows a log on a tick. terminal hands the real terminal to an editor, a pager or htop with runner.Run and shows the result when you come back. console says something to the statusbar — Info, Error, a 12-line body, a %w chain — and the console keeps all of it after the bar wipes it. The about pane counts activations, which closing the console must not move.",
+		processes.New},
+	{"Navigation", "screens and stacks", "navigation",
+		"How an app moves between screens, from one grouped, filterable menu — the home screen of an app with too many sections for tabs. The navigation group opens a screen stack (push with data, pop with a result, replace a screen with a fresh one), a screen that asks you to sign in first, a master-detail drilldown with a third level, and a tabbed host. The other groups are the menu's own subject: headers the cursor skips, tab / shift+tab or ] / [ jumping between groups and wrapping, / filtering on the label and the group (try network or instance). The breadcrumb names every level; click a crumb to go back to it.",
+		navigation.New},
+	{"Appearance", "how it is drawn", "appearance",
+		"Palettes, surfaces and glyphs, and the components whose subject is how they are drawn. Look: palette, surface and glyph pickers that redraw the whole app as the cursor moves — any palette in any surface — beside what each kind of component is handed: a list the surface, an input and a toggle its field form, a modal its overlay form, and one pane pinned to Outlined. Enter on a palette shows every field with a swatch. Form: a titled form with validation on submit; on a filled surface its fields are cards a step lighter than the frame and its buttons are chips. Text: a document to read, search (/, n, N) and wrap (w). Panes: border styles, title positions and slot brackets. Layouts: one screen per layout primitive. shift+←/→ or 1–5 switch tabs.",
+		appearance.New},
 }
 
 type rootScreen struct {
 	t    theme.Theme
-	menu list.Model
+	menu menu.Model
 	// info is a textview rather than a bare pane because the blurbs are
 	// prose: textview wraps to the inner width on every SetRect, which is
 	// the one case rule 18 says to wrap rather than truncate.
@@ -217,30 +77,25 @@ type rootScreen struct {
 
 func newRoot() *rootScreen {
 	s := &rootScreen{}
-	s.SetTheme(theme.New(shellthemes.Palettes()[1])) // start on Dark (index 0 is Terminal())
+	s.SetTheme(theme.New(appearance.Palettes()[1])) // start on Dark (index 0 is Terminal())
 	return s
 }
 
 func (s *rootScreen) Title() string         { return "Examples" }
 func (s *rootScreen) Init() tea.Cmd         { return textinput.Blink }
 func (s *rootScreen) OnEnter(any) tea.Cmd   { return nil }
-func (s *rootScreen) IsCapturingKeys() bool { return s.menu.Filtering() }
+func (s *rootScreen) IsCapturingKeys() bool { return s.menu.IsCapturingKeys() }
 
 func (s *rootScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
-	prevIdx, prevOK := s.menu.SelectedIndex()
+	// Enter and a double click both arrive as the menu's ChosenMsg (rule 16).
+	if it, ok := s.menu.Chosen(msg); ok {
+		return s, screen.Push(entries[it.Data.(int)].build(s.t))
+	}
+	before, _ := s.menu.Selected()
 	var cmd tea.Cmd
 	s.menu, cmd = s.menu.Update(msg)
-
-	if curIdx, curOK := s.menu.SelectedIndex(); curIdx != prevIdx || curOK != prevOK {
+	if now, _ := s.menu.Selected(); now.ID != before.ID {
 		s.rebuildInfo()
-	}
-
-	// Enter and double-click are the same verb (rule 14); IsActivate folds
-	// both into one branch so what "open" means is written once.
-	if s.menu.IsActivate(msg) {
-		if idx, ok := s.menu.SelectedIndex(); ok && idx >= 0 && idx < len(entries) {
-			return s, tea.Batch(cmd, screen.Push(entries[idx].build(s.t)))
-		}
 	}
 
 	// Keys belong to the menu; the mouse goes to both, so the wheel scrolls
@@ -273,17 +128,12 @@ func (s *rootScreen) HelpSections() []help.Section {
 func (s *rootScreen) SetTheme(t theme.Theme) {
 	s.t = t
 
-	cursor, value := s.menu.Cursor(), s.menu.Value()
-	opts := t.List()
+	st := s.menu.State()
+	opts := t.Menu()
 	opts.Title = fmt.Sprintf("examples · %d", len(entries))
-	opts.Filterable = true
-	opts.Filter.Placeholder = "filter by group or name…"
-	opts.Items = entryNames()
-	s.menu = list.New(opts)
-	if value != "" {
-		s.menu.SetValue(value)
-	}
-	s.menu.SetCursor(cursor)
+	opts.Items = items()
+	s.menu = menu.New(opts)
+	s.menu.Restore(st)
 
 	s.rebuildInfo()
 }
@@ -293,32 +143,21 @@ func (s *rootScreen) rebuildInfo() {
 	opts.Wrap = true
 	s.info = textview.New(opts)
 
-	idx, ok := s.menu.SelectedIndex()
-	if !ok || idx < 0 || idx >= len(entries) {
+	it, ok := s.menu.Selected()
+	if !ok {
 		s.info.SetTitle("about")
-		s.info.SetContent("Pick an example on the left and press enter.\n\n" +
-			groupComponents + " — one demo per UI component, in isolation.\n\n" +
-			groupShell + " — navigation, chrome, statusbar and console: what pkg/app owns.\n\n" +
-			groupPatterns + " — composition idioms: focus, mouse, polling, paging, verbs.")
+		s.info.SetContent("Pick an example on the left and press enter.")
 		return
 	}
-	e := entries[idx]
+	e := entries[it.Data.(int)]
 	s.info.SetTitle("examples/" + e.dir)
-	s.info.SetContent(e.group + " · " + e.name + "\n\n" + e.blurb)
+	s.info.SetContent(e.name + "\n\n" + e.blurb)
 }
 
-// entryNames renders the menu labels, padded so the names line up in a
-// column and the group reads as a heading down the left edge.
-func entryNames() []string {
-	width := 0
-	for _, e := range entries {
-		if n := len(e.group); n > width {
-			width = n
-		}
-	}
-	out := make([]string, len(entries))
+func items() []menu.Item {
+	out := make([]menu.Item, len(entries))
 	for i, e := range entries {
-		out[i] = fmt.Sprintf("%-*s · %s", width, e.group, e.name)
+		out[i] = menu.Item{ID: e.dir, Label: e.name, Description: e.tagline, Data: i}
 	}
 	return out
 }
@@ -326,8 +165,8 @@ func entryNames() []string {
 func main() {
 	m := app.New(app.Options{
 		Root:          newRoot(),
-		Palettes:      shellthemes.Palettes(),
-		Surfaces:      shellsurfaces.Surfaces(),
+		Palettes:      appearance.Palettes(),
+		Surfaces:      appearance.Surfaces(),
 		PaletteEnvVar: "TUILIB_THEME",
 		Version:       "examples",
 		ThemeKey:      key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "palette")),

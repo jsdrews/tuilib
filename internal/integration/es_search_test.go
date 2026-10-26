@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jsdrews/tuilib/examples/patterns/anchored"
+	"github.com/jsdrews/tuilib/examples/remotedata/anchored"
 )
 
 // The anchored example against demoapi's Elasticsearch-shaped search, over

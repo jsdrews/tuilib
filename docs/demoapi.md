@@ -1,8 +1,8 @@
 # Demo API — design
 
 Status: **implemented.** `demoapi` is in, with `cmd/demoapi` and `task
-server`; `examples/patterns/remote` and `examples/patterns/activity` are
-clients of it; and `internal/integration` holds the race tests that were the
+server`; `examples/remotedata/records` and `examples/liveops` are clients of
+it; and `internal/integration` holds the race tests that were the
 reason to build it. Stdlib only, plus `pkg/query` from this module, so `go.mod`
 gained nothing.
 
@@ -18,7 +18,7 @@ implementation** (decisions 8, 13, and new 15 through 20).
 ## Problem
 
 **Every example invents its own backend, and none of them can be borrowed.**
-`examples/patterns/remote` hand-rolls a 5,000-row paged API with a 100-row page
+`examples/remotedata/records` hand-rolls a 5,000-row paged API with a 100-row page
 size and a 250ms sleep. `examples/patterns/activity` hand-rolls a
 mutex-guarded `backend` with jobs, revisions and scheduled work.
 `examples/patterns/poll` mutates a synthetic job list on a tick. Three
@@ -239,7 +239,7 @@ wanted, and would have quietly deleted the reason `Title` is on the struct.
 
 So the list endpoint takes both, AND-ed: `?q=` for a client forwarding what the
 user typed, and one parameter per column (`?region=eu-west`) for one driving a
-`source.Query`. `examples/patterns/remote` sends scoped terms as parameters and
+`source.Query`. `examples/remotedata/records` sends scoped terms as parameters and
 bare ones through `q`, which is what a real client would do and what the
 `Title` field is for.
 
@@ -292,7 +292,7 @@ changes.
 
 ### 13. The examples that already fake a backend migrate onto it.
 
-`examples/patterns/remote` loses its 5,000-row generator, its page arithmetic
+`examples/remotedata/records` loses its 5,000-row generator, its page arithmetic
 and its `time.Sleep`. `examples/patterns/activity` loses its `backend` type,
 its mutex and its job model. `examples/patterns/poll` loses its synthetic job
 churn.
@@ -302,7 +302,7 @@ demos that each exercise their own private simulation become three clients of
 one, which means the fixture is exercised from three directions and a bug in it
 shows up somewhere.
 
-**It also makes the demos more honest.** `examples/patterns/remote`'s package
+**It also makes the demos more honest.** `examples/remotedata/records`'s package
 comment claims it demonstrates the windowed-source loop against a paged API;
 what it currently demonstrates is that loop against a slice and a sleep in the
 same goroutine. Nothing in it crosses a request boundary, which is where the
@@ -420,7 +420,7 @@ built, eight events a second up to 3,000, on the world's clock:
 - **Some events carry no stdout** (`runner_on_start`), task headers carry two
   lines, failures carry two.
 
-`examples/patterns/eventlog` is the client: counter ranges unfiltered, page
+`examples/remotedata/events` is the client: counter ranges unfiltered, page
 mode under a filter, `stdout__icontains` + `counter__gt` + `page_size=1` to
 find, and one more request for `count` to turn a filtered hit into a position.
 
@@ -488,7 +488,7 @@ finished-between-two-polls case would miss the one thing that case needs.
 4. ~~**`demoapi/client.go`**~~ — the in-process transport, over `io.Pipe`.
 5. ~~**`demoapi/jobs.go`**~~ — POST endpoints, job list, the log stream.
 6. ~~**`demoapi/cmd/demoapi`**~~ + the `task server` entry.
-7. ~~**Migrate `examples/patterns/remote`**~~, which was the demo whose
+7. ~~**Migrate `examples/remotedata/records`**~~, which was the demo whose
    simulation was furthest from what it claimed to demonstrate.
 8. ~~**Migrate `examples/patterns/activity`**~~. Not `poll` — see decision 13.
 9. ~~**The race tests**~~ — the two orderings in the Problem section, which

@@ -118,6 +118,15 @@ func matches(it Focusable, req RequestMsg) bool {
 	return false
 }
 
+// Member is implemented by a component whose own bindings can share keys with
+// a Group's cycling pair: pkg/menu jumps between its sections on tab when it
+// stands alone. NewGroup and WithKeys hand each member the keys that cycle, so
+// it leaves them to the Group instead of acting on the same press — the screen
+// forwards every key to the focused component as well as to the Group.
+type Member interface {
+	JoinGroup(cycle Keys)
+}
+
 // Keys are the bindings a Group dispatches against. Zero-valued fields fall
 // back to the defaults from DefaultKeys.
 type Keys struct {
@@ -152,7 +161,18 @@ type Group struct {
 // Call the returned Group's Init to focus the first item and collect its
 // command.
 func NewGroup(items ...Focusable) Group {
-	return Group{items: items, keys: DefaultKeys(), wrap: true}
+	g := Group{items: items, keys: DefaultKeys(), wrap: true}
+	g.join()
+	return g
+}
+
+// join tells each Member which keys cycle.
+func (g Group) join() {
+	for _, it := range g.items {
+		if m, ok := it.(Member); ok {
+			m.JoinGroup(g.keys)
+		}
+	}
 }
 
 // WithKeys returns a copy of g using custom cycling bindings. Zero-valued
@@ -164,6 +184,7 @@ func (g Group) WithKeys(k Keys) Group {
 	if k.Prev.Keys() != nil {
 		g.keys.Prev = k.Prev
 	}
+	g.join()
 	return g
 }
 

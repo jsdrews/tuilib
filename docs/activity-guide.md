@@ -462,7 +462,5 @@ a status that never says "working" while the work runs, such as Argo's
 
 ## Examples
 
-- `examples/patterns/activityrecipes`: one shape per tab (observe, sync,
-  refresh, job handle), each small enough to copy.
-- `examples/patterns/activity`: all of them on one screen, with marking and
-  the output console.
+- `examples/liveops`: every shape (observe, sync, refresh, a streamed job, a
+  dropped job) as a verb on one table, with marking and the output console.

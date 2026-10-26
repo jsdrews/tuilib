@@ -80,7 +80,7 @@ tick:
 s.table.SetTitle(fmt.Sprintf("Deployments · %s ago", time.Since(s.poll.LastRefresh()).Round(time.Second)))
 ```
 
-See `examples/patterns/poll`.
+See `examples/liveops`.
 
 ## Row activity
 
@@ -190,5 +190,4 @@ under `SetWindow` activity is inert. `State()`/`Restore` carry it across a
 theme swap.
 
 Full detail: the [row activity guide](../activity-guide.md), and
-`examples/patterns/activityrecipes` (one shape per tab) and
-`examples/patterns/activity`.
+`examples/liveops`, which offers every shape as a verb on one table.

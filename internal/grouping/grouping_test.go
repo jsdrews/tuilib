@@ -4,6 +4,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
+	"github.com/jsdrews/tuilib/pkg/surface"
 )
 
 // lines renders a layout as "# header" and item indices, which is the whole
@@ -113,9 +119,9 @@ func TestJumpGroup(t *testing.T) {
 		{0, 1, 2, nil},
 		{1, 1, 2, nil},
 		{3, 1, 4, nil},
-		{4, 1, 4, nil}, // no next group
+		{4, 1, 0, nil}, // past the last group, wraps to the first
 		{3, -1, 0, nil},
-		{0, -1, 0, nil},
+		{0, -1, 4, nil}, // before the first group, wraps to the last
 		{4, -1, 2, nil},
 		{0, 1, 3, func(i int) bool { return i != 2 }},         // first accepted entry
 		{0, 1, 4, func(i int) bool { return i < 2 || i > 3 }}, // a group with nothing accepted is skipped
@@ -124,6 +130,10 @@ func TestJumpGroup(t *testing.T) {
 		if got := l.JumpGroup(c.from, c.dir, c.ok); got != c.want {
 			t.Errorf("JumpGroup(%d, %d) = %d, want %d", c.from, c.dir, got, c.want)
 		}
+	}
+	narrowed := New([]string{"a", "a", "b"}, func(i int) bool { return i < 2 })
+	if got := narrowed.JumpGroup(1, 1, nil); got != 1 {
+		t.Errorf("a filter left one group, yet JumpGroup moved to %d", got)
 	}
 	flat := New([]string{"", ""}, nil)
 	if got := flat.JumpGroup(0, 1, nil); got != 0 {
@@ -140,5 +150,79 @@ func TestItemNear(t *testing.T) {
 	}
 	if !l.HeaderAbove(1) || New([]string{"", ""}, nil).HeaderAbove(1) {
 		t.Error("HeaderAbove")
+	}
+}
+
+func TestHeaderIsADividerWithTheNameSetIn(t *testing.T) {
+	var s Styles
+	cases := []struct {
+		w    int
+		want string
+	}{
+		{16, "── write ───────"},
+		{Width("write"), "── write ──"},
+		{8, "── wri… "},
+		{4, "────"},
+		{0, ""},
+	}
+	for _, c := range cases {
+		if got := s.Render("write", c.w); got != c.want {
+			t.Errorf("Render(write, %d) = %q, want %q", c.w, got, c.want)
+		}
+		if got := ansi.StringWidth(s.Render("write", c.w)); got != c.w {
+			t.Errorf("Render(write, %d) is %d wide", c.w, got)
+		}
+	}
+	if got := (Styles{Glyph: "┈"}).Render("db", 8); got != "┈┈ db ┈┈" {
+		t.Errorf("custom glyph: %q", got)
+	}
+}
+
+func TestInsetHeaderPutsTheNameInTheLabelColumn(t *testing.T) {
+	s := Styles{Inset: true}
+	for w, want := range map[int]string{
+		16: "  write ────────",
+		8:  "  write ",
+		6:  "  wr… ",
+		2:  "  ",
+	} {
+		if got := s.Render("write", w); got != want {
+			t.Errorf("Render(write, %d) = %q, want %q", w, got, want)
+		}
+	}
+}
+
+func TestOnlyALineBorderJoinsTheRule(t *testing.T) {
+	for _, c := range []struct {
+		s    surface.Surface
+		want bool
+	}{
+		{surface.Outlined, true},
+		{surface.Resolved{}.Overlay().Surface(), true},
+		{surface.Filled, false},
+		{surface.Banded, false},
+		{surface.Elevated, false},
+		{surface.Accented, false},
+	} {
+		if got := Joins(c.s); got != c.want {
+			t.Errorf("Joins(%s) = %v, want %v", c.s.Name, got, c.want)
+		}
+	}
+}
+
+func TestGroupStyleStylesTheNameNotTheRule(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(termenv.Ascii)
+	red := lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	s := Styles{
+		Rule:  lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		Group: func(string) lipgloss.Style { return red },
+	}
+	got := s.Render("write", 12)
+	if !strings.Contains(got, red.Render("write")) {
+		t.Errorf("name not in the group style: %q", got)
+	}
+	if strings.Contains(got, red.Render("──")) || !strings.Contains(got, s.Rule.Render("──")) {
+		t.Errorf("rule not in the rule style: %q", got)
 	}
 }

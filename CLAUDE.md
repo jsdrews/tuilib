@@ -13,8 +13,8 @@ example in `examples/`.
    auto-esc-pop. Your screen declares a `layout.Node` tree in `Layout()`
    and handles its own state in `Update`. Only drop to a bare
    `tea.Model` + manual layout when you genuinely need something outside
-   the shell's shape (rare). See `examples/shell/stack/stack.go` and
-   `examples/shell/layouts/layouts.go`.
+   the shell's shape (rare). See `examples/navigation/stack/stack.go` and
+   `examples/appearance/layouts/layouts.go`.
 
 2. **Describe layout declaratively, not with `m.h - N` math.** Compose
    `layout.VStack` / `HStack` / `ZStack` + `Fixed(n, …)` / `Flex(weight, …)`
@@ -317,7 +317,7 @@ example in `examples/`.
     `OutputKey`. Left to the screens it would be advertised on the one
     screen whose author happened to remember. The hint flips to "close
     output" while the console is open, since the same key does both.
-    See `examples/shell/output` and rule 15.
+    See `examples/processes` and rule 15.
 
 15. **Capture a subprocess with `runner.Capture`, hand it the terminal with
     `runner.Run`.** They are counterparts, not modes of each other.
@@ -339,7 +339,7 @@ example in `examples/`.
     Don't hand-roll the `io.Pipe` + goroutine + `bufio.Scanner` dance any
     more — `runner.Capture` is that pattern, moved into the library and
     given real OS pipes, process-group kills and a bounded channel.
-    `examples/patterns/capture` is the whole screen: three message cases,
+    `examples/processes` matches the three message cases and nothing else:
     no plumbing.
 
 16. **Enter means "open the focused selection."** In multi-pane screens
@@ -353,7 +353,7 @@ example in `examples/`.
     object. This matches the launcher's enter-to-push convention and
     avoids the alternative of overloading per-pane keys (e.g. `>`/`d`
     just to drill in). The pattern's payoff is most visible in
-    `examples/patterns/drilldown` where enter on the cities list loads
+    `examples/navigation/drilldown` where enter on the cities list loads
     detail + shifts focus right, and enter on the focused detail
     pushes the level-3 attribute screen.
 
@@ -389,7 +389,7 @@ example in `examples/`.
     `SetLoading(true)` on refetch so the spinner replaces the previous
     result instead of overlaying it. Theme builders set `SpinnerStyle`
     from `Theme.Accent`; override only when you need a different color.
-    See `examples/patterns/loading/loading.go`.
+    See `examples/liveops`.
 
 18. **Trust the pane to handle long lines.** `pane.Pane` truncates each
     line to the inner width on `SetContent` (ANSI-aware via
@@ -414,11 +414,11 @@ example in `examples/`.
 
     Column truncation is ANSI-aware: `pkg/table` cuts cells via
     `x/ansi.Cut`, so `Column.Width` is the visible cell width — no
-    escape-byte budget to add. The table example's Status column uses
-    `Width: 12` for 10-char status text. (This is a change from the old
-    bubbles/table-based example, which had to pad the Status column to
-    22 to survive non-ANSI-aware truncation in upstream `runewidth`.)
-    See `examples/components/table/table.go` Status column.
+    escape-byte budget to add. The workbench's Health column uses
+    `Width: 11` for its 10-char coloured cells ("● Degraded"). (The old
+    bubbles/table-based example had to pad its Status column to 22 to
+    survive non-ANSI-aware truncation in upstream `runewidth`.) See the
+    Health column in `examples/workbench/workbench.go`.
 
     For URL cells, wrap the visible label with `ansi.Hyperlink(url,
     text)` so shift-click / cmd-click in alacritty/tmux/kitty/iTerm2
@@ -455,7 +455,10 @@ example in `examples/`.
     can reuse them and preserve cursors / queries / counters. Tab-switch
     keys default to `shift+left` / `shift+right` + `1`–`9`; do **not**
     rebind to `tab` / `shift+tab` — those are reserved across the library
-    for inner pane focus cycling. If a tab body pushes a child screen via
+    for inner pane focus cycling. While the active body is capturing keys
+    the digits go to it (a text field must take them), but `shift+←/→`
+    still switch: no field uses them, and a tab whose field takes focus on
+    arrival — a form — would otherwise trap the keyboard. If a tab body pushes a child screen via
     `screen.Push`, the cmd bubbles up through the host into the app stack
     and the host (with its tab pane intact) is preserved underneath. When
     that child later pops with a value, the host's `OnEnter(result)` should
@@ -468,7 +471,7 @@ example in `examples/`.
     still holding the rect it had when last drawn); everything else
     (timers, async fetch results, custom messages) fans out to every body
     so a `tea.Tick` re-arm in an inactive tab keeps streaming. See
-    `examples/shell/tabs`, where the Logs tab keeps appending lines while
+    `examples/navigation/tabs`, where the Logs tab keeps appending lines while
     you're on the Cities or Counter tab.
 
     Clicking a label in the strip switches to that tab. The strip's own
@@ -508,7 +511,8 @@ example in `examples/`.
     messages from rule 20; the modal is heavier and breaks flow. The
     chrome from `theme.Alert()` is intentionally neutral: for an
     error-tinted look, override `ActiveColor` with `t.ErrorBG` (and
-    optionally `OKStyle` foreground with the same) — the component is
+    optionally `OKStyle` foreground with the same, or its background with
+    `t.ErrorFG` text when `Options.Chips` is set) — the component is
     palette-agnostic and the semantics live in the override. For
     dynamic-length messages (subprocess stderr, `%w`-chained errors,
     multi-line API responses) set `Options.Autosize = true`: the modal
@@ -520,7 +524,7 @@ example in `examples/`.
     centers itself inside whatever bounds it gets, so the outer
     `layout.Center(w, h, ...)` wrapper is redundant. Hosting,
     `IsCapturingKeys`, `Help()` composition, and ZStack placement all
-    follow rule 22. See `examples/patterns/modals`.
+    follow rule 22. See `examples/workbench`.
 
 24. **For auto-refresh, use `pkg/poll` + keyed rows.** When data backing a
     view changes over time (k8s deployments, Prefect runs, REST endpoints),
@@ -548,7 +552,7 @@ example in `examples/`.
     for transient refresh feedback ("refreshed 14 deployments"); the
     statusbar auto-clears so it doesn't accumulate. For a persistent
     "last refreshed Xs ago" indicator, mutate the component's title via
-    `SetTitle` from a periodic UI tick — see `examples/patterns/poll`.
+    `SetTitle` from a periodic UI tick — see `examples/liveops`.
 
 25. **Reserve arrows + hjkl for scroll, library-wide.** Every component
     that scrolls in a given axis uses the same bindings on that axis,
@@ -638,7 +642,7 @@ example in `examples/`.
     Rebuild the Group in `SetTheme` over the same field addresses and
     restore the index with `SetIndex` — the components behind those
     addresses are replaced, but the addresses are stable, so the Group
-    keeps pointing at the right panes. See `examples/patterns/focus`.
+    keeps pointing at the right panes. See `examples/workbench`.
 
     **A filterable component has two focusable regions behind one
     `Focusable`** — its filter and its body — and the two must stay
@@ -670,8 +674,8 @@ example in `examples/`.
     `Group.Update` also declines to cycle while `IsCapturingKeys()` is
     true. Tabbing out of a half-typed filter would strand it, and
     `pkg/table` binds tab to complete a `key:value` term — leave the
-    field with enter or esc, then cycle. `examples/patterns/filters` is the
-    two-filterable-pane screen these rules exist for.
+    field with enter or esc, then cycle. `examples/workbench`, with four
+    filterable panes on one screen, is the shape these rules exist for.
 
 28. **Mouse support comes from rects, not from markers.** `pkg/layout`
     hands every node a `geom.Rect` — absolute position *and* size — and
@@ -853,7 +857,7 @@ example in `examples/`.
     Pagination is a wire protocol, not a UI. The user scrolls; windows
     arrive under them. Don't add `n`/`p` page keys — they collide with
     rule 25's reservations and impose a second navigation model on a
-    component that already scrolls. See `examples/patterns/remote`.
+    component that already scrolls. See `examples/remotedata/records`.
 
 32. **For multi-select, set `Options.Markable` and read `Selection()`.**
     `pkg/list`, `pkg/table` and `pkg/tree` carry a marked set the user
@@ -920,7 +924,7 @@ example in `examples/`.
     `pkg/inspector` has no marking — it is a record viewer, and there is
     no verb that acts on a set of its fields.
 
-    See `examples/patterns/multiselect` and rule 8: the verbs that act on a
+    See `examples/workbench` and rule 8: the verbs that act on a
     selection belong in an `action.Set`, not on letter keys. (Rules 30 and
     31 are reserved by `docs/actions.md` for `pkg/action` and the reserved-
     key table, both shipped but not yet written up here.)
@@ -1109,9 +1113,8 @@ example in `examples/`.
     `Expect`, the screen-side generation counters) moves over call by call:
     see "Migrating from the first API" in `docs/activity-guide.md`.
 
-    See `examples/patterns/activityrecipes` (one shape per tab, each small
-    enough to copy), `examples/patterns/activity` (all of it on one screen), and
-    `docs/activity-v2.md`.
+    See `examples/liveops` (every shape as a verb on one table, with marking
+    and the output console) and `docs/activity-v2.md`.
 
 
 34. **Choose the component by the data's shape.** When remote data may
@@ -1138,11 +1141,17 @@ example in `examples/`.
     `SetGrowing(true)`: the source polls every `Follow`, and the view
     pins the newest item and counts what arrives once the user scrolls
     away.
-    `examples/patterns/eventlog` is the whole Seekable loop,
-    `examples/patterns/anchored` the Anchored one (`Query.FromAnchor`
+    Several bound views can share a screen, or sit in `pkg/tab` bodies that
+    all receive the same messages: `ViewportChangedMsg` and
+    `QueryChangedMsg` carry the view's `Token`, and a binding acts only on
+    its own. A screen driving `pkg/source` by hand over two views must check
+    `Token` the same way, or each view fetches what the other scrolled to.
+    `examples/remotedata` holds four bound views behind one tab strip.
+    `examples/remotedata/events` is the whole Seekable loop,
+    `examples/remotedata/anchored` the Anchored one (`Query.FromAnchor`
     starts a view; every other request extends an edge, and a search hit
     re-anchors with `log.Reanchor()` + `src.SetAnchor(source.At(hit))`),
-    and `examples/patterns/podlogs` the Streamed one.
+    and `examples/remotedata/podlogs` the Streamed one.
 
     - **If it fits in one request, don't page it**: a `textview`, or
       `SetRows`. Paging machinery is for data that doesn't fit.
@@ -1172,10 +1181,17 @@ example in `examples/`.
     Every pane-owning component takes `Options.Surface`, and the builders
     set it to the right form: the surface itself for panes, lists, tables
     and the other row components; its **field form** for input, filter and
-    toggle, which fits the three-row slots screens give them; its **overlay
+    toggle, which fits the three-row slots screens give them — a form's
+    fields too, and on a titled form's frame the field form *on the
+    overlay* (`OverlayField()`), a card a step lighter than the frame; its **overlay
     form** for confirm, alert, the menus and a titled form's frame — anything
     drawn over a screen — which is always filled so a modal covers what is
-    under it, and draws its edge on that fill, so no dark rim shows around it. Don't set `Surface` yourself, except to
+    under it, and draws its edge on that fill, so no dark rim shows around it.
+    On a filled surface the builders also draw buttons — toggle sides, modal
+    choices, a form's submit — as chips (`Options.Chips`, `form.Styles.Chips`):
+    the `Button` tone, the chosen one in `Accent`, the same width as
+    `[ label ]` so nothing moves. Under a line border they stay bracketed
+    text. Don't set `Surface` yourself, except to
     pin one component to another surface:
 
     ```go
@@ -1190,7 +1206,7 @@ example in `examples/`.
     A surface is data, so a custom one is a struct literal: start from a
     built-in, copy its `Rings` before changing one, and offer it in
     `Options.Surfaces` beside the built-ins. Colours are roles, never
-    literals, so it works in every palette. `examples/shell/surfaces` defines
+    literals, so it works in every palette. `examples/appearance/look` defines
     Ruled and Lipped this way.
 
     Outlined is the default and draws byte for byte what tuilib drew before
@@ -1225,23 +1241,28 @@ example in `examples/`.
     - Items without a group go **last, under `other`**, merged with any
       group named `other`.
     - The cursor, clicks, the wheel and the half-page keys skip headers.
-      In `pkg/menu`, **`[` / `]`** jump to the first item of the previous or
-      next group; **not `tab`**, which cycles focus (rule 27), because a
-      menu sits beside other components. The action menu jumps with
-      **`tab` / `shift+tab`**: it is modal, so there are no panes behind it
-      to cycle while it is up.
+      **`tab` / `shift+tab`** and **`]` / `[`** jump to the first item of the
+      next or previous group, in both menus, wrapping past either end. A `pkg/menu` inside a
+      `focus.Group` gives up `tab` / `shift+tab`, which cycle focus there
+      (rule 27), and jumps on `[` / `]` alone: `focus.NewGroup` hands each
+      `focus.Member` the cycling keys, because the screen forwards every key
+      to the focused component as well as to the Group.
     - The menu's filter matches the **label and the group**, never the
       description. A group with nothing left loses its header, but a menu
       that started grouped keeps its headers when the filter narrows it to
       one group, so the labels still read beside their group.
 
-    `HeaderStyle` styles every header. `GroupStyle func(group) lipgloss.Style`
-    styles each by its group (a write group in `t.Warning`). Rows under
-    a header never take a group style. The shell rebuilds the action menu's
+    A header is a thin divider with the group's name set into it
+    (`── write ────`), drawn once in `internal/grouping` for both menus: the
+    surface's divider glyph in `RuleStyle`, the name in `HeaderStyle`. On a
+    card, with no line border for the rule to meet, the name sits in the
+    label column and the rule trails it (`  write ────`).
+    `GroupStyle func(group) lipgloss.Style` styles each name by its group (a
+    write group in `t.Warning`). Rows under a header never take a group style. The shell rebuilds the action menu's
     options from the theme on every swap and drops a `GroupStyle` passed in
     `Options.Actions`; set `app.Options.ActionGroupStyle(group, t)` instead,
     which is called against each new theme. Likewise `app.Options.Glyphs`
-    rides on every theme the shell composes, so its own overlays match. See `examples/components/menu` and
+    rides on every theme the shell composes, so its own overlays match. See `examples/navigation` and
     `docs/components/menu.md`.
 
 ## Anti-patterns
@@ -1299,7 +1320,7 @@ example in `examples/`.
   width, no escape-byte padding), pins the header at line 0 while still
   scrolling horizontally with the body, and mirrors `pkg/list`'s
   ergonomics (cursor, filterable, `g`/`G`/`ctrl+u/d` nav, `SetLoading`,
-  `SetTheme`-friendly setters). See `examples/components/table/table.go`.
+  `SetTheme`-friendly setters). See `examples/workbench`.
 - **Don't roll your own confirm modal.** `pkg/confirm` already handles
   selection movement, y/n/esc shortcuts, message-driven results, and
   theme-aware styling. Hand-rolling a `pane.Pane` + `toggle.Model` +
@@ -1610,23 +1631,30 @@ path.
 
 ## Where to learn more
 
-- **Run the launcher:** `task examples`. Every demo is hosted there as a
-  child screen, grouped the way the directories are. Each example lives at
-  `examples/<area>/<name>/<name>.go` as a package exposing
-  `New(theme.Theme) screen.Screen`, where `<area>` is one of:
+- **Run the launcher:** `task examples`. The examples are six showcase
+  screens, each putting many features on one screen so a change that breaks
+  an older one is visible at a glance; the explanation of one component at a
+  time belongs in the component docs. Each is a package exposing
+  `New(theme.Theme) screen.Screen`, and the tabbed ones keep each tab in its
+  own sub-package.
 
-  | Area | Holds |
+  | Example | Holds |
   |---|---|
-  | `components/` | one demo per UI component, in isolation — `pane`, `list`, `menu`, `table`, `tree`, `inspector`, `textview`, `logview`, `form`, `metrics` |
-  | `shell/` | what `pkg/app` owns — `layouts`, `stack`, `tabs`, `status`, `output`, `themes`, `surfaces`, `prescreen` |
-  | `patterns/` | composition idioms — `focus`, `filters`, `mouse`, `loading`, `drilldown`, `poll`, `remote`, `actions`, `activity`, `multiselect`, `treeactions`, `modals`, `runner`, `capture` |
+  | `workbench/` | every row component over one dataset — filterable, sortable, markable table; markable tree; markable list; inspector detail; grouped menu — in one `focus.Group`, with the action menu, the confirm and alert modals and statusbar notices |
+  | `liveops/` | everything that changes while you watch — row activity against demoapi with one verb per operation shape, `pkg/metrics` cells, an events log, one `pkg/poll` driving all three panes, per-pane loading |
+  | `remotedata/` | data too large for one request, one `pkg/tab` tab per shape (rule 34): `records` (Seekable table), `events` (Seekable, Growing eventlog, live and finished), `anchored` (search_after), `podlogs` (Streamed) |
+  | `processes/` | running commands three ways from one grouped menu — `runner.Capture` into a searchable logview, `runner.Run` / `RunWithNotice` handing the terminal over, statusbar notices the console keeps — with the `OutputClosed` guard |
+  | `navigation/` | a grouped, filterable `pkg/menu` home whose navigation group opens `stack`, `prescreen`, `drilldown` and `tabs`, and whose other groups exercise the menu itself |
+  | `appearance/` | `look` — palette, surface and glyph pickers redrawing the app live beside what each component kind is handed (custom surfaces Ruled and Lipped are defined there) — then tabs for `form`, `textview`, `pane` and `layouts` |
 
-  When you add a demo, pick the area by what a reader is looking for, not
-  by which package it happens to import: a screen that exists to show one
-  component's options is a component demo, one that shows two components
-  cooperating is a pattern.
-- **Closest examples first:** `examples/shell/stack/stack.go` for nav + data
-  flow, `examples/shell/layouts/layouts.go` for layout primitives across
+  When something new needs showing, add it to the showcase whose subject it
+  belongs to rather than a new example.
+
+  A showcase screen's own tests (`examples/workbench/workbench_test.go`)
+  assert what its package comment promises, so a showcase that quietly stops
+  showing something fails rather than reading as a broken feature.
+- **Closest examples first:** `examples/navigation/stack/stack.go` for nav + data
+  flow, `examples/appearance/layouts/layouts.go` for layout primitives across
   five sub-screens. Copy one and strip what you don't need.
 - **Launcher pattern:** `examples/launcher/main.go` shows how to compose
   multiple screens into a single app — a filterable menu pushing the
@@ -1709,7 +1737,7 @@ path.
   never the client's fetch time; when the line text already carries the
   application's timestamp, leave `Mark` empty rather than show two. `logview` has
   the opt-in counterpart, `Options.LineNumbers`, which skips marker
-  lines. See `examples/patterns/eventlog` and `theme.Eventlog()`.
+  lines. See `examples/remotedata/events` and `theme.Eventlog()`.
 - **Resuming a coarse-timestamp stream:** `pkg/resume` is stern's
   algorithm for pod logs with no I/O — `Observe`, `Resume` → `(since,
   skip)`, `Drop`, `Reconnected`, and `OlderCut` / `ObserveOlder` for
@@ -1750,18 +1778,18 @@ path.
   imports `pkg/query` (and `internal/tick` for its timers) and nothing
   else from tuilib —
   deliberately not `pkg/table`, so the dependency points one way and the
-  screen does the translating. See rule 29 and `examples/patterns/remote`.
+  screen does the translating. See rule 29 and `examples/remotedata/records`.
 - **Focus composition:** `pkg/focus` is `Group` (ordered focusables,
   cycling, click grants), the `Focusable` interface every component
   satisfies, and the optional `Capturer` that answers rule 5. Components
   identify themselves in focus requests by `Token` rather than by
   pointer — bubbletea's value receiver on `Update` means a component
-  cannot name its own address. See rule 27 and `examples/patterns/focus`.
+  cannot name its own address. See rule 27 and `examples/workbench`.
 - **Mouse:** `pkg/mouse` is the `Msg` components actually handle
   (bubbletea's event plus a resolved `Clicks` count) and the `Tracker`
   that counts rapid repeat presses in the same cell. The app shell owns
   one tracker, so no component carries mouse state or a threshold. See
-  rule 28 and `examples/patterns/mouse`; run the launcher to try it, since
+  rule 28 and `examples/workbench`; run the launcher to try it, since
   `app.Options.Mouse` is set there for the whole suite.
 - **Help footer + key overlay:** the statusbar's left slot shows a
   `? help` affordance (and, with `app.Options.HelpVerbose`, as many of
@@ -1799,16 +1827,16 @@ path.
 - **Statusbar messages from a screen:** `app.Info(s)` / `app.Error(s)` /
   `app.ClearStatus()` return `tea.Cmd`s that the shell intercepts and
   paints into the statusbar's center slot. Auto-clears on the next
-  `tea.KeyMsg`. See `examples/shell/status` and rule 20.
+  `tea.KeyMsg`. See `examples/workbench` and rule 20.
 - **Confirm modal:** `pkg/confirm` is a yes/no dialog meant to live in a
   ZStack overlay. Resolves via `confirm.ConfirmedMsg` / `confirm.CancelledMsg`
   as `tea.Cmd`s the parent matches in its own `Update`. See
-  `examples/patterns/modals` and rule 22.
+  `examples/workbench` and rule 22.
 - **Alert modal:** `pkg/alert` is the acknowledgement counterpart to
   confirm — a single OK button, `alert.DismissedMsg` result, identical
   hosting pattern. Override `ActiveColor` with `t.ErrorBG` for an
   error-tinted look. Use it for "stop and acknowledge" feedback; prefer
-  `app.Info` / `app.Error` for passive notices. See `examples/patterns/modals`
+  `app.Info` / `app.Error` for passive notices. See `examples/workbench`
   and rule 23.
 - **Atomic screen swap:** `screen.Replace(s)` swaps the active top of the
   stack in one tick. Use it for "fresh instance of this view" (reset
@@ -1832,7 +1860,7 @@ path.
   in `internal/componenttest/marking_test.go` rather than in any one
   package, for the reason the "don't test shared behaviour in one
   component's package" anti-pattern gives. See rule 32,
-  `examples/patterns/multiselect`, and `docs/actions.md` decisions 19-20.
+  `examples/workbench`, and `docs/actions.md` decisions 19-20.
 - **Keyed items / rows:** `pkg/list` (`SetKeyedItems` + `KeyedItem{Key,
   Display}` + `SelectedKey`) and `pkg/table` (`SetKeyedRows` +
   `KeyedRow{Key, Cells}` + `SelectedKey`) are the auto-refresh primitive.
@@ -1841,7 +1869,7 @@ path.
   the previous-cursor index is the fallback only when the key is gone.
   `SetItems`/`SetRows` clear any keys, so reach for the keyed variant
   consistently across a screen — mixing them resets the keys mid-flight.
-  Pair with `pkg/poll` for the cadence; see `examples/patterns/poll`.
+  Pair with `pkg/poll` for the cadence; see `examples/liveops`.
 - **Table component:** `pkg/table` is the cursor-driven tabular companion
   to `pkg/list`. `Column{Title, Width, Align, Sortable, Less, Flex,
   MaxWidth}` declares the layout; rows are `[]string` cells. The
@@ -1885,7 +1913,7 @@ path.
   (asc/desc indicator ▲/▼ renders after the active column's title).
   Default comparator is case-insensitive on the ANSI-stripped text;
   override with `Column.Less func(a, b string) bool` for numeric, date,
-  or unit-aware columns ("8.3M") — see the table example's `popLess`.
+  or unit-aware columns ("8.3M") — see `healthLess` in `examples/workbench`.
   The sort comes back with everything else in `State()`/`Restore` across
   a `SetTheme` rebuild (rule 4). For
   colored cells inside a row, prefer `pkg/ansi.CellColor` over
@@ -1931,13 +1959,13 @@ path.
   reports the logical range on screen, which is the signal to fetch.
   `SetRows` / `SetKeyedRows` leave windowed mode, and under a remote mode
   count as the answer to the committed query. See
-  `examples/components/table` and `theme.Table()`.
+  `examples/workbench` and `theme.Table()`.
 - **Menu component:** `pkg/menu` is a grouped, filterable list of things to
   open. Group headers, `[`/`]` jumps and `ChosenMsg` are described in rule 36.
   Its group layout is `internal/grouping`, which the action menu shares, so
   a change to the header rules belongs there and nowhere else. Don't confuse
   it with `pkg/action`'s `Menu`, the popup over a screen's verbs. See
-  `examples/components/menu` and `theme.Menu()`.
+  `examples/navigation` and `theme.Menu()`.
 - **TextView component:** `pkg/textview` is the read-static-text
   counterpart to `pkg/logview`. Feed it a document via `Options.Content`
   (or `SetContent(s)` at runtime — replaces + resets scroll to top).
@@ -1951,7 +1979,7 @@ path.
   reach for `pkg/logview`. Same nav vocabulary as list/table/logview
   (`g`/`G` bounds, `ctrl+u`/`ctrl+d` half-page, `↑↓`/`j`/`k` line —
   rule 25). Content, wrap, search and scroll come back across a
-  `SetTheme` rebuild with `State()`/`Restore` (rule 4). See `examples/components/textview` and `theme.TextView()`.
+  `SetTheme` rebuild with `State()`/`Restore` (rule 4). See `examples/appearance/textview` and `theme.TextView()`.
 - **Inspector component:** `pkg/inspector` is a two-column label/value
   viewer for structured records — k8s manifests, REST responses, Prefect
   run details. `Field{Label, Value, Children}` composes fields by
@@ -1970,7 +1998,7 @@ path.
   the record while preserving expansion state by row path and pinning
   the cursor to its previous path when it survives the swap — the
   primitive that auto-refresh will lean on. Carry it across a `SetTheme`
-  rebuild with `State()`/`Restore` (rule 4). See `examples/components/inspector` and
+  rebuild with `State()`/`Restore` (rule 4). See `examples/workbench` and
   `theme.Inspector()`.
 - **Inline metrics:** `pkg/metrics` is a small set of cell-fitting renderers
   for the monitoring shape — `Badge(ok, warn, down)` for status-count
@@ -1985,7 +2013,7 @@ path.
   non-severity colorization (e.g. CPU usage that should always be blue
   when low and only flush red at saturation), use `BarStyled` /
   `SparkStyled` with an explicit ANSI palette index. See
-  `examples/components/metrics` and rule 24 (auto-refresh).
+  `examples/liveops` and rule 24 (auto-refresh).
 - **Row activity:** `pkg/activity` is the per-row spinner and status label.
   A `Set` holds one map of observed state, replaced wholesale by each
   observation, plus the claims operations make (`Dispatch` / `Done`, with a
@@ -2017,7 +2045,7 @@ path.
   which rule 6's fan-out makes reachable — so it is guarded here rather
   than left to every caller. Pair with the keyed-row APIs on `pkg/list` /
   `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor
-  + expansion state survive every swap. See `examples/patterns/poll` and
+  + expansion state survive every swap. See `examples/liveops` and
   rule 24.
 - **Output console:** `pkg/output` is the app-wide log — `Record` (one
   flat line's worth of structure: time, level, source, text, head/body,
@@ -2041,7 +2069,7 @@ path.
   `pkg/theme` for `SetTheme`, so a `Theme` method returning
   `output.Options` would close an import cycle. Inverting the dependency
   is what keeps the screen in its own package and testable without an app
-  shell. See `examples/shell/output` and rules 14 and 15.
+  shell. See `examples/processes` and rules 14 and 15.
 - **Capturing subprocesses:** `runner.Capture(cmd)` /
   `runner.CaptureWith(runner.CaptureOptions{Cmd, Label})` run a
   subprocess without suspending the TUI, posting `CaptureStarted`, a
