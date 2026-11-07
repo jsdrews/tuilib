@@ -49,6 +49,21 @@ tasks:
       - task: test
       - task: test:integration
 
+  changelog:
+    desc: Check CHANGELOG.md's Unreleased entries, and show the version and notes they would release
+    cmds:
+      - go run ./internal/changelog/cmd/changelog check
+      - |
+        latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+        next="$(go run ./internal/changelog/cmd/changelog next "$latest")"
+        if [ -z "$next" ]; then
+          echo "Unreleased is empty: the next push to main releases on the commit-message bump, with generated notes."
+        else
+          echo "Next release: $latest → $next"
+          echo
+          go run ./internal/changelog/cmd/changelog notes
+        fi
+
   tidy:
     desc: go mod tidy
     cmds:

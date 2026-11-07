@@ -83,3 +83,11 @@ is written for people and coding agents alike.
 - **Stream other producers through a chained `tea.Cmd`**: one goroutine owns
   the source, a command reads one item, `Update` re-dispatches. No goroutine
   touches a model.
+
+## Releases
+
+- **Record every change a consumer can observe in `CHANGELOG.md`**, under
+  `## Unreleased`, in the same change. Breaking entries carry a
+  `**Migration:**` with before/after code. Deprecate renames with
+  `//go:fix inline` so `go fix ./...` migrates callers. The release job picks
+  the version from the entries; never write a version heading.
