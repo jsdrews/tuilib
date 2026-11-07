@@ -1,15 +1,29 @@
 # GitHub Actions CI for tuilib.
 #
 # On every push / PR: build, vet, test.
-# On push to main (typically a merged PR): auto-tag the commit with the
-# next semver and publish a GitHub release whose notes are generated from
-# the PRs merged since the previous tag (grouped by label per
-# .github/release.yml):
-#   - patch bump if the commit message (which includes the PR title and,
-#     for default merge commits, the source branch name) matches
-#     /\b(bug|bugfix|fix)\b/i
+# On push to main (typically a merged PR): auto-tag with the next semver
+# and publish a GitHub release.
+#
+# When CHANGELOG.md's Unreleased section has entries, it decides both:
+#   - the bump, per the table in CHANGELOG.md (Fixed alone is a patch;
+#     Breaking before v1, Deprecated, Added or Changed is a minor)
+#   - the notes, which lead the release, followed by GitHub's generated
+#     notes (PRs merged since the previous tag, grouped per
+#     .github/release.yml)
+# and the job commits CHANGELOG.md with those entries moved under the new
+# version's heading, then tags that commit, so the tag's own CHANGELOG.md
+# names its version. A push made with GITHUB_TOKEN triggers no workflow,
+# so that commit does not release itself.
+#
+# When Unreleased is empty (docs, examples, internals), the commit message
+# decides instead, as before:
+#   - patch bump if it (which includes the PR title and, for default merge
+#     commits, the source branch name) matches /\b(bug|bugfix|fix)\b/i
 #   - minor bump otherwise
 #   - starts at v0.1.0 if no tags exist
+#
+# A consumer upgrades by reading CHANGELOG.md between its version and the
+# new one; see the Upgrading section there.
 # Tags are emitted as vX.Y.Z (Go's module system requires the "v" prefix
 # for `go get`). Pre-existing bare-semver tags are still considered when
 # computing the next version.
@@ -33,6 +47,7 @@ jobs:
         with:
           go-version: '1.25'
       - run: go build ./...
+      - run: go run ./internal/changelog/cmd/changelog check
       - run: go vet -tags integration ./...
       - run: go test ./...
       - run: go test -tags integration ./internal/integration/...
@@ -41,10 +56,16 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Two pushes in quick succession would otherwise both read the same
+    # latest tag and race to create the same next one.
+    concurrency: release
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
       - name: Tag and release
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
@@ -58,9 +79,26 @@ jobs:
           # picking the previous version. --sort=-v:refname ignores a
           # leading 'v', so the comparison is apples-to-apples.
           LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          CHANGELOG="go run ./internal/changelog/cmd/changelog"
+          NOTES=""
+          # Outside the if, so a failure here stops the job (set -e) instead
+          # of quietly falling back to the commit-message bump.
+          FROM_CHANGELOG=""
+          if [ -n "$LATEST" ]; then
+            FROM_CHANGELOG=$($CHANGELOG next "$LATEST")
+          fi
           if [ -z "$LATEST" ]; then
             NEXT="v0.1.0"
             BUMP="initial"
+          elif [ -n "$FROM_CHANGELOG" ]; then
+            NEXT="$FROM_CHANGELOG"
+            BUMP="changelog"
+            NOTES=$(mktemp)
+            $CHANGELOG notes > "$NOTES"
+            $CHANGELOG release "$NEXT" "$(date -u +%Y-%m-%d)"
+            git add CHANGELOG.md
+            git commit -m "Release $NEXT [skip ci]"
+            git push origin HEAD:main
           else
             VERSION=${LATEST#v}
             MAJOR=${VERSION%%.*}
@@ -80,6 +118,10 @@ jobs:
           echo "Previous: ${LATEST:-<none>}  Bump: $BUMP  Next: $NEXT"
           git tag -a "$NEXT" -m "Release $NEXT"
           git push origin "$NEXT"
-          gh release create "$NEXT" \
-            --title "$NEXT" \
-            --generate-notes
+          # --notes-file is prepended to the generated notes, so the
+          # changelog entries lead and the PR list and compare link follow.
+          if [ -n "$NOTES" ]; then
+            gh release create "$NEXT" --title "$NEXT" --generate-notes --notes-file "$NOTES"
+          else
+            gh release create "$NEXT" --title "$NEXT" --generate-notes
+          fi

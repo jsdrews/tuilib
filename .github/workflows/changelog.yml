@@ -1,0 +1,56 @@
+# Fails a PR that changes library code without a CHANGELOG.md entry.
+#
+# CHANGELOG.md is what a consumer upgrades from and what the release job
+# publishes, so a change missing from it reaches downstream apps with no
+# notice and, if it breaks them, no migration. Library code is any non-test
+# Go file under pkg/ or internal/, since internal packages draw and route
+# for the public ones; the test helpers and this tooling are excluded.
+#
+# A change no consumer can observe (a refactor, a test, a comment) takes the
+# skip-changelog label, which also keeps it out of the generated notes. The
+# labeled/unlabeled triggers re-run the check when the label changes.
+#
+# Direct pushes to main skip this check, so an entry written there is the
+# author's job.
+
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  entry:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-changelog') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require an entry for library changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -eu
+          CHANGED=$(git diff --name-only "$BASE...$HEAD")
+          LIBRARY=$(echo "$CHANGED" \
+            | grep -E '^(pkg|internal)/.*\.go$' \
+            | grep -v '_test\.go$' \
+            | grep -Ev '^internal/(changelog|componenttest|cmdtest|integration)/' \
+            || true)
+          if [ -z "$LIBRARY" ]; then
+            echo "No library code changed."
+            exit 0
+          fi
+          if echo "$CHANGED" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md updated."
+            exit 0
+          fi
+          echo "::error file=CHANGELOG.md::Library code changed with no CHANGELOG.md entry. Add one under '## Unreleased' (see 'Writing entries' there), or label the PR skip-changelog if no consumer can observe the change."
+          echo "Changed library files:"
+          echo "$LIBRARY"
+          exit 1

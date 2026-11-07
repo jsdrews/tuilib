@@ -1265,6 +1265,49 @@ example in `examples/`.
     rides on every theme the shell composes, so its own overlays match. See `examples/navigation` and
     `docs/components/menu.md`.
 
+37. **Record every change a consumer can observe in `CHANGELOG.md`, in the
+    same change.** Apps built on tuilib upgrade by reading `CHANGELOG.md`
+    between their version and the new one. It is also the release notes,
+    so an unrecorded change reaches them with no notice and, if it breaks
+    them, no way forward. Write the entry under `## Unreleased` and file it
+    in one section:
+
+    - `### Breaking`: the consumer must change code (a removal, rename,
+      changed signature, or a behavior they have to adjust to). Each entry
+      gets its own `####` heading naming the symbol, a sentence on why, and
+      a `**Migration:**` block with before/after code an agent can apply
+      without reading the diff.
+    - `### Deprecated`: an old name kept working beside its replacement.
+    - `### Added`, `### Changed` (behavior, no code change), `### Fixed`:
+      bullets naming the symbol.
+
+    **Never write a version heading.** The release job reads Unreleased to
+    pick the bump (Fixed alone is a patch; anything else is a minor before
+    v1; Breaking is a major from v1), publishes the entries as the release
+    notes, and moves them under the version it tags.
+
+    **Deprecate before you break, when Go can migrate it.** Keep a renamed
+    function or constant as a forwarding wrapper marked for inlining:
+
+    ```go
+    // Deprecated: use Bar.
+    //
+    //go:fix inline
+    func Foo(n int) int { return Bar(n) }
+    ```
+
+    `go fix ./...` (Go 1.26+) rewrites every caller, so the entry goes
+    under Deprecated, saying `go:fix inline`, and the removal is a Breaking
+    entry in a later release. A struct field or a behavior can't be
+    inlined, so it goes straight to Breaking with a migration.
+
+    `go run ./internal/changelog/cmd/changelog check` (also run by `go
+    test` and CI) enforces the format. The Changelog workflow fails a PR
+    that changes non-test code under `pkg/` or `internal/` without touching
+    the file. Label a PR `skip-changelog` only when no consumer can observe
+    the change: a refactor, a test, a comment. `task changelog` shows the
+    version and notes the next release would carry.
+
 ## Anti-patterns
 
 - **Don't assume a one-cell border.** A filled surface's edge is deeper

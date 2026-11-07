@@ -440,6 +440,20 @@ The integration tests (`internal/integration`) drive whole screens against
 `demoapi` on real timers, so they sit behind a build tag to keep `go test ./...`
 fast. Run them with `task test:integration` or
 `go test -tags integration ./internal/integration/...`; `task check` runs
-everything. On merge to `master`, the release job auto-tags
-with a semver bump: patch if `bug`/`bugfix`/`fix` appears in the branch name
-or merge-commit message, minor otherwise. Starts at `0.1.0`, no `v` prefix.
+everything.
+
+On every push to `main` the release job tags a `vX.Y.Z` release. When
+`CHANGELOG.md` has entries under `## Unreleased`, they choose the bump
+(`Fixed` alone is a patch, anything else a minor before v1), become the
+release notes, and are moved under the new version's heading. With no
+entries it falls back to a patch when `bug`/`bugfix`/`fix` is in the commit
+message, and a minor otherwise. `task changelog` previews the next release.
+The Changelog workflow fails a PR that changes library code without an entry,
+unless it is labeled `skip-changelog`.
+
+## Upgrading
+
+[`CHANGELOG.md`](CHANGELOG.md) records every change to the public API,
+newest first, and its Upgrading section is the procedure: read from your
+version up to the new one, apply each Breaking entry's migration oldest
+first, then run `go fix ./...` to inline deprecated names.
