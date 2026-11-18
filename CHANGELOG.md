@@ -60,6 +60,8 @@ a foreground for good outcomes.``
 
 ## Unreleased
 
+## v0.46.0 - 2026-11-18
+
 ### Breaking
 
 #### The default surface is `surface.Filled`, not `surface.Outlined`
