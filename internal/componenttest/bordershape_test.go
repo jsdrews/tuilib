@@ -196,10 +196,10 @@ func TestThemeOwnsOverlayBorderShape(t *testing.T) {
 	}
 }
 
-// TestFormFieldsTakeThemeBorderShape covers the gap that motivated this pass:
-// a form's field borders were hardcoded and unreachable, so a theme could not
-// restyle them by any means at all.
-func TestFormFieldsTakeThemeBorderShape(t *testing.T) {
+// TestFormFrameTakesThemeBorderShape: a form is one frame drawn in the
+// theme's overlay shape, and its fields draw no borders of their own — a box
+// per field is what the redesign removed.
+func TestFormFrameTakesThemeBorderShape(t *testing.T) {
 	th := shapeTheme()
 	o := th.Form()
 	o.Fields = []form.Field{
@@ -212,10 +212,12 @@ func TestFormFieldsTakeThemeBorderShape(t *testing.T) {
 	m.SetRect(geom.New(0, 0, 40, 22))
 
 	view := ansi.Strip(m.View())
-	if n := strings.Count(view, componentCorner); n != len(o.Fields) {
-		t.Errorf("form drew %d themed field corners, want %d\n%s", n, len(o.Fields), view)
+	corner := th.Surface.Overlay().Surface()
+	shape, _ := corner.Lined()
+	if n := strings.Count(view, shape.TopLeft); n != 1 {
+		t.Errorf("form drew %d frames in the theme's overlay shape, want 1\n%s", n, view)
 	}
-	if strings.Contains(view, "┌") || strings.Contains(view, "┏") {
-		t.Errorf("a form field ignored the theme and drew its own shape:\n%s", view)
+	if strings.Contains(view, "┌") || strings.Contains(view, componentCorner) {
+		t.Errorf("a form field drew a border of its own:\n%s", view)
 	}
 }

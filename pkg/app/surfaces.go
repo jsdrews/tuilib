@@ -26,12 +26,16 @@ type axes struct {
 	caps     surface.Caps
 	glyphs   glyph.Set
 	theme    theme.Theme
+	// implicit is true when the app named no surfaces and got the default.
+	// Nobody chose it, so falling back from it is not worth a console note.
+	implicit bool
 }
 
 func newAxes(opts Options) *axes {
 	a := &axes{palettes: opts.Palettes, surfaces: opts.Surfaces, glyphs: opts.Glyphs}
 	if len(a.surfaces) == 0 {
-		a.surfaces = []surface.Surface{surface.Outlined}
+		a.surfaces = []surface.Surface{surface.Filled}
+		a.implicit = true
 	}
 	var cfg config.Config
 	if !opts.SkipConfig {
@@ -149,7 +153,7 @@ func (a *axes) selectSurface(name string) bool {
 // fallbackNote says why the chosen surface isn't the one drawn, or "".
 func (a *axes) fallbackNote() string {
 	asked, why, ok := a.theme.Surface.FellBack()
-	if !ok {
+	if !ok || a.implicit {
 		return ""
 	}
 	return "surface " + asked + " → " + a.theme.Surface.Name() + " (" + why + ")"

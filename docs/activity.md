@@ -272,8 +272,8 @@ worker-pool                              ⣾ running
 Not a prefix: the leading cells are spoken for (list's gutter is two cells,
 three with marking; the tree's is indent plus disclosure glyph), and pushing
 rows sideways when a spinner appears is exactly the reflow that keeps
-`pkg/form` drawing its validation errors on the border rather than under the
-field. When the row text and the badge cannot both fit, the **row text
+`pkg/form` drawing its validation errors on the label row rather than under
+the field. When the row text and the badge cannot both fit, the **row text
 truncates and the badge survives** — the badge is the news. The badge is itself
 capped at half the width, so a pathological label cannot swallow the row
 entirely.

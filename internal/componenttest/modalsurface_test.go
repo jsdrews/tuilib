@@ -47,9 +47,9 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 	// cursorFirst names the modals whose first body row is their cursor, which
 	// a filled surface paints in its selection band rather than the fill.
 	cursorFirst := map[string]bool{"action menu": true}
-	// cards names the modals whose body holds cards of its own: a titled
-	// form's fields, a step lighter than its frame (held by
-	// TestFormFieldsAreCardsOnWhatTheySitOn).
+	// cards names the modals whose body holds cards of its own: a form's
+	// wells, a step lighter than its frame (held by
+	// TestFormWellsAreAStepAboveTheCard).
 	cards := map[string]bool{"titled form": true}
 	centered := func(mw, mh int, c layout.Sizer) (string, geom.Rect) {
 		frame := layout.ZStack(
@@ -80,10 +80,12 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 		}},
 		{"titled form", func(th theme.Theme) (string, geom.Rect) {
 			o := th.Form()
-			o.Title = "New user"
+			o.Title, o.Modal, o.MaxWidth = "New user", true, 36
 			o.Fields = []form.Field{form.Text(form.TextOptions{Key: "n", Label: "Name"})}
 			m := form.New(o)
-			return centered(36, 13, &m)
+			// The form sizes and centres itself, so its rect is where it
+			// landed rather than what it was given.
+			return placed(&m, func() geom.Rect { return m.Rect() })
 		}},
 		{"action menu", func(th theme.Theme) (string, geom.Rect) {
 			o := th.Actions()
@@ -186,54 +188,49 @@ func TestModalsDrawInTheOverlayTone(t *testing.T) {
 	}
 }
 
-// A form's fields are cards a step lighter than what they sit on: the frame's
-// overlay tone in a titled form, the screen in a bare one. Drawn in the
-// field form's own Card tone inside a titled form's frame they would sink
-// below it instead, and a focused field would vanish into it.
-func TestFormFieldsAreCardsOnWhatTheySitOn(t *testing.T) {
+// A form's typed values sit in wells a step lighter than the card: the
+// overlay's card tone, raised while focused. Drawn in the card's own tone
+// they would vanish into it, and the form would read as labels with nothing
+// to type into.
+func TestFormWellsAreAStepAboveTheCard(t *testing.T) {
 	caps := surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true}
 	bgOf := func(c lipgloss.TerminalColor) string {
 		return backgrounds(lipgloss.NewStyle().Background(c).Render("x"))[0]
 	}
 	for _, s := range surface.Builtins() {
 		th := theme.Compose(palette.Nord(), s, caps)
-		if !th.Surface.Field().Surface().Filled() {
-			continue // a lined or bare field lets what is under it show through
+		if !th.Surface.Overlay().Surface().Filled() {
+			continue
 		}
-		for _, c := range []struct {
-			name  string
-			title string
-			want  surface.Role
-		}{
-			{"titled", "New user", surface.OverlayCard},
-			{"bare", "", surface.Card},
-		} {
-			t.Run(s.Name+"/"+c.name, func(t *testing.T) {
-				o := th.Form()
-				o.Title = c.title
-				// The first field takes focus; the second is the blurred card.
-				o.Fields = []form.Field{
-					form.Text(form.TextOptions{Key: "a", Label: "A"}),
-					form.Text(form.TextOptions{Key: "b", Label: "B", Placeholder: "zqx"}),
-				}
-				m := form.New(o)
-				geom.NextGen()
-				m.SetRect(geom.New(0, 0, 40, 16))
-				for _, line := range strings.Split(m.View(), "\n") {
-					plain := []rune(ansi.Strip(line))
-					col := strings.Index(string(plain), "zqx")
-					if col < 0 {
+		t.Run(s.Name, func(t *testing.T) {
+			o := th.Form()
+			// The first field takes focus; the second is blurred.
+			o.Fields = []form.Field{
+				form.Text(form.TextOptions{Key: "a", Label: "A", Placeholder: "qqa"}),
+				form.Text(form.TextOptions{Key: "b", Label: "B", Placeholder: "zqx"}),
+			}
+			m := form.New(o)
+			geom.NextGen()
+			m.SetRect(geom.New(0, 0, 40, 16))
+			want := map[string]surface.Role{"qqa": surface.OverlayCardRaised, "zqx": surface.OverlayCard}
+			found := 0
+			for _, line := range strings.Split(m.View(), "\n") {
+				plain := ansi.Strip(line)
+				for marker, role := range want {
+					i := strings.Index(plain, marker)
+					if i < 0 {
 						continue
 					}
-					col = len([]rune(string(plain)[:col]))
-					want := bgOf(th.Surface.Colours().Of(c.want))
-					if got := backgrounds(line)[col]; got != want {
-						t.Errorf("blurred field body is %q, want the %s tone %q", got, c.want, want)
+					found++
+					col := len([]rune(plain[:i]))
+					if got, w := backgrounds(line)[col], bgOf(th.Surface.Colours().Of(role)); got != w {
+						t.Errorf("%s well is %q, want the %s tone %q", marker, got, role, w)
 					}
-					return
 				}
-				t.Fatal("the blurred field's placeholder was not drawn")
-			})
-		}
+			}
+			if found != 2 {
+				t.Fatalf("found %d of the two placeholders", found)
+			}
+		})
 	}
 }

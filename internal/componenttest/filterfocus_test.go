@@ -29,8 +29,11 @@ import (
 	"github.com/jsdrews/tuilib/pkg/logview"
 	"github.com/jsdrews/tuilib/pkg/menu"
 	"github.com/jsdrews/tuilib/pkg/mouse"
+	"github.com/jsdrews/tuilib/pkg/palette"
+	"github.com/jsdrews/tuilib/pkg/surface"
 	"github.com/jsdrews/tuilib/pkg/table"
 	"github.com/jsdrews/tuilib/pkg/textview"
+	"github.com/jsdrews/tuilib/pkg/theme"
 	"github.com/jsdrews/tuilib/pkg/tree"
 )
 
@@ -47,6 +50,12 @@ func TestMain(m *testing.M) {
 // an earlier frame — so a harness built from it silently declines every
 // event once any other test in this package has advanced the counter.
 func placed() geom.Rect { return geom.New(rect.X, rect.Y, rect.W, rect.H) }
+
+// outlined is Dark drawn Outlined, for tests whose coordinates assume its
+// one-cell border. theme.New draws the default surface, whose edge is deeper.
+func outlined() theme.Theme {
+	return theme.Compose(palette.Dark(), surface.Outlined, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
+}
 
 // rect is where every component under test is placed. With a 2-row inline
 // filter header the interior is: y+1 filter, y+2 rule, y+3.. content.

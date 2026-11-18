@@ -125,7 +125,7 @@ func (t *tableMark) filterTo(q string) {
 // plainMarkableList / plainMarkableTable are the click fixtures: markable,
 // keyed, and *not* filterable, so no inline filter header shifts the rows.
 func plainMarkableList() *list.Model {
-	o := theme.New(palette.Dark()).List()
+	o := outlined().List()
 	o.Markable = true
 	l := list.New(o)
 	l.SetKeyedItems([]list.KeyedItem{
@@ -137,7 +137,7 @@ func plainMarkableList() *list.Model {
 }
 
 func plainMarkableTable() *table.Model {
-	o := theme.New(palette.Dark()).Table()
+	o := outlined().Table()
 	o.Markable = true
 	o.Columns = []table.Column{{Title: "Name", Width: 16}}
 	tb := table.New(o)

@@ -38,7 +38,7 @@ example in `examples/`.
 4. **Rebuild themed components in `SetTheme(t)`, carrying state with
    `State` / `Restore`.** Every stateful component — `list`, `table`,
    `tree`, `inspector`, `logview`, `textview`, `eventlog`, `menu`,
-   `filter`, `input`, `toggle` — snapshots what the user and the data did to it,
+   `filter`, `input`, `toggle`, `form` — snapshots what the user and the data did to it,
    and puts it back onto one built from new Options:
 
    ```go
@@ -131,10 +131,9 @@ example in `examples/`.
    pane are bars (`breadcrumb`, `statusbar`), `help.Model` (the footer
    strip — `help.Overlay` does own one), the layout primitives, `pkg/runner` (which is not a UI
    component — it suspends the program to run a subprocess), and
-   `pkg/form` itself, which is a vertical layout of bordered fields —
-   unless `form.Options.Title` is set, when it frames the stack in a titled
-   pane the way `pkg/confirm` does (use that for a form that stands alone:
-   a prompt, an action's inputs). New
+   `pkg/banner`, a heading drawn straight onto the screen. `pkg/form` owns
+   one pane for the whole form and draws its fields inside it — a label
+   over a value, never a box per field (rule 38). New
    input-style components should follow the same shape: `Options.Title` +
    an internal `pane.Pane` + `View()` returns the bordered render.
 
@@ -1181,11 +1180,9 @@ example in `examples/`.
     Every pane-owning component takes `Options.Surface`, and the builders
     set it to the right form: the surface itself for panes, lists, tables
     and the other row components; its **field form** for input, filter and
-    toggle, which fits the three-row slots screens give them — a form's
-    fields too, and on a titled form's frame the field form *on the
-    overlay* (`OverlayField()`), a card a step lighter than the frame; its **overlay
-    form** for confirm, alert, the menus and a titled form's frame — anything
-    drawn over a screen — which is always filled so a modal covers what is
+    toggle, which fits the three-row slots screens give them; its **overlay
+    form** for confirm, alert, the menus and a form's card — anything
+    drawn over a screen, or raised to be filled in — which is always filled so a modal covers what is
     under it, and draws its edge on that fill, so no dark rim shows around it.
     On a filled surface the builders also draw buttons — toggle sides, modal
     choices, a form's submit — as chips (`Options.Chips`, `form.Styles.Chips`):
@@ -1209,8 +1206,16 @@ example in `examples/`.
     literals, so it works in every palette. `examples/appearance/look` defines
     Ruled and Lipped this way.
 
-    Outlined is the default and draws byte for byte what tuilib drew before
-    surfaces; `examples/launcher`'s goldens hold that. See `docs/surfaces.md`.
+    Filled is the default: an app that names no `Options.Surfaces`, and
+    `theme.New(p)`, draw it. On a terminal that can't (too few colours, a
+    palette with no tones) it falls back silently; the console notes a
+    fallback only for a surface the app chose. Outlined still draws byte for
+    byte what tuilib drew before surfaces. `examples/launcher`'s goldens hold
+    both: `testdata/outlined` pinned to Outlined, `testdata/filled` built the
+    way an app that names no surface is (regenerate with `-run Filled
+    -update` only for an intended change, and say so). Tests whose coordinates assume a one-cell border pin
+    Outlined too (`theme.Compose(p, surface.Outlined, caps)`) rather than
+    leaning on the default. See `docs/surfaces.md`.
 
 36. **For a set of places to go, use `pkg/menu`; file verbs with
     `Action.Group`.** When a screen's content is a list of things to open
@@ -1308,6 +1313,34 @@ example in `examples/`.
     the change: a refactor, a test, a comment. `task changelog` shows the
     version and notes the next release would carry.
 
+38. **A form is one card; let it size and place itself.** `pkg/form` draws
+    every field as a label over its value inside one framed card — typed
+    values in a well a tone up from the card, a focus bar down the focused
+    field, a `Note` under each saying what it is for — then Submit and
+    Cancel, and a line of the keys that work. It is at most `MaxWidth` (60)
+    wide, exactly as tall as its fields, and centred in whatever rect it is
+    given, so a screen hands it the body with `layout.Sized(&s.form)` and
+    does no layout math. A modal puts the same node in a `ZStack` over the
+    screen and sets `Options.Modal`, which moves the help line inside the
+    card; `Height(w)` answers a host that wants the size anyway.
+
+    For an intro or sign-in screen set `Options.Banner.Text`: the form draws
+    a `pkg/banner` above the card — block letters with a shadow and a moving
+    gradient — and drops it when the rect is too small. A banner on its own
+    is `banner.New(t.Banner())`, a component like a spinner: batch `Init`,
+    forward `Update`.
+
+    `Steps` make it a wizard: a page each, Back/Next, esc back a step,
+    `Skip func(Values) bool` to leave a step out, one `SubmittedMsg` with
+    every value at the end. Enter moves to the next field and submits (or
+    turns the page) on the last; a `TextArea` takes enter for newlines and
+    is left with tab. A `Select` is an always-open list whose cursor *is*
+    the choice; `RequirePick` chooses on arrival, so a select is never
+    focused with nothing visible, and an unreached one is refused. Read
+    answers with `Values.String` / `Bool` / `Strings`. Carry state across a
+    theme swap with `State` / `Restore` (rule 4). See
+    `examples/appearance/form` and `docs/components/form.md`.
+
 ## Anti-patterns
 
 - **Don't assume a one-cell border.** A filled surface's edge is deeper
@@ -1342,12 +1375,13 @@ example in `examples/`.
   invalid submit is *refused*: no `SubmittedMsg`, focus moves to the first
   offender, and `InvalidMsg{Keys}` lets the screen react optionally. A
   screen can therefore never act on bad data by forgetting to check.
-  Errors render on the field's own border (tint + a short message in the
-  top-right slot) so nothing reflows — see rule 9's note on why layout
-  must not shift while the user is correcting it. Required fields carry a
-  `*` on their label, which is a standing property distinct from the
-  border, which is a complaint. Cross-field rules (password confirmation,
-  date ranges) are not supported: they have no field to attach to.
+  Errors render on the field's own label row (the label tinted, the
+  message right-aligned) so nothing reflows — layout must not shift while
+  the user is correcting it. Required fields carry a `*` on their label,
+  which is a standing property distinct from the tint, which is a
+  complaint. A wizard validates each step as the user leaves it, and every
+  step again on submit. Cross-field rules (password confirmation, date
+  ranges) are not supported: they have no field to attach to.
 - **Don't instantiate `textinput.New()` directly.** Use `input.Model` for a
   bare bordered text field, `filter.Model` for the "/-to-focus, enter-commits"
   pattern, or `list.Model` with `Filterable=true` for a filtered list.
@@ -1708,7 +1742,7 @@ path.
 - **Color vocabulary:** `pkg/palette/palette.go` — field comments on the
   `Palette` struct name every semantic slot; `theme.Theme` embeds it.
 - **Palette and surface:** an app offers `Options.Palettes` and
-  `Options.Surfaces` (default `[surface.Outlined]`), cycled by `ThemeKey`
+  `Options.Surfaces` (default `[surface.Filled]`), cycled by `ThemeKey`
   and `SurfaceKey`; the shell composes the pair with `theme.Compose` and
   hands the result to `SetTheme`. `app.New` picks where each starts from
   (1) `Options.PaletteEnvVar` / `SurfaceEnvVar`, (2)
@@ -1717,7 +1751,7 @@ path.
   disable this (tests, or apps pinned to one look). Config is opt-in: the
   library never writes the file. Unknown names fall through silently;
   malformed YAML surfaces only via `config.Load` directly. Outside the
-  shell, `theme.New(p)` is a palette drawn Outlined. See `docs/surfaces.md`.
+  shell, `theme.New(p)` is a palette drawn Filled. See `docs/surfaces.md`.
 - **User config in general:** `pkg/config` owns the YAML file shape
   (`Config`, `Path`, `Load`, `LoadFrom`). Cross-component knobs go here
   as fields on `Config`. Other packages should import `pkg/config`

@@ -34,6 +34,7 @@ overriding one; a per-instance value always wins over the theme.
 | `t.Input()` | `input.Options` |
 | `t.Toggle()` | `toggle.Options` |
 | `t.Form()` | `form.Options` (chain `.With(fields)`) |
+| `t.Banner()` | `banner.Options` (set `Text`) |
 | `t.Confirm()` | `confirm.Options` |
 | `t.Alert()` | `alert.Options` |
 | `t.Actions()` | `action.Options` |
@@ -101,8 +102,8 @@ is ignored. Call `config.Load()` yourself if you want malformed YAML reported.
 
 ## Surfaces and glyphs
 
-Five surfaces ship in `pkg/surface`: `Outlined` (the default, a line border),
-`Filled`, `Banded`, `Elevated` and `Accented`. Offer them with
+Five surfaces ship in `pkg/surface`: `Filled` (the default, solid cards),
+`Outlined` (a line border), `Banded`, `Elevated` and `Accented`. Offer them with
 `app.Options.Surfaces` and let the user cycle with `SurfaceKey`. A surface is
 data, so a custom one is a struct literal; see [Surfaces](../surfaces.md).
 

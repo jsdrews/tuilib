@@ -71,8 +71,8 @@ a loading spinner. So:
   buttons are, so it's the one that decides a click was its own.
 
 The exceptions are the bars (`breadcrumb`, `statusbar`), the help footer, the
-layout primitives, and `pkg/form`, which is a vertical stack of bordered
-fields.
+layout primitives, and `pkg/banner`, a heading drawn straight onto the
+screen. `pkg/form` owns one pane for the whole form rather than one per field.
 
 ## The component shape
 

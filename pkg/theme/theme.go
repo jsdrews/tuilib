@@ -28,6 +28,7 @@ import (
 	"github.com/jsdrews/tuilib/pkg/activity"
 	"github.com/jsdrews/tuilib/pkg/alert"
 	"github.com/jsdrews/tuilib/pkg/ansi"
+	"github.com/jsdrews/tuilib/pkg/banner"
 	"github.com/jsdrews/tuilib/pkg/breadcrumb"
 	"github.com/jsdrews/tuilib/pkg/confirm"
 	"github.com/jsdrews/tuilib/pkg/eventlog"
@@ -72,9 +73,11 @@ type Theme struct {
 	Surface surface.Resolved
 }
 
-// New is p drawn Outlined: the look of an app that never chose a surface.
+// New is p drawn Filled: the look of an app that never chose a surface. A
+// palette without tones to fill with falls back along Filled's chain, as
+// Compose does for any surface.
 func New(p palette.Palette) Theme {
-	return Compose(p, surface.Outlined, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
+	return Compose(p, surface.Filled, surface.Caps{Profile: termenv.TrueColor, BlockGlyphs: true})
 }
 
 // Compose builds the theme for one palette drawn with one surface, on a
@@ -709,48 +712,71 @@ func (t Theme) Inspector() inspector.Options {
 	return o
 }
 
-// Form returns form.Options pre-filled with theme colors. Set Width, Height,
-// Fields, and any SubmitText on the returned value before passing to form.New
-// (or chain `.With(fields)`). Override individual Styles fields only if you
-// need to deviate from the palette.
+// Form returns form.Options pre-filled from the theme. Set Title and Fields
+// (or Steps) on the returned value before passing to form.New, or chain
+// `.With(fields)`.
 //
-// The frame a Title adds takes the surface's overlay form, like Confirm():
-// a titled form is a modal — an action's inputs, a startup prompt — drawn
-// over a screen. The border shape stays the surface's own, so Outlined is
-// unchanged. A form without a Title has no frame and ignores Surface.
+// The card is drawn in the surface's overlay form, as Confirm is, whether the
+// form is a modal or the whole of an intro screen: it is always a thing
+// raised to be filled in. Typed values sit in wells a tone up from it — the
+// overlay's card, raised while focused — so they read as places to type
+// without a border round each one. A surface whose overlay has no fill (a
+// palette without tones) draws no wells, and the focus bar carries focus
+// alone.
 func (t Theme) Form() form.Options {
-	chips, idle, _ := t.buttons()
-	submit := lipgloss.NewStyle().Foreground(t.BarFG)
-	if chips {
-		submit = idle
-	}
+	over := t.Surface.Overlay()
+	chips, idle, chosen := t.buttons()
+	text := lipgloss.NewStyle().Foreground(t.BarFG)
+	muted := lipgloss.NewStyle().Foreground(t.Muted)
+	accent := lipgloss.NewStyle().Foreground(t.Accent)
 	o := form.Options{
 		ActiveColor:    t.BorderActive,
 		InactiveColor:  t.BorderInactive,
-		ActiveBorder:   t.shapeActive(),
-		InactiveBorder: t.shapeInactive(),
+		ActiveBorder:   t.shapeOverlay(),
+		InactiveBorder: t.shapeOverlay(),
 		Glyphs:         t.glyphs(),
 		SlotBrackets:   t.Surface.Surface().Brackets,
+		Surface:        over,
+		Banner:         t.Banner(),
 		Styles: form.Styles{
-			Input:               lipgloss.NewStyle().Foreground(t.BarFG),
-			Placeholder:         t.placeholder(),
-			CursorColor:         t.Accent,
-			Selected:            lipgloss.NewStyle().Bold(true).Foreground(t.Accent),
-			PaneActiveColor:     t.BorderActive,
-			PaneInactiveColor:   t.BorderInactive,
-			FieldBorderActive:   t.shapeActive(),
-			FieldBorderInactive: t.shapeInactive(),
-			ErrorColor:          t.ErrorBG,
-			ErrorText:           lipgloss.NewStyle().Bold(true).Foreground(t.ErrorBG),
-			Submit:              submit,
-			SubmitActive:        lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent),
-			Chips:               chips,
-			FieldSurface:        t.Surface.Field(),
-			FramedFieldSurface:  t.Surface.OverlayField(),
+			Text:         text,
+			Label:        text,
+			LabelFocused: accent.Bold(true),
+			Note:         muted,
+			Placeholder:  t.placeholder(),
+			CursorColor:  t.Accent,
+			Bar:          accent,
+			Chosen:       accent,
+			Unchosen:     muted,
+			Error:        lipgloss.NewStyle().Foreground(t.ErrorBG),
+			Button:       idle,
+			ButtonActive: chosen,
+			Chips:        chips,
+			HelpKey:      accent,
+			HelpDesc:     muted,
 		},
 	}
-	o.Surface = t.Surface.Overlay()
+	if chips {
+		o.Styles.ButtonActive = lipgloss.NewStyle().Bold(true).Foreground(t.BarBG).Background(t.Accent)
+	}
+	if over.Surface().Filled() {
+		o.Styles.Well = over.Colours().Of(surface.OverlayCard)
+		o.Styles.WellFocused = over.Colours().Of(surface.OverlayCardRaised)
+	}
 	return o
+}
+
+// Banner returns banner.Options pre-filled from the theme: a sweep from the
+// accent through the info and success colours, with the shadow in Subtle.
+// Set Text before passing to banner.New, or on a form's Options.Banner.
+func (t Theme) Banner() banner.Options {
+	var stops []lipgloss.TerminalColor
+	for _, c := range []lipgloss.TerminalColor{t.Accent, t.InfoBG, t.Success} {
+		if c != nil {
+			stops = append(stops, c)
+		}
+	}
+	return banner.Options{Colours: stops, Shadow: t.Subtle}
 }
 
 // Activity returns activity.Options pre-filled from the theme — the spinner

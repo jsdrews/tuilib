@@ -9,6 +9,7 @@ import (
 
 	"github.com/jsdrews/tuilib/pkg/eventlog"
 	"github.com/jsdrews/tuilib/pkg/filter"
+	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/inspector"
 	"github.com/jsdrews/tuilib/pkg/list"
@@ -379,6 +380,28 @@ func TestStateRestoreRedrawsTheSame(t *testing.T) {
 				return &n
 			},
 		},
+		{
+			name: "form",
+			build: func() restorable {
+				m := form.New(formOpts(th))
+				m.SetRect(placed())
+				return &m
+			},
+			use: func(c restorable) restorable {
+				m := c.(*form.Model)
+				for _, k := range []tea.KeyMsg{keyOf("ada"), keyOf("enter"), {Type: tea.KeyDown}} {
+					*m, _ = m.Update(k)
+				}
+				return m
+			},
+			swap: func(c restorable) restorable {
+				st := c.(*form.Model).State()
+				n := form.New(formOpts(th))
+				n.SetRect(placed())
+				n.Restore(st)
+				return &n
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,6 +416,16 @@ func TestStateRestoreRedrawsTheSame(t *testing.T) {
 			}
 		})
 	}
+}
+
+func formOpts(th theme.Theme) form.Options {
+	o := th.Form()
+	o.Title = "f"
+	o.Fields = []form.Field{
+		form.Text(form.TextOptions{Key: "name", Label: "Name"}),
+		form.Select(form.SelectOptions{Key: "role", Label: "Role", Options: []string{"a", "b", "c"}}),
+	}
+	return o
 }
 
 func tableOpts(th theme.Theme) table.Options {
@@ -455,6 +488,15 @@ func TestRestoringAZeroStateLeavesOptionsAlone(t *testing.T) {
 	tb.Restore(zt.State())
 	if tb.View() != before {
 		t.Error("table: a zero State wiped Options.Rows")
+	}
+
+	fo := formOpts(th)
+	fo.Fields = []form.Field{form.Text(form.TextOptions{Key: "name", Label: "Name", Initial: "ada"})}
+	var zf form.Model
+	f := form.New(fo)
+	f.Restore(zf.State())
+	if f.String("name") != "ada" {
+		t.Error("form: a zero State wiped a field's Initial")
 	}
 
 	gOpts := th.Toggle()

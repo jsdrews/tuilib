@@ -47,7 +47,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/demoapi"
@@ -314,7 +313,7 @@ func newJump(t theme.Theme) screen.Screen {
 }
 
 func (j *jump) Title() string         { return "Jump to time" }
-func (j *jump) Init() tea.Cmd         { return tea.Batch(textinput.Blink, j.form.Init()) }
+func (j *jump) Init() tea.Cmd         { return j.form.Init() }
 func (j *jump) OnEnter(any) tea.Cmd   { return nil }
 func (j *jump) IsCapturingKeys() bool { return j.form.IsCapturingKeys() }
 func (j *jump) Layout() layout.Node   { return layout.Sized(&j.form) }
@@ -336,15 +335,19 @@ func (j *jump) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 }
 
 func (j *jump) SetTheme(t theme.Theme) {
+	st := j.form.State()
 	opts := t.Form()
+	opts.Title, opts.SubmitText = "Jump to time", "Jump"
 	opts.Fields = []form.Field{form.Text(form.TextOptions{
 		Key: "when", Label: "Time", Placeholder: "30m, or 14:05", Required: true,
+		Note: "How long ago, or a clock time today.",
 		Validate: func(v any) error {
 			_, err := parseWhen(fmt.Sprint(v), time.Now())
 			return err
 		},
 	})}
 	j.form = form.New(opts)
+	j.form.Restore(st)
 }
 
 // parseWhen reads a duration ago ("30m", "1h15m") or a clock time today

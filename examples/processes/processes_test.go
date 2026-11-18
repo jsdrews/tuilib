@@ -56,8 +56,9 @@ func choose(s *Screen, label string) tea.Cmd {
 // the capture group's header, so the first command is the row below it.
 func TestDoubleClickRunsACommand(t *testing.T) {
 	s := build(t)
+	r, in := s.menu.Rect(), theme.New(palette.Dark()).Surface.Insets()
 	dbl := mouse.Msg{
-		MouseMsg: tea.MouseMsg{X: 5, Y: 2, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft},
+		MouseMsg: tea.MouseMsg{X: r.X + in.Left + 4, Y: r.Y + in.Top + 1, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft},
 		Clicks:   2,
 	}
 	_, cmd := s.Update(dbl)

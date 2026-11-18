@@ -364,7 +364,7 @@ func (p Pane) View() string {
 
 	// Title overrides whichever slot it's assigned to.
 	if p.title != "" {
-		slots[p.titlePos] = pad(p.title)
+		slots[p.titlePos] = pad(ansi.Truncate(p.title, p.titleRoom(slots), "…"))
 	}
 
 	if p.generic() {
@@ -940,6 +940,31 @@ func (p *Pane) EnsureVisible(n int) {
 	case n > bottom:
 		p.viewport.SetYOffset(n - p.viewport.Height + 1)
 	}
+}
+
+// titleRoom is how many cells the title can take on its border row: the row's
+// span less the other slots on it, the title's padding and its brackets. A
+// title wider than that is cut with an ellipsis rather than chopped mid-word
+// by the row, which would leave no sign anything was lost.
+func (p Pane) titleRoom(slots map[BorderPosition]string) int {
+	span := p.width - 2
+	if p.generic() {
+		in := p.insets()
+		span = p.width - in.Left - in.Right
+	}
+	row := []BorderPosition{TopLeftBorder, TopMiddleBorder, TopRightBorder}
+	if p.titlePos >= BottomLeftBorder {
+		row = []BorderPosition{BottomLeftBorder, BottomMiddleBorder, BottomRightBorder}
+	}
+	for _, pos := range row {
+		if pos != p.titlePos && slots[pos] != "" {
+			span -= ansi.StringWidth(slots[pos]) + 1
+		}
+	}
+	if p.slotBrackets != SlotBracketsNone {
+		span -= 2
+	}
+	return max(1, span-2)
 }
 
 func pad(s string) string {

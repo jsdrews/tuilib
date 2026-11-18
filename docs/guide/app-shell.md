@@ -30,7 +30,7 @@ the shell enables reporting from `Init` when `Mouse` asks for it.
 |---|---|---|---|
 | `Root` | `screen.Screen` | **required** | The bottom of the navigation stack. |
 | `Palettes` | `[]palette.Palette` | `[palette.Dark()]` | Palettes the user cycles through. The first is where the app starts unless the env var or config says otherwise (below). |
-| `Surfaces` | `[]surface.Surface` | `[surface.Outlined]` | Surfaces the user cycles through, independently of the palette. See [Surfaces](../surfaces.md). |
+| `Surfaces` | `[]surface.Surface` | `[surface.Filled]` | Surfaces the user cycles through, independently of the palette. See [Surfaces](../surfaces.md). |
 | `Glyphs` | `glyph.Set` | `glyph.Default()` | Glyphs every composed theme carries, so the shell's own overlays and every screen's `SetTheme` draw the same marks. Empty fields keep the default. |
 | `Version` | `string` | `""` | Drawn on the right of the statusbar. |
 | `QuitKey` | `key.Binding` | `q`, `ctrl+c` | Quits when the stack is at the root and no screen is capturing keys. |

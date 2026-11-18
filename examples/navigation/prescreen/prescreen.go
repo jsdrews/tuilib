@@ -3,11 +3,13 @@
 // behind "log in before you can use this", "pick a workspace first", or
 // "re-authenticate, that token expired".
 //
-// The login form here is set dressing. What the example is actually about is
-// the flow: a root screen that pushes a child from OnEnter, receives the
-// child's result when it pops, and can re-push the same child later without
-// the child ever living permanently on the stack. See pkg/form and the
-// "Form" example for the component itself.
+// The login is a pkg/form given the whole body, which is the shape of an
+// intro screen: the form centres its card, draws a pkg/banner above it, and
+// puts the keys that work under it. The flow is the rest of the example: a
+// root screen that pushes a child from OnEnter, receives the child's result
+// when it pops, and can re-push the same child later without the child ever
+// living permanently on the stack. See the appearance Form tab for every
+// field kind.
 //
 // The form lives as a regular screen.Screen — it's only on the stack
 // while the user is interacting with it, and is gone afterward. The
@@ -31,7 +33,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/form"
@@ -49,7 +50,8 @@ func New(t theme.Theme) screen.Screen {
 	return s
 }
 
-// creds is what the login form pops back with.
+// creds is what the login form pops back with. The password is checked and
+// dropped; nothing here needs to keep it.
 type creds struct {
 	user     string
 	role     string
@@ -165,21 +167,18 @@ func newLogin(t theme.Theme) screen.Screen {
 }
 
 func (s *loginScreen) Title() string         { return "Sign in" }
-func (s *loginScreen) Init() tea.Cmd         { return tea.Batch(textinput.Blink, s.form.Init()) }
+func (s *loginScreen) Init() tea.Cmd         { return s.form.Init() }
 func (s *loginScreen) OnEnter(any) tea.Cmd   { return nil }
 func (s *loginScreen) IsCapturingKeys() bool { return s.form.IsCapturingKeys() }
 
 func (s *loginScreen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
 	case form.SubmittedMsg:
-		c := creds{
-			user: fmt.Sprint(m.Values["user"]),
-			role: fmt.Sprint(m.Values["role"]),
-		}
-		if v, ok := m.Values["remember"].(bool); ok {
-			c.remember = v
-		}
-		return s, screen.Pop(c)
+		return s, screen.Pop(creds{
+			user:     m.Values.String("user"),
+			role:     m.Values.String("role"),
+			remember: m.Values.Bool("remember"),
+		})
 	case form.CancelledMsg:
 		return s, screen.Pop(nil)
 	}
@@ -196,27 +195,28 @@ func (s *loginScreen) HelpSections() []help.Section { return help.SectionsOf(&s.
 
 func (s *loginScreen) SetTheme(t theme.Theme) {
 	s.t = t
+	st := s.form.State()
 	opts := t.Form()
+	opts.Title = "sign in"
+	opts.SubmitText = "Sign in"
+	opts.Banner.Text = "tuilib"
 	opts.Fields = []form.Field{
 		form.Text(form.TextOptions{
-			Key:         "user",
-			Label:       "Username",
-			Placeholder: "alice",
+			Key: "user", Label: "Username", Placeholder: "alice", Required: true,
+			Note: "The name you sign in with.",
+		}),
+		form.Password(form.PasswordOptions{
+			Key: "pass", Label: "Password", Required: true,
+			Note: "Any password works here; it is checked and dropped.",
 		}),
 		form.Select(form.SelectOptions{
-			Key:     "role",
-			Label:   "Role",
+			Key: "role", Label: "Role", RequirePick: true,
 			Options: []string{"admin", "editor", "viewer"},
 		}),
 		form.Confirm(form.ConfirmOptions{
-			Key:     "remember",
-			Label:   "Remember me?",
-			Initial: true,
+			Key: "remember", Label: "Remember me?", Initial: true,
 		}),
 	}
-	opts.SubmitText = "Sign in"
-	// A Title frames the form in its own pane, so its fields sit on that
-	// frame: on a filled surface each is a card a step lighter than it.
-	opts.Title = "sign in"
 	s.form = form.New(opts)
+	s.form.Restore(st)
 }

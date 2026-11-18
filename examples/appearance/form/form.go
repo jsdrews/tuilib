@@ -1,6 +1,14 @@
-// Package form demonstrates pkg/form: a vertical form with Text, Password,
-// Select, and Confirm fields. Submit replaces the form with a result pane;
-// esc pops back to the launcher.
+// Package form is the pkg/form showcase: a two-step sign-up wizard holding
+// every field kind on one card.
+//
+//	Account  Text with a format rule, Password with a length rule, both
+//	         required and each with a note saying what it is for
+//	Profile  a Select that must be picked (it chooses on arrival), a
+//	         MultiSelect that needs at least one, a TextArea, and a Confirm
+//
+// Enter moves down and, on a step's last field, on to the next step; esc goes
+// back a step. Submitting replaces the form with what it submitted. A theme
+// swap keeps every answer, the step and the focus (rule 4).
 package form
 
 import (
@@ -9,13 +17,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jsdrews/tuilib/pkg/app"
 	"github.com/jsdrews/tuilib/pkg/form"
 	"github.com/jsdrews/tuilib/pkg/help"
-	"github.com/jsdrews/tuilib/pkg/input"
 	"github.com/jsdrews/tuilib/pkg/layout"
 	"github.com/jsdrews/tuilib/pkg/pane"
 	"github.com/jsdrews/tuilib/pkg/screen"
@@ -26,7 +32,7 @@ type Screen struct {
 	t      theme.Theme
 	form   form.Model
 	result pane.Pane
-	done   bool
+	values form.Values
 }
 
 func New(t theme.Theme) screen.Screen {
@@ -36,42 +42,36 @@ func New(t theme.Theme) screen.Screen {
 }
 
 func (s *Screen) Title() string       { return "Form" }
-func (s *Screen) Init() tea.Cmd       { return tea.Batch(textinput.Blink, s.form.Init()) }
+func (s *Screen) Init() tea.Cmd       { return s.form.Init() }
 func (s *Screen) OnEnter(any) tea.Cmd { return nil }
 
-func (s *Screen) IsCapturingKeys() bool {
-	return !s.done && s.form.IsCapturingKeys()
-}
+func (s *Screen) IsCapturingKeys() bool { return s.values == nil && s.form.IsCapturingKeys() }
 
 func (s *Screen) Update(msg tea.Msg) (screen.Screen, tea.Cmd) {
 	switch m := msg.(type) {
 	case form.SubmittedMsg:
-		s.done = true
-		s.rebuildResult(m.Values)
+		s.values = m.Values
+		s.rebuildResult()
 		return s, nil
 	case form.CancelledMsg:
 		return s, screen.Pop(nil)
 	case form.InvalidMsg:
-		// The form already flagged the fields and moved focus to the first
-		// offender; this is purely for a summary the user can see at a
-		// glance. Reacting at all is optional.
+		// The form already flagged the fields and moved focus to the first;
+		// this is only a summary at a glance, and reacting is optional.
 		return s, app.Error(fmt.Sprintf("%d field(s) need attention: %s",
 			len(m.Keys), strings.Join(m.Keys, ", ")))
 	}
-
-	if s.done {
-		var cmd tea.Cmd
+	var cmd tea.Cmd
+	if s.values != nil {
 		s.result, cmd = s.result.Update(msg)
 		return s, cmd
 	}
-
-	var cmd tea.Cmd
 	s.form, cmd = s.form.Update(msg)
 	return s, cmd
 }
 
 func (s *Screen) Layout() layout.Node {
-	if s.done {
+	if s.values != nil {
 		return layout.Sized(&s.result)
 	}
 	return layout.Sized(&s.form)
@@ -80,96 +80,86 @@ func (s *Screen) Layout() layout.Node {
 func (s *Screen) Help() []key.Binding { return help.Flatten(s.HelpSections()) }
 
 func (s *Screen) HelpSections() []help.Section {
-	own := help.Group("Signup",
-		key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
-		key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "theme")))
-	if s.done {
-		return help.Sections(own)
+	if s.values != nil {
+		return help.Sections(help.Group("Signup",
+			key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back"))))
 	}
-	return help.SectionsOf(&s.form, own)
+	return help.SectionsOf(&s.form)
 }
 
 func (s *Screen) SetTheme(t theme.Theme) {
 	s.t = t
-
+	st := s.form.State()
 	opts := t.Form()
-	opts.Fields = []form.Field{
-		form.Text(form.TextOptions{
-			Key:         "name",
-			Label:       "Name",
-			Placeholder: "your name…",
-			Required:    true,
-		}),
-		form.Text(form.TextOptions{
-			Key:         "email",
-			Label:       "Email",
-			Placeholder: "you@example.com",
-			Required:    true,
-			// Required runs first, so an empty field says "required" and
-			// only a non-empty one gets as far as this.
-			Validate: func(v any) error {
-				if s, _ := v.(string); !strings.Contains(s, "@") {
-					return errors.New("needs an @")
-				}
-				return nil
-			},
-		}),
-		form.Password(form.PasswordOptions{
-			Key:   "password",
-			Label: "Password",
-			// The placeholder is not masked — it is a hint, not a secret, and
-			// it disappears the moment anything is typed.
-			Placeholder: "at least 8 characters",
-			Required:    true,
-			// Validation reads the real text, not the mask.
-			Validate: func(v any) error {
-				if s, _ := v.(string); len(s) < 8 {
-					return errors.New("too short")
-				}
-				return nil
-			},
-		}),
-		form.Select(form.SelectOptions{
-			Key:     "role",
-			Label:   "Role",
-			Options: []string{"admin", "editor", "viewer"},
-			// Starts with nothing highlighted, so picking a role is a
-			// deliberate act rather than whatever the cursor defaulted to.
-			RequirePick: true,
-		}),
-		form.Confirm(form.ConfirmOptions{
-			Key:     "notify",
-			Label:   "Send notifications?",
-			Initial: true,
-		}),
-	}
-	opts.SubmitText = "Create account"
-	// A Title frames the form in its own pane, so its fields sit on that
-	// frame: on a filled surface each is a card a step lighter than it.
 	opts.Title = "new account"
+	opts.SubmitText = "Create account"
+	opts.Steps = []form.Step{
+		{Title: "Account", Fields: []form.Field{
+			form.Text(form.TextOptions{
+				Key: "name", Label: "Name", Placeholder: "your name…", Required: true,
+				Note: "Shown to everyone in your workspace.",
+			}),
+			form.Text(form.TextOptions{
+				Key: "email", Label: "Email", Placeholder: "you@example.com", Required: true,
+				Note: "Where sign-in links and alerts go.",
+				// Required runs first, so an empty field says "required" and
+				// only a non-empty one gets as far as this.
+				Validate: func(v any) error {
+					if !strings.Contains(v.(string), "@") {
+						return errors.New("needs an @")
+					}
+					return nil
+				},
+			}),
+			form.Password(form.PasswordOptions{
+				Key: "password", Label: "Password", Placeholder: "at least 8 characters", Required: true,
+				// Validation reads the real text, not the mask.
+				Validate: func(v any) error {
+					if len(v.(string)) < 8 {
+						return errors.New("too short")
+					}
+					return nil
+				},
+			}),
+		}},
+		{Title: "Profile", Fields: []form.Field{
+			form.Select(form.SelectOptions{
+				Key: "role", Label: "Role", RequirePick: true,
+				Options: []string{"admin", "editor", "viewer", "auditor", "billing", "guest"},
+				Note:    "Decides what you can change. Nothing is chosen until you reach it.",
+			}),
+			form.MultiSelect(form.MultiSelectOptions{
+				Key: "scopes", Label: "Scopes", Min: 1,
+				Options: []string{"read", "write", "deploy", "admin-api"},
+				Note:    "space toggles. Pick at least one.",
+			}),
+			form.TextArea(form.TextAreaOptions{
+				Key: "bio", Label: "Bio", Placeholder: "a line or two about you",
+				Note: "Optional. Enter starts a new line; tab moves on.",
+			}),
+			form.Confirm(form.ConfirmOptions{Key: "notify", Label: "Send notifications?", Initial: true}),
+		}},
+	}
 	s.form = form.New(opts)
-
-	if s.done {
-		s.rebuildResult(nil)
+	s.form.Restore(st)
+	if s.values != nil {
+		s.rebuildResult()
 	}
 }
 
-func (s *Screen) rebuildResult(values map[string]any) {
+func (s *Screen) rebuildResult() {
 	s.result = pane.New(s.t.Pane())
 	s.result.SetTitle("submitted")
 
 	var b strings.Builder
 	b.WriteString("Form submitted with:\n\n")
-	if values == nil {
-		values = s.form.Values()
-	}
-	for _, k := range []string{"name", "email", "password", "role", "notify"} {
-		v := values[k]
+	for _, k := range []string{"name", "email", "password", "role", "scopes", "bio", "notify"} {
+		v := s.values[k]
 		if k == "password" {
 			// The real string is right there in Values — this prints a mask
-			// because echoing a submitted secret back to the screen undoes
-			// the point of masking the field it came from.
-			v = strings.Repeat(string(input.DefaultMaskChar), len(fmt.Sprint(v)))
+			// because echoing a submitted secret back undoes the point of
+			// masking the field it came from.
+			v = strings.Repeat("•", len(s.values.String(k)))
 		}
 		fmt.Fprintf(&b, "  %-10s %v\n", k+":", v)
 	}

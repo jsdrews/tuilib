@@ -360,8 +360,8 @@ func OutlinedWith(border lipgloss.Border) Surface {
 	return s
 }
 
-// The built-in surfaces. Outlined is the default and draws today's look byte
-// for byte; the rest fill their body, except Accented.
+// The built-in surfaces. Filled is the default. Outlined draws the look tuilib
+// had before surfaces byte for byte; the rest fill their body, except Accented.
 var (
 	// Outlined is a line border around an unfilled body. Its overlay form
 	// has thick lines, which is what makes a modal read as raised.
@@ -484,9 +484,10 @@ func accented(bar string, blocks bool) Surface {
 	return s
 }
 
-// Builtins are the surfaces the library ships, in picker order.
+// Builtins are the surfaces the library ships, in picker order: Filled, the
+// default, first.
 func Builtins() []Surface {
-	return []Surface{Outlined, Filled, Banded, Elevated, Accented}
+	return []Surface{Filled, Outlined, Banded, Elevated, Accented}
 }
 
 // Lined reports whether s is a single ring of lines around an unfilled body —

@@ -296,3 +296,20 @@ func TestNoActionGroupStyleLeavesTheThemesHeader(t *testing.T) {
 		t.Error("GroupStyle should stay nil so HeaderStyle draws every header")
 	}
 }
+
+// The default surface is nobody's choice, so a terminal that can't draw it
+// gets the fallback silently rather than an unread badge at startup.
+func TestDefaultSurfaceFallsBackSilently(t *testing.T) {
+	ascii := surface.Caps{Profile: termenv.Ascii, BlockGlyphs: true}
+	m := surfaceApp(t, Options{
+		Palettes:     []palette.Palette{palette.Nord()},
+		Capabilities: &ascii,
+		OutputKey:    key.NewBinding(key.WithKeys("o")),
+	})
+	if got := m.ax.theme.Surface.Name(); got == surface.Filled.Name {
+		t.Fatalf("drew %s on an ascii terminal, want a fallback", got)
+	}
+	if rs := m.outBuf.Records(); len(rs) != 0 {
+		t.Errorf("default surface's fallback logged: %+v", rs)
+	}
+}

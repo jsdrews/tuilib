@@ -110,7 +110,8 @@ handles its own state in `Update`.
 | `pkg/inspector` | Two-column label/value viewer for structured records (k8s manifests, REST responses, Prefect run details). `Field{Label, Value, Children}` composes; `FromAny` / `FromMap` convert `json.Unmarshal` output into Fields. Sibling labels auto-align per group, ▸/▾ expand nested objects/arrays, `/` searches labels and values, `\` hides non-matching subtrees. `SetFields` preserves expansion state + cursor by row path across swaps — the auto-refresh primitive for inspector |
 | `pkg/poll` | Interval-driven `tea.Cmd` ticker for auto-refresh. Emits a typed `RefreshMsg` parents match in their `Update` to kick off a refetch; `Pause`/`Resume`/`SetInterval`/`Refresh` (now) / `MarkRefreshed`. Pair with the keyed-row APIs on `pkg/list` and `pkg/table` (or path-keyed `SetFields` on `pkg/inspector`) so cursor + expansion survive every swap |
 | `pkg/metrics` | Inline rendering primitives for list rows / table cells / inspector values: `Badge(ok, warn, down)` (status-count summary), `Ratio(done, total)` (severity-colored "N/M"), `Bar(value, max, width)` (fixed-width progress bar), `Spark(values, width)` (8-step block sparkline that resamples to fit). All return ANSI-safe foreground-only strings via `pkg/ansi.CellColor` so the selected-row background passes through. Rendering-only — caller owns history buffer for sparklines |
-| `pkg/form` | Vertical layout of `input` + `toggle` (+ Select) fields with tab cycling and a submit button |
+| `pkg/form` | One card of fields (text, password, select, multi-select, text area, confirm) with notes, validation, wizard steps and a banner for an intro screen |
+| `pkg/banner` | A title in big block letters with a drop shadow and a moving gradient |
 | `pkg/tab` | Tabbed container hosting multiple `screen.Screen` bodies behind a one-row strip. Each body keeps its own state across switches; `shift+left`/`shift+right` and `1`–`9` switch tabs (`tab`/`shift+tab` is left alone for inner pane focus cycling). Host screen forwards `Update`/`OnEnter`/`IsCapturingKeys`/`SetTheme`/`Help` to `tabs` |
 | `pkg/runner` | Hand the terminal to an interactive subprocess (vim, htop, less, ssh) and resume the TUI on exit. Clears the screen on handoff by default; `RunWithNotice` prints a transitional line for slow handoffs (kubectl exec, ssh); `RunWith(Options{...})` for full control |
 | `pkg/theme` | A palette drawn with a surface, plus the per-component `Options` builders. `app.New` composes it from the starting palette and surface (env var, then the user config file; `SkipConfig=true` opts out) |
@@ -299,13 +300,13 @@ independently. A `palette.Palette` is a struct of semantic colour tokens
 `CatppuccinMocha/Latte`, `RosePine/Dawn`, `OneDark`, `Monokai`,
 `EverforestDark`, four `Base16…` schemes, and a `Terminal()` that reads the
 user's actual terminal colours at startup. A surface is how components'
-edges and bodies are drawn: `Outlined` (a line border, the default),
-`Filled`, `Banded`, `Elevated` or `Accented` — see `docs/surfaces.md`. The
+edges and bodies are drawn: `Filled` (solid cards, the default),
+`Outlined` (a line border), `Banded`, `Elevated` or `Accented` — see `docs/surfaces.md`. The
 shell composes the pair into a `theme.Theme`, whose builders hand every
 component pre-styled options, so nothing drifts:
 
 ```go
-th := theme.New(palette.Nord()) // Nord, drawn Outlined
+th := theme.New(palette.Nord()) // Nord, drawn Filled
 bc := breadcrumb.New(th.Breadcrumb())
 p  := pane.New(th.Pane())
 fl := filter.New(th.Filter())
@@ -370,7 +371,7 @@ change that breaks an older feature shows up where you can see it.
 | Remote data | Data too large for one request, one `pkg/tab` tab per shape: a paged table where scrolling is the pagination, an AWX job's events (running and finished), an Elasticsearch-style index read with `search_after`, and a pod log with exact reconnects |
 | Processes | Commands three ways: `runner.Capture` streaming into a searchable logview while the TUI stays live, `runner.Run` handing the terminal to an editor or pager, and statusbar notices the output console (`o`) keeps — with the `OnEnter` guard on `app.OutputClosed` |
 | Navigation | A grouped, filterable `menu` home that opens a screen stack (push, pop with a result, replace), a screen pushed in front of another, a master-detail drilldown, and a tab host; the breadcrumb names every level and a click on a crumb unwinds to it |
-| Appearance | Palette, surface and glyph pickers that redraw the whole app live, beside what each kind of component is handed; then tabs for a titled form, a textview, pane variants, and one screen per layout primitive |
+| Appearance | Palette, surface and glyph pickers that redraw the whole app live, beside what each kind of component is handed; then tabs for a form wizard holding every field kind, a textview, pane variants, and one screen per layout primitive |
 
 Each showcase is a package under `examples/` exporting
 `New(theme.Theme) screen.Screen`, with tests that assert what its package

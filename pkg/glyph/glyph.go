@@ -54,6 +54,18 @@ type Set struct {
 	// saw running — deliberately neither of the two above, because "this
 	// changed under you" is all that is actually known.
 	ActivityChanged string
+
+	// RadioOn / RadioOff mark the chosen and unchosen options of a choice of
+	// one: a form's Select and Confirm, and the steps of a form wizard.
+	RadioOn  string
+	RadioOff string
+	// CheckOn / CheckOff mark the chosen and unchosen options of a choice of
+	// many: a form's MultiSelect. Squares beside the radio's circles, so the
+	// shape says one or many before anything is read.
+	CheckOn  string
+	CheckOff string
+	// FieldBar runs down the left of a form's focused field.
+	FieldBar string
 }
 
 // Default is the library's glyph vocabulary — what every component drew
@@ -75,6 +87,11 @@ func Default() Set {
 		ActivityOK:      "✓",
 		ActivityFail:    "✗",
 		ActivityChanged: "•",
+		RadioOn:         "●",
+		RadioOff:        "○",
+		CheckOn:         "■",
+		CheckOff:        "□",
+		FieldBar:        "┃",
 	}
 }
 
@@ -102,6 +119,11 @@ func (s Set) Resolve() Set {
 		{&s.ActivityOK, d.ActivityOK},
 		{&s.ActivityFail, d.ActivityFail},
 		{&s.ActivityChanged, d.ActivityChanged},
+		{&s.RadioOn, d.RadioOn},
+		{&s.RadioOff, d.RadioOff},
+		{&s.CheckOn, d.CheckOn},
+		{&s.CheckOff, d.CheckOff},
+		{&s.FieldBar, d.FieldBar},
 	}
 	for _, f := range fields {
 		if *f.dst == "" {

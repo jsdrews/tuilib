@@ -21,7 +21,8 @@ returns a finished box and `Options.Title` draws on its border.
 | [Filter](filter.md) | `pkg/filter` | A "/-to-focus, enter commits, esc clears" text field. |
 | [Input](input.md) | `pkg/input` | A plain bordered text field, including passwords. |
 | [Toggle](toggle.md) | `pkg/toggle` | A yes/no selector. |
-| [Form](form.md) | `pkg/form` | Text, password, select and confirm fields with validation and a submit button. |
+| [Form](form.md) | `pkg/form` | One card of fields — text, password, select, multi-select, text area, confirm — with notes, validation and a wizard's steps. |
+| [Banner](banner.md) | `pkg/banner` | A title in big block letters with a shadow and a moving gradient, for an intro screen. |
 | [Confirm](confirm.md) | `pkg/confirm` | A yes/no modal. |
 | [Alert](alert.md) | `pkg/alert` | An acknowledge-this modal. |
 | [Action menu](action-menu.md) | `pkg/action` | A screen's verbs in a self-sizing menu. |

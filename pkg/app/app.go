@@ -49,7 +49,7 @@ type Options struct {
 	// the colours, and how components' edges and bodies are drawn. ThemeKey
 	// cycles palettes, SurfaceKey cycles surfaces, and every screen is
 	// themed with the pair composed (theme.Compose). Palettes defaults to
-	// [palette.Dark()] and Surfaces to [surface.Outlined]. The user's
+	// [palette.Dark()] and Surfaces to [surface.Filled]. The user's
 	// config file and the env vars below pick where each starts. See
 	// docs/surfaces.md.
 	Palettes []palette.Palette

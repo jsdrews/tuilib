@@ -114,13 +114,14 @@ A `Surface` is a struct literal, the way `lipgloss.Border` is. There is no
   A surface whose inner rings carry no text rows draws an outlined field. A
   surface that falls back draws its fallback's field form. Theme builders
   hand `Input()`, `Filter()` and `Toggle()` this form.
-  A field drawn on an overlay — a titled form's fields, which sit on its
-  frame — takes `Resolved.OverlayField()`: the field form filled with
-  `OverlayCard` / `OverlayCardRaised`, so each field is a card a step lighter
-  than the overlay, as a card is a step lighter than the screen. In the field
-  form's own `Card` tones it would sink below the frame, and a focused field
-  would vanish into it. A lined or unfilled field keeps its form.
-  `theme.Form()` hands a bare form the field form and a titled one this.
+  A field drawn on an overlay takes `Resolved.OverlayField()`: the field form
+  filled with `OverlayCard` / `OverlayCardRaised`, a step lighter than the
+  overlay, as a card is a step lighter than the screen. In the field form's
+  own `Card` tones it would sink below the overlay, and a focused field would
+  vanish into it. A lined or unfilled field keeps its form. A form's wells
+  take the same two tones (`theme.Form()` sets `Styles.Well` and
+  `WellFocused`), drawn as a background behind the value rather than as a
+  card per field.
 - **Needs and fallback:** minimum colour depth, whether it uses block glyphs, and
   the `Fallback` surface (see [Degraded terminals](#degraded-terminals)).
 
@@ -294,7 +295,7 @@ findings in `research/background-fill-audit.md`)
   same shape with its fill role switched from `Card` to `Overlay`. Outlined sets
   Thick lines explicitly, so today's modals are byte-identical. It replaces
   `Theme.BorderShapeOverlay`. Confirm, alert, the action menu, the help
-  overlay and a titled form's frame are built with it, as is any later modal:
+  overlay and a form's card are built with it, as is any later modal:
   anything drawn over a screen uses the overlay form.
 - **A derived overlay form draws its edge on its own fill.** A modal's parent is
   whatever it covers, so an edge cell drawn there shows the terminal's own
@@ -334,7 +335,7 @@ and the inline hints take the bar's role as their background.
 ## Choosing a surface
 
 - **`app.Options.Palettes`** (was `Themes`), cycled by `ThemeKey`.
-- **`app.Options.Surfaces`**, default `[surface.Outlined]`, cycled by
+- **`app.Options.Surfaces`**, default `[surface.Filled]`, cycled by
   **`SurfaceKey`**, unset by default (opt-in, like `ThemeKey`).
 - **Config:** `config.yaml` gains `palette:` (with `theme:` read as an alias),
   `surface:` (matched by name from what the app offers, ignored when it offers

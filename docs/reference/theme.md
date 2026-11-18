@@ -76,6 +76,6 @@ If a scheme reads wrong through this mapping, write the `Palette` by hand.
 | `palette.All()` | Every built-in palette except `Terminal()`. |
 | `palette.ByName(palettes, name)` | Look one up. |
 | `palette.Terminal()` | Build from the terminal's own colours; call before `Run`. |
-| `theme.New(p)` | `p` drawn Outlined, for code outside the app shell and tests. |
+| `theme.New(p)` | `p` drawn Filled (the default surface), for code outside the app shell and tests. |
 | `theme.Compose(p, s, caps)` | `p` drawn with surface `s` on a terminal offering `caps`; what the shell calls. |
 | `t.Resolve(s)` | Resolve another surface against `t`'s palette, to pin one component to it. |

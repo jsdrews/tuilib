@@ -6,9 +6,9 @@
 //	         live (rule 35), beside what each kind of component is handed —
 //	         a list (the surface), an input and a toggle (its field form), a
 //	         modal (its overlay form), and a pane pinned to Outlined
-//	Form     a titled pkg/form: required fields, validation on submit, a
-//	         select that must be picked, and on a filled surface each field a
-//	         card a step lighter than the frame, its buttons chips
+//	Form     a pkg/form wizard holding every field kind on one card: notes,
+//	         validation on leaving a step, a select that must be picked, a
+//	         multi-select, a text area, and typed values in wells
 //	Text     pkg/textview: a document to read, search and wrap
 //	Panes    border styles, title positions and slot brackets side by side
 //	Layouts  pkg/layout trees — VStack, HStack, ZStack, Center, Fixed, Flex —
