@@ -120,6 +120,8 @@ filter doesn't quit.
 
 ## Next steps
 
+- Follow the [Walkthrough](walkthrough/index.md), which builds a larger app
+  one piece at a time: tables, focus, navigation, verbs, forms and live data.
 - Read [Architecture](architecture.md) for the full picture.
 - Run `task examples` (or `go run ./examples/launcher`) in a clone of the
   repo and open any demo; each one names the directory its code lives in.

@@ -67,6 +67,8 @@ go run ./examples/launcher     # or: task examples
 <div class="grid cards" markdown>
 
 - **[Quick start](quickstart.md)**: a two-screen app in about 100 lines.
+- **[Walkthrough](walkthrough/index.md)**: build a complete app step by step,
+  meeting each part of the library as you need it.
 - **[Architecture](architecture.md)**: how the shell, screens, layout and
   components fit together, and how messages move between them.
 - **[Guide](guide/app-shell.md)**: one page per concern: navigation,

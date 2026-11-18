@@ -11,6 +11,17 @@ site_dir = "site"
 nav = [
   { "Home" = "index.md" },
   { "Quick start" = "quickstart.md" },
+  { "Walkthrough" = [
+    "walkthrough/index.md",
+    { "1. The shell and a screen" = "walkthrough/01-shell.md" },
+    { "2. A table" = "walkthrough/02-table.md" },
+    { "3. Two panes" = "walkthrough/03-two-panes.md" },
+    { "4. Drilling down" = "walkthrough/04-drill-down.md" },
+    { "5. Verbs" = "walkthrough/05-verbs.md" },
+    { "6. A form" = "walkthrough/06-form.md" },
+    { "7. Live data" = "walkthrough/07-live-data.md" },
+    { "What next" = "walkthrough/next.md" },
+  ] },
   { "Architecture" = "architecture.md" },
   { "Guide" = [
     { "The app shell" = "guide/app-shell.md" },
