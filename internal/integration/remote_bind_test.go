@@ -20,7 +20,7 @@ import (
 )
 
 var bEsc = regexp.MustCompile(`\x1b\[[0-9;]*m`)
-var bRow = regexp.MustCompile(`│ *(\d+)(▌| )│ (.*)`)
+var bRow = regexp.MustCompile(`^[│ ]*(\d+)(▌| )│ (.*)`)
 
 func bRows(h *harness) (map[int]string, int, string) {
 	out := bEsc.ReplaceAllString(h.render(), "")
